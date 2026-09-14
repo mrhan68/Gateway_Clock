@@ -1,0 +1,1173 @@
+openapi: 3.0.3
+info:
+  title: Smart Clock Gateway API
+  version: 1.0.0
+  description: |
+    REST API for the Smart Clock IoT Gateway system.
+
+    The Backend server is the **source of truth** for configuration data
+    (schedules, device lists). The ESP32 Gateway pulls config via the **Sync
+    endpoints** (public, authenticated with `X-Gateway-Key`) and pushes
+    event logs. The **Web App** manages devices, schedules, and rules via the
+    main `/api/v1/` endpoints (JWT bearer token required).
+
+    MQTT is used for real-time device communication:
+    - Gateway publishes telemetry to `gateway/{id}/device/{device_id}/telemetry`
+    - Web App sends device commands via REST → Backend publishes to
+      `gateway/{id}/device/{device_id}/command`
+    - Gateway LWT published to `gateway/{id}/status` (retained)
+
+  contact:
+    name: Smart Clock Project
+  license:
+    name: MIT
+
+servers:
+  - url: http://localhost:3000/api/v1
+    description: Local development
+  - url: https://{backend-host}.onrender.com/api/v1
+    description: Production (Render)
+    variables:
+      backend-host:
+        default: smartclock-backend
+        description: Render service name
+
+# ─────────────────────────── Tags ───────────────────────────
+tags:
+  - name: Sync (Gateway)
+    description: Endpoints called by the ESP32 Gateway to pull config and push event logs. Public (no JWT).
+  - name: Gateways
+    description: Manage gateway registration and status
+  - name: Devices
+    description: CRUD devices registered to a gateway, and send device commands
+  - name: Schedules
+    description: Manage automation rules, alarms, and personal events
+  - name: Rules
+    description: Manage IF-THEN automation rules
+  - name: Events
+    description: Query event log history
+  - name: Telemetry
+    description: Query historical telemetry data
+  - name: Auth
+    description: Authentication (should-have)
+
+# ──────────────────────── Components ────────────────────────
+components:
+  securitySchemes:
+    GatewayKey:
+      type: apiKey
+      in: header
+      name: X-Gateway-Key
+      description: API key for Gateway ↔ Backend authentication (configured in NVS at provisioning time)
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT access token for Web App ↔ Backend (should-have feature)
+
+  schemas:
+    # ─── Error Response ───
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+              example: DEVICE_NOT_FOUND
+            message:
+              type: string
+              example: "Device with id 'sensor_99' not found in gateway 'gateway_001'"
+            status:
+              type: integer
+              example: 404
+      required: [error]
+
+    ErrorCodes:
+      type: string
+      enum: [VALIDATION_ERROR, INVALID_DEVICE_PROTOCOL, GATEWAY_NOT_FOUND,
+             DEVICE_NOT_FOUND, SCHEDULE_NOT_FOUND, RULE_NOT_FOUND,
+             DEVICE_ID_CONFLICT, DEVICE_IN_USE, GATEWAY_OFFLINE, INTERNAL_ERROR]
+
+    # ─── User ───
+    User:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 1
+        username:
+          type: string
+          example: "admin"
+        email:
+          type: string
+          format: email
+          example: "admin@example.com"
+        created_at:
+          type: string
+          format: date-time
+      required: [id, username, created_at]
+
+    # ─── Gateway ───
+    Gateway:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Unique identifier (e.g., "gateway_001")
+          example: "gateway_001"
+        name:
+          type: string
+          example: "Đồng hồ phòng khách"
+        user_id:
+          type: integer
+          example: 1
+        status:
+          type: string
+          enum: [online, offline]
+          description: Updated via MQTT LWT
+        last_seen:
+          type: string
+          format: date-time
+          example: "2026-08-14T14:50:00Z"
+        firmware_version:
+          type: string
+          example: "1.0.0"
+        timezone:
+          type: string
+          example: "Asia/Ho_Chi_Minh"
+        created_at:
+          type: string
+          format: date-time
+      required: [id, name, status, created_at]
+
+    GatewayCreate:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Unique gateway ID (provided by client at registration)
+          example: "gateway_001"
+        name:
+          type: string
+          example: "Đồng hồ phòng khách"
+        timezone:
+          type: string
+          example: "Asia/Ho_Chi_Minh"
+        user_id:
+          type: integer
+          nullable: true
+      required: [id, name]
+
+    GatewayUpdate:
+      type: object
+      properties:
+        name:
+          type: string
+        timezone:
+          type: string
+        firmware_version:
+          type: string
+      additionalProperties: false
+
+    # ─── Device ───
+    Device:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 1
+        device_id:
+          type: string
+          example: "sensor_01"
+        gateway_id:
+          type: string
+          example: "gateway_001"
+        name:
+          type: string
+          example: "Cảm biến nhiệt phòng ngủ"
+        device_type:
+          type: string
+          enum: [sensor, actuator]
+        protocol:
+          type: string
+          enum: [ble, mqtt]
+        mac_address:
+          type: string
+          nullable: true
+          example: "AA:BB:CC:DD:EE:FF"
+        mqtt_topic:
+          type: string
+          nullable: true
+          example: "home/living/fan"
+        capabilities:
+          type: string
+          nullable: true
+          description: JSON string, e.g. ["temperature","humidity"]
+          example: '["temperature", "humidity"]'
+        status:
+          type: string
+          enum: [online, offline, unknown]
+          default: unknown
+        last_seen:
+          type: string
+          format: date-time
+          nullable: true
+        last_value:
+          type: number
+          format: float
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+      required: [id, device_id, gateway_id, name, device_type, protocol, status, created_at]
+
+    DeviceCreate:
+      type: object
+      properties:
+        device_id:
+          type: string
+          maxLength: 32
+        name:
+          type: string
+          maxLength: 64
+        device_type:
+          type: string
+          enum: [sensor, actuator]
+        protocol:
+          type: string
+          enum: [ble, mqtt]
+        mac_address:
+          type: string
+          nullable: true
+          pattern: '^[0-9A-Fa-f:]{17}$'
+        mqtt_topic:
+          type: string
+          nullable: true
+          maxLength: 128
+        capabilities:
+          type: string
+          nullable: true
+      required: [device_id, name, device_type, protocol]
+
+    DeviceCommand:
+      type: object
+      properties:
+        command:
+          type: string
+          example: "ON"
+      required: [command]
+
+    # ─── Schedule ───
+    Schedule:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 101
+        gateway_id:
+          type: string
+          example: "gateway_001"
+        type:
+          type: string
+          enum: [automation, alarm, personal_event]
+        hour:
+          type: integer
+          minimum: 0
+          maximum: 23
+        minute:
+          type: integer
+          minimum: 0
+          maximum: 59
+        repeat_days:
+          type: string
+          nullable: true
+          example: "MON,TUE,WED,THU,FRI"
+        one_time_date:
+          type: string
+          format: date
+          nullable: true
+          example: "2026-08-20"
+        enabled:
+          type: boolean
+          default: true
+        target_device_id:
+          type: string
+          nullable: true
+        action_command:
+          type: string
+          nullable: true
+          example: "ON"
+        title:
+          type: string
+          nullable: true
+          example: "Dậy đi học"
+        buzzer:
+          type: boolean
+          default: false
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+      required: [id, gateway_id, type, hour, minute, enabled, created_at, updated_at]
+
+    ScheduleCreate:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [automation, alarm, personal_event]
+        hour:
+          type: integer
+          minimum: 0
+          maximum: 23
+        minute:
+          type: integer
+          minimum: 0
+          maximum: 59
+        repeat_days:
+          type: string
+          nullable: true
+          example: "MON,TUE,WED,THU,FRI"
+        one_time_date:
+          type: string
+          format: date
+          nullable: true
+          example: "2026-08-20"
+        enabled:
+          type: boolean
+          default: true
+        target_device_id:
+          type: string
+          nullable: true
+        action_command:
+          type: string
+          nullable: true
+        title:
+          type: string
+          nullable: true
+        buzzer:
+          type: boolean
+          default: false
+      required: [type, hour, minute]
+      description: |
+        Note: `repeat_days` and `one_time_date` are **mutually exclusive**.
+        If `one_time_date` is set, `repeat_days` must be null.
+        For `automation` type, `target_device_id` and `action_command` are required.
+        For `alarm`/`personal_event` types, `title` is recommended.
+
+    ScheduleToggle:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+      required: [enabled]
+
+    # ─── Automation Rule ───
+    AutomationRule:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 1
+        gateway_id:
+          type: string
+          example: "gateway_001"
+        sensor_device_id:
+          type: string
+          example: "sensor_01"
+        condition_type:
+          type: string
+          enum: [gt, lt, eq]
+        threshold:
+          type: number
+          format: float
+          example: 30.0
+        target_device_id:
+          type: string
+          example: "fan_01"
+        action_command:
+          type: string
+          example: "ON"
+        enabled:
+          type: boolean
+          default: true
+        created_at:
+          type: string
+          format: date-time
+      required: [id, gateway_id, sensor_device_id, condition_type, threshold,
+                 target_device_id, action_command, enabled, created_at]
+
+    AutomationRuleCreate:
+      type: object
+      properties:
+        sensor_device_id:
+          type: string
+          example: "sensor_01"
+        condition_type:
+          type: string
+          enum: [gt, lt, eq]
+        threshold:
+          type: number
+          format: float
+          example: 30.0
+        target_device_id:
+          type: string
+          example: "fan_01"
+        action_command:
+          type: string
+          example: "ON"
+        enabled:
+          type: boolean
+          default: true
+      required: [sensor_device_id, condition_type, threshold, target_device_id, action_command]
+
+    # ─── Event Log ───
+    EventLog:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 1
+        gateway_id:
+          type: string
+          example: "gateway_001"
+        event_type:
+          type: string
+          example: "rule_executed"
+        device_id:
+          type: string
+          nullable: true
+          example: "fan_01"
+        payload:
+          type: string
+          nullable: true
+          description: JSON string with event details
+          example: '{"command":"ON","source":"automation"}'
+        occurred_at:
+          type: string
+          format: date-time
+          description: Timestamp from Gateway RTC
+        synced_at:
+          type: string
+          format: date-time
+          nullable: true
+      required: [id, gateway_id, event_type, occurred_at]
+
+    EventLogCreate:
+      type: object
+        items:
+          type: object
+          properties:
+            type:
+              type: string
+              example: "rule_executed"
+            ts:
+              type: integer
+              description: Unix timestamp from Gateway RTC
+              example: 1723621234
+            device_id:
+              type: string
+              nullable: true
+              example: "fan_01"
+            rule_id:
+              type: integer
+              nullable: true
+              example: 1
+            schedule_id:
+              type: integer
+              nullable: true
+              example: 201
+            target:
+              type: string
+              nullable: true
+              example: "fan_01"
+            command:
+              type: string
+              nullable: true
+              example: "ON"
+          required: [type, ts]
+
+    EventQuery:
+      type: object
+      properties:
+        type:
+          type: string
+          nullable: true
+        from:
+          type: string
+          format: date-time
+          nullable: true
+        to:
+          type: string
+          format: date-time
+          nullable: true
+        limit:
+          type: integer
+          default: 50
+        offset:
+          type: integer
+          default: 0
+
+    # ─── Telemetry Log ───
+    TelemetryLog:
+      type: object
+      properties:
+        id:
+          type: integer
+        device_id:
+          type: string
+        value:
+          type: number
+          format: float
+        unit:
+          type: string
+          example: "°C"
+        recorded_at:
+          type: string
+          format: date-time
+      required: [id, device_id, value, recorded_at]
+
+    TelemetryQuery:
+      type: object
+      properties:
+        from:
+          type: string
+          format: date-time
+          nullable: true
+        to:
+          type: string
+          format: date-time
+          nullable: true
+        limit:
+          type: integer
+          default: 100
+        offset:
+          type: integer
+          default: 0
+
+    # ─── Sync Response ───
+    SyncScheduleResponse:
+      type: object
+      properties:
+        schedules:
+          type: array
+          items:
+            $ref: '#/components/schemas/Schedule'
+        rules:
+          type: array
+          items:
+            $ref: '#/components/schemas/AutomationRule'
+        last_updated:
+          type: string
+          format: date-time
+
+    SyncDevicesResponse:
+      type: object
+      properties:
+        devices:
+          type: array
+          items:
+            $ref: '#/components/schemas/Device'
+        last_updated:
+          type: string
+          format: date-time
+
+# ─────────────────────── Endpoints ────────────────────────
+paths:
+  # ─── Gateway Sync APIs (Gateway calls, public) ───
+  /gateways/{gateway_id}/sync/schedule:
+    get:
+      tags: [Sync (Gateway)]
+      summary: Pull schedule + rules from Backend
+      security:
+        - GatewayKey: []
+      parameters:
+        - name: gateway_id
+          in: path
+          required: true
+          schema: { type: string, example: gateway_001 }
+          description: Gateway's unique ID
+      responses:
+        '200':
+          description: Schedules and rules
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SyncScheduleResponse'
+        '404':
+          description: Gateway not found
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /gateways/{gateway_id}/sync/devices:
+    get:
+      tags: [Sync (Gateway)]
+      summary: Pull device list from Backend
+      security:
+        - GatewayKey: []
+      parameters:
+        - name: gateway_id
+          in: path
+          required: true
+          schema: { type: string, example: gateway_001 }
+      responses:
+        '200':
+          description: Device list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SyncDevicesResponse'
+        '404':
+          description: Gateway not found
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /gateways/{gateway_id}/sync/events:
+    post:
+      tags: [Sync (Gateway)]
+      summary: Push event log entries from Gateway to Backend
+      security:
+        - GatewayKey: []
+      parameters:
+        - name: gateway_id
+          in: path
+          required: true
+          schema: { type: string, example: gateway_001 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                events:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/EventLogCreate'
+              required: [events]
+      responses:
+        '200':
+          description: Sync result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  synced_count:
+                    type: integer
+                    example: 2
+                  message:
+                    type: string
+                    example: "Events synced successfully"
+        '404':
+          description: Gateway not found
+        '400':
+          description: Validation error
+
+  # ─── Gateway Management ───
+  /gateways/{gateway_id}:
+    get:
+      tags: [Gateways]
+      summary: Get gateway info
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: gateway_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Gateway
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Gateway' }
+        '404':
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+    put:
+      tags: [Gateways]
+      summary: Update gateway info
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: gateway_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/GatewayUpdate' }
+      responses:
+        '200':
+          description: Updated gateway
+        '404':
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /gateways:
+    post:
+      tags: [Gateways]
+      summary: Register a new gateway
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/GatewayCreate' }
+      responses:
+        '201':
+          description: Gateway created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  name:
+                    type: string
+                  message:
+                    type: string
+
+  # ─── Device APIs ───
+  /gateways/{gateway_id}/devices:
+    get:
+      tags: [Devices]
+      summary: List all devices for a gateway
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: gateway_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Array of devices
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Device' }
+        '404':
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+    post:
+      tags: [Devices]
+      summary: Add a new device to gateway
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: gateway_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DeviceCreate' }
+      responses:
+        '201':
+          description: Device created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: integer }
+                  device_id: { type: string }
+                  message: { type: string }
+        '400':
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '409':
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /gateways/{gateway_id}/devices/{device_id}:
+    put:
+      tags: [Devices]
+      summary: Update device
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: gateway_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: device_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DeviceCreate' }
+      responses:
+        '200':
+          description: Updated device
+        '400':
+        '404':
+
+    delete:
+      tags: [Devices]
+      summary: Delete device (cascade delete related rules)
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: gateway_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: device_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '204':
+          description: Deleted
+        '404':
+        '409':
+
+  /gateways/{gateway_id}/devices/{device_id}/command:
+    post:
+      tags: [Devices]
+      summary: Send a command to a device (via MQTT → Gateway)
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: gateway_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: device_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DeviceCommand' }
+      responses:
+        '202':
+          description: Command published to MQTT
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "Command 'ON' sent to device 'fan_01' via gateway 'gateway_001'"
+        '404':
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '422':
+          description: Gateway currently offline
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  # ─── Schedule APIs ───
+  /gateways/{gateway_id}/schedules:
+    get:
+      tags: [Schedules]
+      summary: List all schedules (optionally filter by type)
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: gateway_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: type
+          in: query
+          schema:
+            type: string
+            enum: [automation, alarm, personal_event]
+      responses:
+        '200':
+          description: Array of schedules
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Schedule' }
+        '404':
+
+    post:
+      tags: [Schedules]
+      summary: Create a new schedule
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: gateway_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ScheduleCreate' }
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: integer }
+                  message: { type: string }
+        '400':
+
+  /gateways/{gateway_id}/schedules/{id}:
+    put:
+      tags: [Schedules]
+      summary: Update schedule
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: gateway_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ScheduleCreate' }
+      responses:
+        '200':
+        '400':
+        '404':
+
+    delete:
+      tags: [Schedules]
+      summary: Delete schedule
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: gateway_id
+          in: path
+          required: true
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        '204':
+        '404':
+
+  /gateways/{gateway_id}/schedules/{id}/toggle:
+    patch:
+      tags: [Schedules]
+      summary: Toggle schedule enabled/disabled
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: gateway_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ScheduleToggle' }
+      responses:
+        '200':
+
+  # ─── Automation Rule APIs ───
+  /gateways/{gateway_id}/rules:
+    get:
+      tags: [Rules]
+      summary: List all automation rules
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: gateway_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Array of rules
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/AutomationRule' }
+        '404':
+
+    post:
+      tags: [Rules]
+      summary: Create a new automation rule
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: gateway_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AutomationRuleCreate' }
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: integer }
+                  message: { type: string }
+        '400':
+
+  /gateways/{gateway_id}/rules/{id}:
+    put:
+      tags: [Rules]
+      summary: Update automation rule
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: gateway_id
+          in: path
+          required: true
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AutomationRuleCreate' }
+      responses:
+        '200':
+        '400':
+        '404':
+
+    delete:
+      tags: [Rules]
+      summary: Delete automation rule
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: gateway_id
+          in: path
+          required: true
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        '204':
+        '404':
+
+  # ─── Event Log APIs ───
+  /gateways/{gateway_id}/events:
+    get:
+      tags: [Events]
+      summary: Query event log history
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: gateway_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: type
+          in: query
+          schema: { type: string }
+          description: Filter by event type
+        - name: from
+          in: query
+          schema: { type: string, format: date-time }
+        - name: to
+          in: query
+          schema: { type: string, format: date-time }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 50 }
+        - name: offset
+          in: query
+          schema: { type: integer, default: 0 }
+      responses:
+        '200':
+          description: Array of events
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/EventLog'
+
+        '404':
+
+  # ─── Telemetry APIs ───
+  /gateways/{gateway_id}/devices/{device_id}/telemetry:
+    get:
+      tags: [Telemetry]
+      summary: Query historical telemetry for a device
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: gateway_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: device_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: from
+          in: query
+          schema: { type: string, format: date-time }
+        - name: to
+          in: query
+          schema: { type: string, format: date-time }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 100 }
+        - name: offset
+          in: query
+          schema: { type: integer, default: 0 }
+      responses:
+        '200':
+          description: Array of telemetry entries
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/TelemetryLog' }
+        '404':

@@ -1,0 +1,159 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           Int       @id @default(autoincrement())
+  username     String    @unique @db.VarChar(64)
+  email        String?   @unique @db.VarChar(128)
+  passwordHash String    @db.VarChar(256)
+  createdAt    DateTime  @default(now()) @db.Timestamp(6)
+  gateways     Gateway[]
+}
+
+model Gateway {
+  id              String           @id @db.VarChar(32)
+  userId          Int?
+  name            String           @db.VarChar(64)
+  status          GatewayStatus    @default(offline)
+  lastSeen        DateTime?        @db.Timestamp(6)
+  firmwareVersion String?          @db.VarChar(16)
+  timezone        String?          @db.VarChar(64)
+  createdAt       DateTime         @default(now()) @db.Timestamp(6)
+  updatedAt       DateTime         @updatedAt @db.Timestamp(6)
+  automationRules AutomationRule[]
+  devices         Device[]
+  eventLogs       EventLog[]
+  user            User?            @relation(fields: [userId], references: [id])
+  schedules       Schedule[]
+  telemetryLogs   TelemetryLog[]
+
+  @@index([userId])
+  @@index([status])
+}
+
+model Device {
+  id           Int          @id @default(autoincrement())
+  deviceId     String       @db.VarChar(32)
+  gatewayId    String
+  name         String       @db.VarChar(64)
+  deviceType   DeviceType
+  protocol     Protocol
+  macAddress   String?      @db.VarChar(18)
+  mqttTopic    String?      @db.VarChar(128)
+  capabilities String?
+  status       DeviceStatus @default(unknown)
+  lastSeen     DateTime?    @db.Timestamp(6)
+  lastValue    Float?
+  createdAt    DateTime     @default(now()) @db.Timestamp(6)
+  gateway      Gateway      @relation(fields: [gatewayId], references: [id], onDelete: Cascade)
+
+  @@unique([gatewayId, deviceId])
+  @@index([gatewayId])
+  @@index([status])
+}
+
+model Schedule {
+  id             Int          @id @default(autoincrement())
+  gatewayId      String
+  type           ScheduleType
+  hour           Int          @db.SmallInt
+  minute         Int          @db.SmallInt
+  repeatDays     String?      @db.VarChar(32)
+  oneTimeDate    DateTime?    @db.Date
+  enabled        Boolean      @default(true)
+  targetDeviceId String?      @db.VarChar(32)
+  actionCommand  String?      @db.VarChar(32)
+  title          String?      @db.VarChar(64)
+  buzzer         Boolean      @default(false)
+  createdAt      DateTime     @default(now()) @db.Timestamp(6)
+  updatedAt      DateTime     @updatedAt @db.Timestamp(6)
+  gateway        Gateway      @relation(fields: [gatewayId], references: [id], onDelete: Cascade)
+
+  @@index([gatewayId])
+  @@index([type])
+}
+
+model AutomationRule {
+  id             Int           @id @default(autoincrement())
+  gatewayId      String
+  sensorDeviceId String        @db.VarChar(32)
+  conditionType  ConditionType
+  threshold      Float
+  targetDeviceId String        @db.VarChar(32)
+  actionCommand  String        @db.VarChar(32)
+  enabled        Boolean       @default(true)
+  createdAt      DateTime      @default(now()) @db.Timestamp(6)
+  gateway        Gateway       @relation(fields: [gatewayId], references: [id], onDelete: Cascade)
+
+  @@index([gatewayId])
+  @@index([sensorDeviceId])
+  @@index([targetDeviceId])
+}
+
+model EventLog {
+  id         Int       @id @default(autoincrement())
+  gatewayId  String
+  eventType  String    @db.VarChar(32)
+  deviceId   String?   @db.VarChar(32)
+  payload    String?
+  occurredAt DateTime  @db.Timestamp(6)
+  syncedAt   DateTime? @db.Timestamp(6)
+  gateway    Gateway   @relation(fields: [gatewayId], references: [id])
+
+  @@index([gatewayId])
+  @@index([eventType])
+  @@index([occurredAt])
+}
+
+model TelemetryLog {
+  id         Int      @id @default(autoincrement())
+  deviceId   String   @db.VarChar(32)
+  gatewayId  String
+  value      Float
+  unit       String?  @db.VarChar(16)
+  recordedAt DateTime @db.Timestamp(6)
+  gateway    Gateway  @relation(fields: [gatewayId], references: [id])
+
+  @@index([deviceId])
+  @@index([gatewayId])
+  @@index([recordedAt])
+}
+
+enum GatewayStatus {
+  online
+  offline
+}
+
+enum DeviceType {
+  sensor
+  actuator
+}
+
+enum Protocol {
+  ble
+  mqtt
+}
+
+enum DeviceStatus {
+  online
+  offline
+  unknown
+}
+
+enum ScheduleType {
+  automation
+  alarm
+  personal_event
+}
+
+enum ConditionType {
+  gt
+  lt
+  eq
+}

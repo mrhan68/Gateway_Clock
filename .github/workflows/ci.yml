@@ -1,0 +1,82 @@
+name: host tests + lint
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install 'pytest==8.*' 'ruff==0.16.1'
+      - run: ruff check .
+      - run: pytest tests/host/ -q
+
+  build:
+    runs-on: ubuntu-latest
+    container: espressif/idf:v6.0.2
+    defaults:
+      run:
+        working-directory: firmware
+        shell: bash
+    steps:
+      - name: Trust the workspace
+        working-directory: ${{ github.workspace }}
+        run: git config --global --add safe.directory '*'
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Show the IDF version
+        run: . $IDF_PATH/export.sh >/dev/null && idf.py --version
+
+      - name: Decide what to build
+        id: plan
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            VERSION=${GITHUB_REF#refs/tags/v}
+          else
+            VERSION="0.0.0-$(git rev-parse --short HEAD)"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Building firmware as $VERSION"
+
+      - name: Build firmware
+        run: |
+          . $IDF_PATH/export.sh >/dev/null
+          idf.py -B build -DSDKCONFIG=$PWD/build/sdkconfig \
+            -DSDKCONFIG_DEFAULTS=sdkconfig.defaults \
+            -DPROJECT_VER=${{ steps.plan.outputs.version }} \
+            set-target esp32
+          idf.py -B build -DSDKCONFIG=$PWD/build/sdkconfig \
+            -DSDKCONFIG_DEFAULTS=sdkconfig.defaults \
+            -DPROJECT_VER=${{ steps.plan.outputs.version }} \
+            build
+
+      - name: Collect artefacts
+        run: |
+          V="${{ steps.plan.outputs.version }}"
+          cp build/*.bin firmware_v${V}.bin
+          cp build/*.elf firmware_v${V}.elf
+          mkdir -p coldflash
+          cp build/flash_args coldflash/
+          awk '$1 ~ /^0x/ {print $2}' build/flash_args | while read -r f; do
+            cp "build/$f" coldflash/ || { echo "FATAL: missing build/$f"; exit 1; }
+          done
+          cp build/sdkconfig sdkconfig.generated
+          cp -r coldflash/* firmware_v${V}.bin firmware_v${V}.elf sdkconfig.generated ${{ github.workspace }}/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: firmware-v${{ steps.plan.outputs.version }}
+          path: |
+            *.bin
+            *.elf
+            sdkconfig.generated
+            coldflash/
