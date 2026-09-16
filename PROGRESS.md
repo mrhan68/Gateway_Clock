@@ -12,7 +12,7 @@
 ## 1. Tổng Quan Tiến Độ Hệ Thống (Snapshot)
 
 ```
-[████████████████████░░░░░░░░░░] 65% Hoàn thành Wave 1 (Chuẩn bị sang Wave 2)
+[████████████████████████░░░░░░] 80% Hoàn thành Wave 1 (Toàn bộ logic Bare-board 100% Green)
 ```
 
 | Hạng mục | Tiến độ | Trạng thái | Ghi chú |
@@ -20,6 +20,7 @@
 | **Host Unit Tests** | 11/11 | 🟢 **100% PASSED** | Kiểm thử thuật toán Modbus CRC, Sync Queue, Rule Engine, MQTT Routing |
 | **Core Infrastructure (Bare-board)** | 4/4 | 🟢 **100% PASSED** | Event Bus, Task Supervisor, NVS Config Manager, Serial CLI |
 | **Network & Cloud Uplink** | 4/4 | 🟢 **100% PASSED** | SoftAP Captive Portal, Wi-Fi Scan, SNTP Real-Time Sync, MQTT Uplink |
+| **Local Automation & Scheduler** | 2/2 | 🟢 **100% PASSED** | Rule Engine (IF-THEN, Safe-default), Local Scheduler (`TC-CLK-03`) |
 | **Journey Tests (Critical Paths)** | 2/4 | 🟡 **50% PASSED** | `JRN-01` (Boot), `JRN-04` (Network/MQTT) Green; `JRN-02` (SD), `JRN-03` (RS485) chờ nối dây |
 | **Peripheral Bringup (Ngoại vi vật lý)** | 0/3 | ⚪ **CHỜ PHẦN CỨNG** | MicroSD Card (SPI), RS485 Transceiver (UART2), I2C OLED/RTC |
 
@@ -48,10 +49,11 @@
 | [rtc.c](file:///home/chien/ai-workspace/qwen-test/firmware/main/rtc.c) | Quản lý đồng hồ thời gian thực, đồng bộ SNTP Internet (`pool.ntp.org`), múi giờ `ICT-7` | §4.4.1 | `JRN-04` | 🟢 **PASSED** |
 | [mqtt_adapter.c](file:///home/chien/ai-workspace/qwen-test/firmware/main/mqtt_adapter.c) | MQTT Client: kết nối broker (`broker.emqx.io:1883`), LWT status, subscribe command & schedule | §4.6.1, §4.6.4 | `JRN-04` | 🟢 **PASSED** |
 | [uplink.c](file:///home/chien/ai-workspace/qwen-test/firmware/main/uplink.c) | Tác vụ định kỳ đẩy bản tin telemetry (Uptime, Free Heap, IP) lên Cloud qua MQTT | §4.6.2 | `JRN-04` | 🟢 **PASSED** |
+| [rule_engine.c](file:///home/chien/ai-workspace/qwen-test/firmware/main/rule_engine.c) | Bộ máy quy tắc tự động hóa nội bộ IF-THEN (GT/LT), Safe-Default, Action Executor | §4.7.1 | `TC-HOST-03` | 🟢 **PASSED** |
+| [scheduler.c](file:///home/chien/ai-workspace/qwen-test/firmware/main/scheduler.c) | Bộ lập lịch công việc và báo thức thời gian thực, quét chu kỳ 5s, chống trigger lặp | §4.8.1 | `TC-CLK-03` | 🟢 **PASSED** |
 | `rs485_adapter.c` | Giao tiếp Modbus RTU Master (UART2, DE/RE flow control), đọc thanh ghi cảm biến FC03/04 | §4.3.1 | `TC-RS485-01`, `JRN-03` | ⏳ *Chờ nối dây* |
 | `sd_logger.c` | Quản lý hệ thống file FATFS trên thẻ nhớ MicroSD qua SPI, ghi CSV nhật ký hàng ngày | §4.5.1 | `TC-SD-01`, `JRN-02` | ⏳ *Chờ nối dây* |
 | `sync_queue.c` | Hàng đợi lưu trữ ngoại tuyến FIFO (`sync_queue.bin`) chống mất dữ liệu khi rớt mạng | §4.5.3 | `TC-HOST-02` | ⏳ *Chờ nối dây* |
-| `rule_engine.c` | Bộ máy quy tắc tự động hóa nội bộ IF-THEN chạy trực tiếp trên Gateway không cần Cloud | §4.7.1 | `TC-HOST-03` | 📝 *Sẵn sàng code* |
 | `display_ui.c` | Hiển thị màn hình OLED SSD1327 (I2C) đồng hồ kim/số, thời tiết, trạng thái cảm biến | §4.8.1 | `TC-CLK-01` | ⏳ *Chờ nối dây* |
 
 ---

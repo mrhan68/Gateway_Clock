@@ -10,6 +10,8 @@
 #include "rtc.h"
 #include "wifi_provisioning.h"
 #include "uplink.h"
+#include "rule_engine.h"
+#include "scheduler.h"
 
 static const char *TAG = "MAIN";
 
@@ -21,40 +23,49 @@ void app_main(void)
     ESP_LOGI(TAG, "==================================================");
     ESP_LOGI(TAG, "[BOOT] Starting Smart Clock Edge Gateway");
     ESP_LOGI(TAG, "Hardware: ESP32-S3 Bare-board (/dev/ttyACM0 / COM7)");
-    ESP_LOGI(TAG, "Firmware: Wave 1 - Bare-Board Network & Uplink");
+    ESP_LOGI(TAG, "Firmware: Wave 1 - Core + Rule Engine + Scheduler");
     ESP_LOGI(TAG, "==================================================");
 
     // 1. NVS Flash & Configuration Manager
-    ESP_LOGI(TAG, "[INIT 1/7] Initializing Config Manager & NVS Flash...");
+    ESP_LOGI(TAG, "[INIT 1/9] Initializing Config Manager & NVS Flash...");
     config_manager_init();
 
     // 2. Event Bus Queue
-    ESP_LOGI(TAG, "[INIT 2/7] Initializing Event Bus Queue...");
+    ESP_LOGI(TAG, "[INIT 2/9] Initializing Event Bus Queue...");
     event_bus_init();
 
     // 3. Task Supervisor & Watchdog
-    ESP_LOGI(TAG, "[INIT 3/7] Initializing Task Supervisor & Watchdog...");
+    ESP_LOGI(TAG, "[INIT 3/9] Initializing Task Supervisor & Watchdog...");
     supervisor_init();
 
     // 4. RTC & SNTP Synchronization
-    ESP_LOGI(TAG, "[INIT 4/7] Initializing RTC System Clock...");
+    ESP_LOGI(TAG, "[INIT 4/9] Initializing RTC System Clock...");
     app_rtc_init();
 
     // 5. Uplink Telemetry & MQTT Adapter
-    ESP_LOGI(TAG, "[INIT 5/7] Initializing MQTT Uplink...");
+    ESP_LOGI(TAG, "[INIT 5/9] Initializing MQTT Uplink...");
     uplink_init();
 
     // 6. Wi-Fi Provisioning & Connection
-    ESP_LOGI(TAG, "[INIT 6/7] Initializing Wi-Fi & Provisioning...");
+    ESP_LOGI(TAG, "[INIT 6/9] Initializing Wi-Fi & Provisioning...");
     wifi_provisioning_init();
 
-    // Dang ky cac task can theo doi heartbeat trong Wave 1
+    // 7. Rule Engine Condition Evaluator
+    ESP_LOGI(TAG, "[INIT 7/9] Initializing Rule Engine...");
+    rule_engine_init();
+
+    // 8. Local Scheduler & Real-Time Alarm
+    ESP_LOGI(TAG, "[INIT 8/9] Initializing Local Scheduler & Alarms...");
+    scheduler_init();
+
+    // Dang ky cac task can theo doi heartbeat
     supervisor_set_active_tasks(TASK_HEARTBEAT_EVENT_BUS |
                                 TASK_HEARTBEAT_CLI |
-                                TASK_HEARTBEAT_UPLINK);
+                                TASK_HEARTBEAT_UPLINK |
+                                TASK_HEARTBEAT_SCHEDULER);
 
-    // 7. Serial CLI Console
-    ESP_LOGI(TAG, "[INIT 7/7] Starting Serial CLI Console...");
+    // 9. Serial CLI Console
+    ESP_LOGI(TAG, "[INIT 9/9] Starting Serial CLI Console...");
     serial_cli_init();
 
     // Bat dau Dispatcher sau khi tat ca cac module da dang ky handler

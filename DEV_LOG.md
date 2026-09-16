@@ -124,5 +124,39 @@
     - Lệnh CLI `config show`: `Wi-Fi SSID: (not configured)`, `Wi-Fi Password: (none)`
   - Mỗi lần reset, board luôn sẵn sàng phát SoftAP `SmartClock-Setup` để người dùng kết nối cấu hình lại từ đầu.
 
+---
 
-
+### [2026-09-16] Triển khai & Xác minh Phần mềm Hướng 1: Rule Engine & Local Scheduler trên Bare-Board
+* **Mục tiêu**: Hoàn thiện toàn bộ logic xử lý tự động hóa cục bộ (Offline-First) và bộ lập lịch báo thức thời gian thực trên board trần ESP32-S3. Nạp và kiểm thử tự động qua cổng `/dev/ttyACM0` (COM7 đính kèm qua USB/IP).
+* **Kết nối phần cứng qua USB/IP**:
+  - Tự động gắn thiết bị CH343 USB-to-UART Bridge (`busid 1-1`) từ Windows Host vào WSL qua `usbipd.exe attach --wsl --busid 1-1`.
+  - Nhận diện thiết bị CDC ACM tại `/dev/ttyACM0`, tốc độ giao tiếp 115200 baud, nạp firmware 460800 baud.
+* **Các module triển khai**:
+  1. `firmware/main/rule_engine.h` & `.c` (FSD §4.7):
+     - Khung đánh giá điều kiện toán học: `RULE_CONDITION_SENSOR_GT` (>), `RULE_CONDITION_SENSOR_LT` (<).
+     - Cơ chế Safe-Default: Khi bản tin telemetry mang cờ `valid=false` (sensor lỗi/offline), Rule Engine lập tức ngắt đánh giá, giữ nguyên trạng thái an toàn và phát `EVT_SENSOR_VALUE_INVALID`.
+     - Điều phối hành động: Khi khớp điều kiện, sinh payload `rule_action_request_t` đẩy lên Event Bus qua `EVT_RULE_ACTION_REQUEST`.
+     - Tích hợp MQTT: Tự động publish bản tin thông báo hành động tới topic `gateway/<ID>/device/<target_id>/action`.
+  2. `firmware/main/scheduler.h` & `.c` (FSD §4.8):
+     - Tác vụ `scheduler_task` (Core 0, Priority 5, Stack 4096).
+     - Chu kỳ quét 5 giây, cơ chế phát hiện chuyển phút kèm chốt chống kích hoạt lặp `s_last_triggered_minute`.
+     - Hỗ trợ lịch tuần lặp lại (`repeat_days[]`) và sự kiện một lần (`one_time_date`).
+     - Tích hợp nhịp tim giám sát `TASK_HEARTBEAT_SCHEDULER` vào Task Supervisor (Bitmask `0x55`).
+     - Kích hoạt sự kiện `EVT_SCHEDULE_AUTOMATION_TRIGGERED` và `EVT_SCHEDULE_ALARM_TRIGGERED`.
+  3. Mở rộng `serial_cli.h` & `.c`:
+     - Bổ sung nhóm lệnh tương tác: `rule list`, `rule add`, `rule test`, `rule clear`.
+     - Bổ sung nhóm lệnh lập lịch: `schedule list`, `schedule add`, `schedule test`, `schedule clear`.
+     - Bổ sung lệnh dispatch thiết bị: `cmd send <target> <command>`.
+* **Sự cố kỹ thuật phát hiện qua kiểm thử trực tiếp & giải pháp**:
+  - *Sự cố*: Tràn ngăn xếp `task serial_cli_task` (`***ERROR*** A stack overflow in task serial_cli_task has been detected`).
+  - *Nguyên nhân*: Khai báo cục bộ `rules[16]` và `entries[16]` (>4.5KB) trên stack 4KB của `serial_cli_task`.
+  - *Giải pháp*: Chuyển vùng đệm CLI sang `static s_cli_rules` và `static s_cli_entries`, đồng thời nâng stack size lên 8192 bytes; nâng `event_dispatcher` lên 6144 bytes.
+* **Kết quả Kiểm thử Trực tiếp trên Phần cứng (`/dev/ttyACM0`)**:
+  - `status`: Active Mask = `0x55`, Alive Mask = `0x55` (`EVENT_BUS`, `CLI`, `UPLINK`, `SCHEDULER` đều `HEALTHY`), Free Heap ~211KB.
+  - `rule list`: Hiển thị 3 luật mặc định (`sensor_temp_01 > 30.0` -> `fan_relay_01 ON`, v.v.).
+  - `rule test sensor_temp_01 32.5 1`: Khớp Rule #1, Action Executor thực thi lệnh bật quạt `ON` thành công.
+  - `rule test sensor_temp_01 35.0 0`: Kích hoạt Safe-Default chính xác, bỏ qua đánh giá luật.
+  - `schedule list`: Quản lý 2 lịch biểu hoạt động.
+  - `schedule test Siren Check`: Kích hoạt banner cảnh báo báo thức thời gian thực `🔔 [ALARM NOTIFICATION TRIGGERED] 🔔`.
+  - `cmd send relay_ch3 TOGGLE`: Dispatcher xử lý điều khiển thiết bị đích thành công.
+* **Trạng thái**: Toàn bộ logic phần mềm nội bộ trên Bare-board đã hoàn thành 100% và vượt qua kiểm thử thực tế.

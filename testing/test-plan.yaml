@@ -340,7 +340,7 @@ tests:
       tier: target
       wave: 1
       verifies: [M05, M12, M13]
-      status: not_done
+      status: passed
 
   # ┌─────────────────────────────────────────────────────────────┐
   # │ Wave 2: Deviations & Variants (Locked until Wave 1 Green)   │

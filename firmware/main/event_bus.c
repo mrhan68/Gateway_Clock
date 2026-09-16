@@ -123,7 +123,7 @@ void event_bus_start_dispatcher(void)
     BaseType_t ret = xTaskCreatePinnedToCore(
         event_dispatcher_task,
         "event_dispatcher",
-        4096,
+        6144,
         NULL,
         EVENT_BUS_DISPATCHER_PRIO,
         &s_dispatcher_task_handle,
