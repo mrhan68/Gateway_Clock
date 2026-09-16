@@ -5,7 +5,8 @@
 > **Cập nhật lần cuối**: 13/09/2026  
 > **Trạng thái phần cứng**: ESP32-S3 Bare-board (Cắm cáp qua cổng `/dev/ttyACM0` - UART0)  
 > **Tài liệu đặc tả**: [fsd-smart-clock-gateway.md](file:///home/chien/ai-workspace/qwen-test/fsd-smart-clock-gateway.md)  
-> **Kế hoạch kiểm thử**: [testing/test-plan.yaml](file:///home/chien/ai-workspace/qwen-test/testing/test-plan.yaml)
+> **Kế hoạch kiểm thử**: [testing/test-plan.yaml](file:///home/chien/ai-workspace/qwen-test/testing/test-plan.yaml)  
+> **Cấu hình giả lập ngoại vi**: [MOCK_PERIPHERALS.md](file:///home/chien/ai-workspace/qwen-test/MOCK_PERIPHERALS.md)
 
 ---
 
@@ -51,6 +52,7 @@
 | [uplink.c](file:///home/chien/ai-workspace/qwen-test/firmware/main/uplink.c) | Tác vụ định kỳ đẩy bản tin telemetry (Uptime, Free Heap, IP) lên Cloud qua MQTT | §4.6.2 | `JRN-04` | 🟢 **PASSED** |
 | [rule_engine.c](file:///home/chien/ai-workspace/qwen-test/firmware/main/rule_engine.c) | Bộ máy quy tắc tự động hóa nội bộ IF-THEN (GT/LT), Safe-Default, Action Executor | §4.7.1 | `TC-HOST-03` | 🟢 **PASSED** |
 | [scheduler.c](file:///home/chien/ai-workspace/qwen-test/firmware/main/scheduler.c) | Bộ lập lịch công việc và báo thức thời gian thực, quét chu kỳ 5s, chống trigger lặp | §4.8.1 | `TC-CLK-03` | 🟢 **PASSED** |
+| [mock_peripherals.c](file:///home/chien/ai-workspace/qwen-test/firmware/main/mock_peripherals.c) | Tầng ngoại vi ảo: mô phỏng Modbus RS485 (TH sensor, Relay board), Virtual Storage CSV, Fault Injection | §4.3, §4.5 | `TC-MOCK-01` | 🟢 **PASSED** |
 | `rs485_adapter.c` | Giao tiếp Modbus RTU Master (UART2, DE/RE flow control), đọc thanh ghi cảm biến FC03/04 | §4.3.1 | `TC-RS485-01`, `JRN-03` | ⏳ *Chờ nối dây* |
 | `sd_logger.c` | Quản lý hệ thống file FATFS trên thẻ nhớ MicroSD qua SPI, ghi CSV nhật ký hàng ngày | §4.5.1 | `TC-SD-01`, `JRN-02` | ⏳ *Chờ nối dây* |
 | `sync_queue.c` | Hàng đợi lưu trữ ngoại tuyến FIFO (`sync_queue.bin`) chống mất dữ liệu khi rớt mạng | §4.5.3 | `TC-HOST-02` | ⏳ *Chờ nối dây* |
@@ -84,6 +86,10 @@
 * **`TC-WIFI-01` & `TC-WIFI-02` (Captive Portal & Wi-Fi Scanning)**: ✅ **PASSED**
   - SoftAP `SmartClock_Setup` phát sóng ổn định, DNS hijacking trỏ về `192.168.4.1`.
   - Quét sóng thời gian thực và cho phép chọn mạng trên giao diện web di động.
+* **`TC-MOCK-01` (Mock Peripherals & Rule Engine Closed Loop)**: ✅ **PASSED**
+  - Giả lập Modbus Slave 0x01 phát nhiệt độ/độ ẩm định kỳ qua Event Bus.
+  - Rule Engine tự động phát hiện `temp > 30.0C` và `hum > 75.0%`, dispatch lệnh bật quạt làm mát (`fan_relay_01`) và máy hút ẩm (`dehumidifier_01`) đóng tiếp điểm Relay Slave 0x02.
+  - Bơm giá trị thủ công `mock rs485 set 33.5 70.0 1` và ghi nhật ký CSV ảo hoạt động chính xác.
 
 ---
 
@@ -101,6 +107,9 @@
 ├──────────────────────────────┼──────────────────────────────────────────┼─────────────────────────────────────────┤
 │ ESP32 tự reset khi mở cổng   │ Tín hiệu DTR/RTS trên cầu nạp CH343 kéo  │ Cấu hình dtr=False, rts=False trong     │
 │ serial monitor từ Linux      │ chân EN xuống đất qua mạch auto-reset    │ script giao tiếp pyserial               │
+├──────────────────────────────┼──────────────────────────────────────────┼─────────────────────────────────────────┤
+│ Reset TG1WDT khi chạy Mock   │ prvTimerTask chỉ có 2048B stack; hàm     │ Chuyển Mock RS485 sang dedicated task   │
+│ RS485 poller                 │ printf format float + malloc làm tràn RAM│ mock_rs485_task (4096B stack, mutex)    │
 └──────────────────────────────┴──────────────────────────────────────────┴─────────────────────────────────────────┘
 ```
 

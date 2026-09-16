@@ -15,6 +15,7 @@
 #include "rtc.h"
 #include "rule_engine.h"
 #include "scheduler.h"
+#include "mock_peripherals.h"
 
 static const char *TAG __attribute__((unused)) = "CLI";
 
@@ -65,6 +66,12 @@ static void print_help(void)
     printf("  schedule test [title]                - Manually trigger an alarm notification\n");
     printf("  schedule clear                       - Clear all schedule entries\n");
     printf("  cmd send <target_id> <command>       - Dispatch command to device\n");
+    printf("  mock status                          - Show mock peripherals status\n");
+    printf("  mock rs485 start [interval_ms]       - Start simulated RS485 polling\n");
+    printf("  mock rs485 stop                      - Stop simulated RS485 polling\n");
+    printf("  mock rs485 set <temp> <hum>          - Set simulated sensor values\n");
+    printf("  mock rs485 fault <none|timeout|invalid> - Inject simulated bus faults\n");
+    printf("  mock storage test                    - Write sample telemetry to virtual storage\n");
     printf("  modbus scan [start_id] [end_id]      - Probe RS485 slave devices (mock mode)\n");
     printf("  test freeze event_bus                - Test hook: simulate frozen event_bus task\n");
     printf("  reboot                               - Reboot the ESP32 gateway\n\n");
@@ -304,6 +311,29 @@ static void handle_command(char *cmd_line)
         } else {
             printf("Usage: cmd send <target_device_id> <command>\n");
         }
+    } else if (strcmp(cmd_line, "mock status") == 0) {
+        mock_peripherals_print_status();
+    } else if (strncmp(cmd_line, "mock rs485 start", 16) == 0) {
+        uint32_t interval = 3000;
+        sscanf(cmd_line + 16, "%lu", (unsigned long*)&interval);
+        mock_rs485_start(interval);
+    } else if (strcmp(cmd_line, "mock rs485 stop") == 0) {
+        mock_rs485_stop();
+    } else if (strncmp(cmd_line, "mock rs485 set", 14) == 0) {
+        float temp = 0.0f, hum = 0.0f;
+        int valid = 1;
+        int parsed = sscanf(cmd_line + 14, "%f %f %d", &temp, &hum, &valid);
+        if (parsed >= 2) {
+            mock_rs485_set_values(temp, hum, valid != 0);
+        } else {
+            printf("Usage: mock rs485 set <temperature> <humidity> [valid: 1/0]\n");
+        }
+    } else if (strncmp(cmd_line, "mock rs485 fault", 16) == 0) {
+        char fault[16] = "none";
+        sscanf(cmd_line + 16, "%15s", fault);
+        mock_rs485_inject_fault(fault);
+    } else if (strcmp(cmd_line, "mock storage test") == 0) {
+        mock_storage_write_sample_csv();
     } else if (strncmp(cmd_line, "modbus scan", 11) == 0) {
         int start = 1, end = 16;
         sscanf(cmd_line + 11, "%d %d", &start, &end);

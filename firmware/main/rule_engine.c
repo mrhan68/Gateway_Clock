@@ -6,6 +6,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "mqtt_adapter.h"
+#include "mock_peripherals.h"
 
 static const char *TAG = "RULE_ENGINE";
 
@@ -201,6 +202,20 @@ static void on_telemetry_event(const gateway_event_t *evt)
     }
 }
 
+static void on_rs485_telemetry_event(const gateway_event_t *evt)
+{
+    if (evt != NULL && evt->data != NULL && evt->len >= sizeof(rs485_telemetry_t)) {
+        const rs485_telemetry_t *r = (const rs485_telemetry_t *)evt->data;
+        sensor_telemetry_t telem = {
+            .value = r->value,
+            .valid = r->valid,
+        };
+        strncpy(telem.device_id, r->device_id, sizeof(telem.device_id) - 1);
+        telem.device_id[sizeof(telem.device_id) - 1] = '\0';
+        rule_engine_evaluate_telemetry(&telem);
+    }
+}
+
 static void on_schedule_automation(const gateway_event_t *evt)
 {
     if (evt != NULL && evt->data != NULL) {
@@ -259,7 +274,7 @@ void rule_engine_init(void)
 
     // Register handlers according to FSD §4.7.3
     event_bus_register_handler(EVT_BLE_DEVICE_DATA, on_telemetry_event);
-    event_bus_register_handler(EVT_RS485_DEVICE_DATA, on_telemetry_event);
+    event_bus_register_handler(EVT_RS485_DEVICE_DATA, on_rs485_telemetry_event);
     event_bus_register_handler(EVT_MQTT_MESSAGE_RECEIVED, on_telemetry_event);
     event_bus_register_handler(EVT_SCHEDULE_AUTOMATION_TRIGGERED, on_schedule_automation);
     event_bus_register_handler(EVT_RULE_ACTION_REQUEST, on_rule_action_request);

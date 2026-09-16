@@ -12,6 +12,7 @@
 #include "uplink.h"
 #include "rule_engine.h"
 #include "scheduler.h"
+#include "mock_peripherals.h"
 
 static const char *TAG = "MAIN";
 
@@ -55,21 +56,29 @@ void app_main(void)
     rule_engine_init();
 
     // 8. Local Scheduler & Real-Time Alarm
-    ESP_LOGI(TAG, "[INIT 8/9] Initializing Local Scheduler & Alarms...");
+    ESP_LOGI(TAG, "[INIT 8/10] Initializing Local Scheduler & Alarms...");
     scheduler_init();
+
+    // 9. Mock Peripherals Subsystem (RS485 & Virtual Storage)
+    ESP_LOGI(TAG, "[INIT 9/10] Initializing Mock Peripherals...");
+    mock_peripherals_init();
 
     // Dang ky cac task can theo doi heartbeat
     supervisor_set_active_tasks(TASK_HEARTBEAT_EVENT_BUS |
+                                TASK_HEARTBEAT_RS485 |
                                 TASK_HEARTBEAT_CLI |
                                 TASK_HEARTBEAT_UPLINK |
                                 TASK_HEARTBEAT_SCHEDULER);
 
-    // 9. Serial CLI Console
-    ESP_LOGI(TAG, "[INIT 9/9] Starting Serial CLI Console...");
+    // 10. Serial CLI Console
+    ESP_LOGI(TAG, "[INIT 10/10] Starting Serial CLI Console...");
     serial_cli_init();
 
     // Bat dau Dispatcher sau khi tat ca cac module da dang ky handler
     event_bus_start_dispatcher();
+
+    // Khoi dong phat song telemetry RS485 gia lap (chu ky 4 giay)
+    mock_rs485_start(4000);
 
     // Phat tin hieu song Journey Test JRN-01
     printf("\n[SYS] Alive marker 1\n");

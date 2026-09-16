@@ -9,5 +9,6 @@ idf_component_register(SRCS "main.c"
                             "uplink.c"
                             "rule_engine.c"
                             "scheduler.c"
+                            "mock_peripherals.c"
                    INCLUDE_DIRS "."
                    REQUIRES freertos esp_system esp_timer log nvs_flash driver esp_wifi esp_event esp_netif esp_http_server lwip mqtt json)
