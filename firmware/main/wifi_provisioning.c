@@ -12,6 +12,7 @@
 #include "freertos/task.h"
 #include "config_manager.h"
 #include "event_bus.h"
+#include "web_server.h"
 
 static const char *TAG = "WIFI_PROV";
 
@@ -21,7 +22,6 @@ static const char *TAG = "WIFI_PROV";
 
 static esp_netif_t *s_netif_sta = NULL;
 static esp_netif_t *s_netif_ap = NULL;
-static httpd_handle_t s_http_server = NULL;
 static TaskHandle_t s_dns_task_handle = NULL;
 static bool s_is_connected = false;
 static char s_current_ip[16] = "0.0.0.0";
@@ -234,200 +234,8 @@ bool wifi_provisioning_get_scanned_ssid(int index, char *out_ssid, size_t max_le
     return true;
 }
 
-static const char CAPTIVE_PORTAL_HTML[] =
-"<!DOCTYPE html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
-"<title>Smart Clock Gateway Setup</title>"
-"<style>"
-"* { box-sizing: border-box; }"
-"body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0d1117; color: #c9d1d9; margin: 0; padding: 20px; display: flex; justify-content: center; align-items: center; min-height: 100vh; }"
-".card { background: #161b22; padding: 24px; border-radius: 12px; border: 1px solid #30363d; width: 100%; max-width: 400px; box-shadow: 0 8px 24px rgba(0,0,0,0.5); }"
-"h2 { color: #58a6ff; margin: 0 0 6px; text-align: center; font-size: 20px; }"
-"p { color: #8b949e; font-size: 13px; text-align: center; margin: 0 0 16px; }"
-"label { font-size: 13px; font-weight: 600; display: block; margin-bottom: 6px; color: #e6edf3; }"
-"select, input { width: 100%; padding: 10px 12px; border-radius: 6px; border: 1px solid #30363d; background: #0d1117; color: #fff; font-size: 14px; margin-bottom: 14px; outline: none; }"
-"select:focus, input:focus { border-color: #58a6ff; }"
-".btn-scan { background: #21262d; border: 1px solid #30363d; color: #58a6ff; padding: 6px 10px; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 600; }"
-".btn-scan:hover { background: #30363d; }"
-".btn-submit { width: 100%; padding: 12px; background: #238636; color: #fff; border: none; border-radius: 6px; font-weight: 600; font-size: 15px; cursor: pointer; margin-top: 6px; }"
-".btn-submit:hover { background: #2ea043; }"
-".footer { margin-top: 16px; text-align: center; font-size: 11px; color: #484f58; }"
-"#status-msg { font-size: 12px; color: #8b949e; margin-bottom: 8px; min-height: 16px; }"
-"</style></head>"
-"<body><div class='card'>"
-"<h2>Cấu Hình Wi-Fi</h2><p>Smart Clock & Industrial Gateway</p>"
-"<form method='POST' action='/save'>"
-"<div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;'>"
-"<label style='margin:0;'>Chọn Mạng Wi-Fi</label>"
-"<button type='button' class='btn-scan' onclick='fetchScan()'>&#x21bb; Quét lại</button>"
-"</div>"
-"<div id='status-msg'>Đang quét Wi-Fi lân cận...</div>"
-"<select id='wifi-select' onchange='onSelectChange(this.value)'>"
-"<option value='' disabled selected>-- Đang tìm sóng Wi-Fi... --</option>"
-"</select>"
-"<div id='manual-box' style='display:none;'>"
-"<label>Tên Wi-Fi (SSID)</label>"
-"<input type='text' id='manual-ssid' placeholder='Nhập tên mạng (kể cả mạng ẩn)'>"
-"</div>"
-"<input type='hidden' name='ssid' id='ssid-input'>"
-"<label>Mật Khẩu</label>"
-"<input type='password' name='password' id='password' placeholder='Nhập mật khẩu Wi-Fi'>"
-"<input type='hidden' name='timezone' id='tz_field'>"
-"<button type='submit' class='btn-submit'>Lưu & Kết Nối</button>"
-"</form>"
-"<div class='footer'>ESP32-S3 AICLP Gateway v1.1</div></div>"
-"<script>"
-"document.getElementById('tz_field').value = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Ho_Chi_Minh';"
-"function fetchScan() {"
-"  var sel = document.getElementById('wifi-select');"
-"  var msg = document.getElementById('status-msg');"
-"  msg.innerText = 'Đang quét sóng Wi-Fi...';"
-"  sel.innerHTML = '<option value=\"\" disabled selected>-- Đang quét... --</option>';"
-"  fetch('/scan')"
-"    .then(r => r.json())"
-"    .then(list => {"
-"      sel.innerHTML = '';"
-"      if (!list || list.length === 0) {"
-"        msg.innerText = 'Không tìm thấy Wi-Fi. Nhập thủ công:';"
-"      } else {"
-"        msg.innerText = 'Tìm thấy ' + list.length + ' mạng Wi-Fi:';"
-"        var defOpt = document.createElement('option');"
-"        defOpt.value = ''; defOpt.disabled = true; defOpt.selected = true;"
-"        defOpt.text = '-- Chọn mạng Wi-Fi của bạn --';"
-"        sel.appendChild(defOpt);"
-"        list.forEach(item => {"
-"          var opt = document.createElement('option');"
-"          opt.value = item.ssid;"
-"          var lock = item.auth > 0 ? ' [Khóa]' : ' [Mở]';"
-"          opt.text = item.ssid + ' (' + item.rssi + ' dBm)' + lock;"
-"          sel.appendChild(opt);"
-"        });"
-"      }"
-"      var manualOpt = document.createElement('option');"
-"      manualOpt.value = '__manual__';"
-"      manualOpt.text = '+ [ Nhập mạng khác / Mạng ẩn ]';"
-"      sel.appendChild(manualOpt);"
-"    })"
-"    .catch(err => {"
-"      msg.innerText = 'Lỗi quét sóng. Vui lòng nhập tay:';"
-"      sel.innerHTML = '<option value=\"__manual__\" selected>+ [ Nhập thủ công ]</option>';"
-"      onSelectChange('__manual__');"
-"    });"
-"}"
-"function onSelectChange(val) {"
-"  var box = document.getElementById('manual-box');"
-"  var hiddenSsid = document.getElementById('ssid-input');"
-"  if (val === '__manual__') {"
-"    box.style.display = 'block';"
-"    hiddenSsid.value = document.getElementById('manual-ssid').value;"
-"  } else {"
-"    box.style.display = 'none';"
-"    hiddenSsid.value = val;"
-"  }"
-"}"
-"document.getElementById('manual-ssid').addEventListener('input', function(e) {"
-"  if (document.getElementById('wifi-select').value === '__manual__') {"
-"    document.getElementById('ssid-input').value = e.target.value;"
-"  }"
-"});"
-"document.querySelector('form').addEventListener('submit', function(e) {"
-"  var ssid = document.getElementById('ssid-input').value;"
-"  if (!ssid || ssid === '__manual__') {"
-"    alert('Vui lòng chọn hoặc nhập tên Wi-Fi!');"
-"    e.preventDefault();"
-"  }"
-"});"
-"fetchScan();"
-"</script></body></html>";
-
-static esp_err_t captive_portal_get_handler(httpd_req_t *req)
+static void stop_dns_only(void)
 {
-    httpd_resp_set_type(req, "text/html");
-    return httpd_resp_send(req, CAPTIVE_PORTAL_HTML, HTTPD_RESP_USE_STRLEN);
-}
-
-static esp_err_t captive_portal_post_save_handler(httpd_req_t *req)
-{
-    char buf[256];
-    int ret = httpd_req_recv(req, buf, sizeof(buf) - 1);
-    if (ret <= 0) {
-        httpd_resp_send_500(req);
-        return ESP_FAIL;
-    }
-    buf[ret] = 0;
-
-    char ssid[33] = {0};
-    char password[65] = {0};
-
-    char *p_ssid = strstr(buf, "ssid=");
-    char *p_pass = strstr(buf, "password=");
-
-    if (p_ssid) {
-        p_ssid += 5;
-        char *end = strchr(p_ssid, '&');
-        int len = end ? (end - p_ssid) : strlen(p_ssid);
-        if (len > 32) len = 32;
-        strncpy(ssid, p_ssid, len);
-    }
-    if (p_pass) {
-        p_pass += 9;
-        char *end = strchr(p_pass, '&');
-        int len = end ? (end - p_pass) : strlen(p_pass);
-        if (len > 64) len = 64;
-        strncpy(password, p_pass, len);
-    }
-
-    ESP_LOGI(TAG, "Received Wi-Fi credentials: SSID='%s'", ssid);
-    config_manager_set_wifi(ssid, password);
-    config_manager_save();
-
-    const char *resp_str = "<html><body style='background:#0d1117;color:#fff;text-align:center;padding:50px;'>"
-                           "<h2>Da luu!</h2><p>Dang ket noi toi Wi-Fi...</p></body></html>";
-    httpd_resp_send(req, resp_str, HTTPD_RESP_USE_STRLEN);
-
-    event_bus_post(EVT_WIFI_CREDENTIALS_RECEIVED, NULL, 0, false);
-    vTaskDelay(pdMS_TO_TICKS(1000));
-    wifi_provisioning_connect(ssid, password);
-    return ESP_OK;
-}
-
-static esp_err_t captive_portal_scan_handler(httpd_req_t *req)
-{
-    char json_buf[1536];
-    int len = wifi_provisioning_scan_to_json(json_buf, sizeof(json_buf));
-    httpd_resp_set_type(req, "application/json");
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
-    return httpd_resp_send(req, json_buf, len);
-}
-
-static void start_web_server(void)
-{
-    httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.max_uri_handlers = 12;
-    config.stack_size = 8192;
-
-    if (httpd_start(&s_http_server, &config) == ESP_OK) {
-        httpd_uri_t get_uri = { .uri = "/", .method = HTTP_GET, .handler = captive_portal_get_handler };
-        httpd_register_uri_handler(s_http_server, &get_uri);
-
-        httpd_uri_t get_scan = { .uri = "/scan", .method = HTTP_GET, .handler = captive_portal_scan_handler };
-        httpd_register_uri_handler(s_http_server, &get_scan);
-
-        httpd_uri_t post_save = { .uri = "/save", .method = HTTP_POST, .handler = captive_portal_post_save_handler };
-        httpd_register_uri_handler(s_http_server, &post_save);
-        httpd_uri_t get_hotspot = { .uri = "/hotspot-detect.html", .method = HTTP_GET, .handler = captive_portal_get_handler };
-        httpd_register_uri_handler(s_http_server, &get_hotspot);
-        httpd_uri_t get_generate_204 = { .uri = "/generate_204", .method = HTTP_GET, .handler = captive_portal_get_handler };
-        httpd_register_uri_handler(s_http_server, &get_generate_204);
-        ESP_LOGI(TAG, "Captive Portal Web Server running on port 80");
-    }
-}
-
-static void stop_web_and_dns(void)
-{
-    if (s_http_server) {
-        httpd_stop(s_http_server);
-        s_http_server = NULL;
-    }
     if (s_dns_sock >= 0) {
         close(s_dns_sock);
         s_dns_sock = -1;
@@ -436,12 +244,13 @@ static void stop_web_and_dns(void)
         vTaskDelete(s_dns_task_handle);
         s_dns_task_handle = NULL;
     }
+    ESP_LOGI(TAG, "DNS captive portal stopped (Web server remains active)");
 }
 
-static void stop_web_and_dns_task(void *pv)
+static void stop_dns_task(void *pv)
 {
     vTaskDelay(pdMS_TO_TICKS(500));
-    stop_web_and_dns();
+    stop_dns_only();
     vTaskDelete(NULL);
 }
 
@@ -475,7 +284,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
 
         if (s_in_softap_mode) {
             s_in_softap_mode = false;
-            xTaskCreate(stop_web_and_dns_task, "stop_ap_task", 3072, NULL, 3, NULL);
+            xTaskCreate(stop_dns_task, "stop_dns_task", 3072, NULL, 3, NULL);
         }
     }
 }
@@ -495,6 +304,9 @@ void wifi_provisioning_init(void)
 
     ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL, NULL));
     ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, NULL, NULL));
+
+    // Web Server khoi dong san sang phuc vu ca SoftAP va Station
+    web_server_start();
 
     const gateway_config_t *sys_cfg = config_manager_get();
     if (sys_cfg != NULL && strlen(sys_cfg->wifi_ssid) > 0) {
@@ -520,7 +332,6 @@ void wifi_provisioning_init(void)
         ESP_ERROR_CHECK(esp_wifi_start());
 
         xTaskCreate(dns_server_task, "dns_task", 3072, NULL, 5, &s_dns_task_handle);
-        start_web_server();
 
         event_bus_post(EVT_WIFI_PROVISIONING_STARTED, NULL, 0, false);
         ESP_LOGI(TAG, "[PROVISIONING] SoftAP active. Connect to '%s' (IP: 192.168.4.1)", SOFTAP_SSID);
@@ -558,9 +369,9 @@ void wifi_provisioning_force_reset(void)
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap_config));
     ESP_ERROR_CHECK(esp_wifi_start());
 
-    stop_web_and_dns();
+    stop_dns_only();
     xTaskCreate(dns_server_task, "dns_task", 3072, NULL, 5, &s_dns_task_handle);
-    start_web_server();
+    web_server_start();
 
     event_bus_post(EVT_WIFI_PROVISIONING_STARTED, NULL, 0, false);
 }

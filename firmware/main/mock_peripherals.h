@@ -70,6 +70,16 @@ bool mock_storage_write_sample_csv(void);
  */
 void mock_peripherals_print_status(void);
 
+/**
+ * @brief Get latest simulated sensor readings
+ */
+void mock_rs485_get_latest(float *temp, float *hum, bool *valid);
+
+/**
+ * @brief Get current coil status of simulated 4-channel relay board
+ */
+void mock_rs485_get_relays(uint8_t coils[4]);
+
 #ifdef __cplusplus
 }
 #endif

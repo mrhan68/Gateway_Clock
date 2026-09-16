@@ -254,3 +254,29 @@ void mock_peripherals_print_status(void)
     if (s_mock_mutex != NULL) xSemaphoreGive(s_mock_mutex);
     fflush(stdout);
 }
+
+void mock_rs485_get_latest(float *temp, float *hum, bool *valid)
+{
+    if (s_mock_mutex != NULL) xSemaphoreTake(s_mock_mutex, portMAX_DELAY);
+    if (temp) {
+        *temp = (s_manual_temp > -100.0f) ? s_manual_temp : (28.0f + 5.0f * sinf((float)s_mock_poll_count * 0.3f));
+    }
+    if (hum) {
+        *hum = (s_manual_hum > -100.0f) ? s_manual_hum : (65.0f + 15.0f * cosf((float)s_mock_poll_count * 0.3f));
+    }
+    if (valid) {
+        *valid = s_manual_valid && (strcmp(s_fault_mode, "invalid") != 0);
+    }
+    if (s_mock_mutex != NULL) xSemaphoreGive(s_mock_mutex);
+}
+
+void mock_rs485_get_relays(uint8_t coils[4])
+{
+    if (s_mock_mutex != NULL) xSemaphoreTake(s_mock_mutex, portMAX_DELAY);
+    if (coils) {
+        for (int i = 0; i < 4; i++) {
+            coils[i] = s_mock_relay_coils[i];
+        }
+    }
+    if (s_mock_mutex != NULL) xSemaphoreGive(s_mock_mutex);
+}

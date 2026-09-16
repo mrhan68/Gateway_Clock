@@ -53,6 +53,7 @@
 | [rule_engine.c](file:///home/chien/ai-workspace/qwen-test/firmware/main/rule_engine.c) | Bộ máy quy tắc tự động hóa nội bộ IF-THEN (GT/LT), Safe-Default, Action Executor | §4.7.1 | `TC-HOST-03` | 🟢 **PASSED** |
 | [scheduler.c](file:///home/chien/ai-workspace/qwen-test/firmware/main/scheduler.c) | Bộ lập lịch công việc và báo thức thời gian thực, quét chu kỳ 5s, chống trigger lặp | §4.8.1 | `TC-CLK-03` | 🟢 **PASSED** |
 | [mock_peripherals.c](file:///home/chien/ai-workspace/qwen-test/firmware/main/mock_peripherals.c) | Tầng ngoại vi ảo: mô phỏng Modbus RS485 (TH sensor, Relay board), Virtual Storage CSV, Fault Injection | §4.3, §4.5 | `TC-MOCK-01` | 🟢 **PASSED** |
+| [web_server.c](file:///home/chien/ai-workspace/qwen-test/firmware/main/web_server.c) | Web Dashboard SPA & REST API: `/api/rules` (GET/POST/DELETE), `/api/status`, `/api/telemetry`, `/api/relay` | §4.2, §4.7 | `TC-WEB-01` | 🟢 **PASSED** |
 | `rs485_adapter.c` | Giao tiếp Modbus RTU Master (UART2, DE/RE flow control), đọc thanh ghi cảm biến FC03/04 | §4.3.1 | `TC-RS485-01`, `JRN-03` | ⏳ *Chờ nối dây* |
 | `sd_logger.c` | Quản lý hệ thống file FATFS trên thẻ nhớ MicroSD qua SPI, ghi CSV nhật ký hàng ngày | §4.5.1 | `TC-SD-01`, `JRN-02` | ⏳ *Chờ nối dây* |
 | `sync_queue.c` | Hàng đợi lưu trữ ngoại tuyến FIFO (`sync_queue.bin`) chống mất dữ liệu khi rớt mạng | §4.5.3 | `TC-HOST-02` | ⏳ *Chờ nối dây* |
@@ -63,7 +64,7 @@
 ## 4. Chi Tiết Kết Quả Kiểm Thử (Test Execution Records)
 
 ### 4.1. Automated Host Tests (`pytest tests/host/`)
-* **Tổng số bài test**: 11 passed / 0 failed (Thời gian chạy: 0.02s).
+* **Tổng số bài test**: 13 passed / 0 failed (Thời gian chạy: 0.04s).
 * **Nội dung kiểm tra**:
   - `tests/host/test_modbus_crc.py`: Kiểm tra tính toán checksum CRC-16 Modbus (đúng từng byte theo chuẩn công nghiệp).
   - `tests/host/test_sync_queue.py`: Đóng gói binary header bản tin FIFO lưu thẻ nhớ.
@@ -90,6 +91,11 @@
   - Giả lập Modbus Slave 0x01 phát nhiệt độ/độ ẩm định kỳ qua Event Bus.
   - Rule Engine tự động phát hiện `temp > 30.0C` và `hum > 75.0%`, dispatch lệnh bật quạt làm mát (`fan_relay_01`) và máy hút ẩm (`dehumidifier_01`) đóng tiếp điểm Relay Slave 0x02.
   - Bơm giá trị thủ công `mock rs485 set 33.5 70.0 1` và ghi nhật ký CSV ảo hoạt động chính xác.
+* **`TC-WEB-01` (Web Dashboard & REST API Engine)**: ✅ **PASSED**
+  - Web Server duy trì liên tục (Always-on) trên cả mạng SoftAP và Station IP.
+  - Single Page Dashboard Dark theme tích hợp: hiển thị giờ RTC, nhiệt độ, độ ẩm, nút bật/tắt 4 relay, quét sóng Wi-Fi.
+  - Hệ thống REST API hoàn chỉnh: `GET /api/status`, `GET /api/telemetry`, `POST /api/relay`, `GET /api/rules`, `POST /api/rules`, `DELETE /api/rules`.
+  - Hỗ trợ đầy đủ lệnh CLI xóa quy tắc `rule delete <id>`.
 
 ---
 

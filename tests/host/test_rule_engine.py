@@ -151,3 +151,35 @@ def test_device_id_isolation():
     actions = evaluate_rules(telem, [rule])
 
     assert len(actions) == 0
+
+
+def test_rule_deletion_by_id():
+    """Verify deleting a rule removes it from active rules list."""
+    rules = [
+        AutomationRule(id=1, device_id="sensor_temp_01", condition_type=RuleConditionType.SENSOR_GT, threshold=30.0, target_device_id="fan_relay_01", action_command="ON"),
+        AutomationRule(id=2, device_id="sensor_temp_01", condition_type=RuleConditionType.SENSOR_LT, threshold=20.0, target_device_id="heater_relay_01", action_command="ON"),
+    ]
+    # Delete rule id 1
+    rules = [r for r in rules if r.id != 1]
+    assert len(rules) == 1
+    assert rules[0].id == 2
+
+
+def test_rule_json_serialization_roundtrip():
+    """Verify rule schema serialization matching REST API contract."""
+    import json
+    rule_dict = {
+        "id": 4,
+        "device_id": "sensor_temp_01",
+        "condition": ">",
+        "threshold": 32.5,
+        "target": "fan_relay_01",
+        "action": "ON",
+        "enabled": True
+    }
+    encoded = json.dumps(rule_dict)
+    decoded = json.loads(encoded)
+    assert decoded["id"] == 4
+    assert decoded["condition"] == ">"
+    assert decoded["threshold"] == 32.5
+

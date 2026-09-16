@@ -60,6 +60,7 @@ static void print_help(void)
     printf("  rule list                            - List active automation rules\n");
     printf("  rule add <id> <sensor> <GT|LT> <thr> <target> <cmd> - Add or update rule\n");
     printf("  rule test <sensor_id> <val> [valid]  - Test telemetry against rules (valid=1/0)\n");
+    printf("  rule delete <id>                     - Delete a rule by ID\n");
     printf("  rule clear                           - Clear all active rules\n");
     printf("  schedule list                        - List all active schedule entries\n");
     printf("  schedule add <alarm|auto> <HH:MM> <title_or_target> [cmd] - Add schedule\n");
@@ -238,6 +239,17 @@ static void handle_command(char *cmd_line)
             printf("Evaluation completed: %d rule(s) triggered.\n", matches);
         } else {
             printf("Usage: rule test <sensor_id> <value> [valid: 1 or 0]\n");
+        }
+    } else if (strncmp(cmd_line, "rule delete", 11) == 0) {
+        int id = 0;
+        if (sscanf(cmd_line + 11, "%d", &id) == 1) {
+            if (rule_engine_delete_rule(id)) {
+                printf("OK: Rule #%d deleted.\n", id);
+            } else {
+                printf("Error: Rule #%d not found.\n", id);
+            }
+        } else {
+            printf("Usage: rule delete <id>\n");
         }
     } else if (strcmp(cmd_line, "rule clear") == 0) {
         rule_engine_clear_rules();

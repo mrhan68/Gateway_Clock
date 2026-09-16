@@ -112,6 +112,32 @@ void rule_engine_clear_rules(void)
     ESP_LOGI(TAG, "Cleared all rules");
 }
 
+bool rule_engine_delete_rule(int rule_id)
+{
+    lock_rules();
+    int found_idx = -1;
+    for (int i = 0; i < s_rule_count; i++) {
+        if (s_rules[i].id == rule_id) {
+            found_idx = i;
+            break;
+        }
+    }
+
+    if (found_idx == -1) {
+        unlock_rules();
+        ESP_LOGW(TAG, "Rule #%d not found for deletion", rule_id);
+        return false;
+    }
+
+    for (int i = found_idx; i < s_rule_count - 1; i++) {
+        s_rules[i] = s_rules[i + 1];
+    }
+    s_rule_count--;
+    unlock_rules();
+    ESP_LOGI(TAG, "Deleted rule #%d (remaining rules: %d)", rule_id, s_rule_count);
+    return true;
+}
+
 int rule_engine_get_rule_count(void)
 {
     lock_rules();

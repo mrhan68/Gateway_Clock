@@ -61,6 +61,12 @@ bool rule_engine_add_rule(const automation_rule_t *rule);
 void rule_engine_clear_rules(void);
 
 /**
+ * @brief Delete a specific automation rule by ID.
+ * @return true if found and deleted, false if not found.
+ */
+bool rule_engine_delete_rule(int rule_id);
+
+/**
  * @brief Get total number of active rules.
  */
 int rule_engine_get_rule_count(void);
