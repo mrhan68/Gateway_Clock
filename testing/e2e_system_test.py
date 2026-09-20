@@ -299,7 +299,8 @@ class E2ESystemTestSuite:
         self.mqtt_port = mqtt_port
         
         self.gateway_id = f"gw_test_{uuid.uuid4().hex[:6]}"
-        self.mac_address = "30:30:F9:55:01:A2"
+        r1, r2, r3 = random.randint(10, 99), random.randint(10, 99), random.randint(10, 99)
+        self.mac_address = f"30:30:F9:{r1:02x}:{r2:02x}:{r3:02x}".upper()
         self.sensor_id = "sensor_temp_01"
         self.actuator_id = "relay_1"
         
@@ -358,11 +359,11 @@ class E2ESystemTestSuite:
             "name": "Living Room Clock Gateway"
         }
         res_claim = requests.post(url_claim, json=body_claim)
-        claim_ok = res_claim.status_code == 200 and res_claim.json().get("gateway", {}).get("status") == "active"
+        claim_ok = res_claim.status_code == 200 and res_claim.json().get("gateway_id") == self.gateway_id
         self.log_result(
             "PHASE-1.2-USER-CLAIM",
             claim_ok,
-            f"Status {res_claim.status_code}, Gateway State: '{res_claim.json().get('gateway', {}).get('status')}'"
+            f"Status {res_claim.status_code}, Gateway ID: '{res_claim.json().get('gateway_id')}'"
         )
 
         # Step 3: Start Virtual Gateway & Connect MQTT
@@ -384,8 +385,8 @@ class E2ESystemTestSuite:
         body_sensor = {
             "device_id": self.sensor_id,
             "name": "Bedroom BLE Thermometer",
-            "protocol": "BLE",
-            "device_type": "sensor_temp",
+            "protocol": "ble",
+            "device_type": "sensor",
             "mac_address": "AA:BB:CC:DD:EE:FF"
         }
         res_sensor = requests.post(url_sensor, json=body_sensor)
@@ -396,9 +397,10 @@ class E2ESystemTestSuite:
         body_actuator = {
             "device_id": self.actuator_id,
             "name": "Cooling Fan Relay",
-            "protocol": "INTERNAL",
-            "device_type": "relay",
-            "capabilities": ["ON", "OFF"]
+            "protocol": "mqtt",
+            "device_type": "actuator",
+            "mqtt_topic": f"gateway/{self.gateway_id}/device/{self.actuator_id}",
+            "capabilities": json.dumps(["ON", "OFF"])
         }
         res_actuator = requests.post(url_sensor, json=body_actuator)
         actuator_ok = res_actuator.status_code in (200, 201)
@@ -567,10 +569,16 @@ class E2ESystemTestSuite:
         
         # Count timestamps matching the batch
         batch_ts_set = {r["timestamp"] for r in batch_records}
-        matched_in_db = [
-            r for r in records_in_db
-            if int(datetime.fromisoformat(r["recorded_at"].replace("Z", "+00:00")).timestamp()) in batch_ts_set
-        ]
+        matched_in_db = []
+        for r in records_in_db:
+            rec_at = r.get("recorded_at")
+            if rec_at:
+                try:
+                    ts = int(datetime.fromisoformat(str(rec_at).replace("Z", "+00:00")).timestamp())
+                    if ts in batch_ts_set:
+                        matched_in_db.append(r)
+                except Exception:
+                    pass
 
         dedup_ok = len(matched_in_db) == len(batch_records)
         self.log_result(
