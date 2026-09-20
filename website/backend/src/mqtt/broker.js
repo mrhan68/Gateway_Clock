@@ -245,7 +245,7 @@ async function handleEvents(gatewayId, payload) {
     await prisma.eventLog.create({
       data: {
         gatewayId,
-        eventType: data.type || data.eventType || 'unknown',
+        eventType: data.event_type || data.type || data.eventType || 'unknown',
         deviceId: data.device_id || data.deviceId || data.target || null,
         payload: JSON.stringify(data),
         occurredAt,

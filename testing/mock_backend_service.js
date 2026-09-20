@@ -181,12 +181,21 @@ class InMemoryStore {
   }
 
   // ── Event Log Operations ──
-  async findManyEventLogs({ where }) {
-    return this.eventLogs.filter(e => {
+  async findManyEventLogs({ where, orderBy, skip, take }) {
+    let res = this.eventLogs.filter(e => {
       if (where && where.gatewayId && e.gatewayId !== where.gatewayId) return false;
       if (where && where.eventType && e.eventType !== where.eventType) return false;
+      if (where && where.occurredAt) {
+        const occ = new Date(e.occurredAt).getTime();
+        if (where.occurredAt.gte && occ < new Date(where.occurredAt.gte).getTime()) return false;
+        if (where.occurredAt.lte && occ > new Date(where.occurredAt.lte).getTime()) return false;
+      }
       return true;
     });
+    res.sort((a, b) => new Date(b.occurredAt).getTime() - new Date(a.occurredAt).getTime());
+    if (skip) res = res.slice(skip);
+    if (take) res = res.slice(0, take);
+    return res;
   }
 
   async createEventLog({ data }) {
