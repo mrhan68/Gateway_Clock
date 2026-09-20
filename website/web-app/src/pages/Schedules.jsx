@@ -285,7 +285,7 @@ function Schedules() {
                   defaultValue={editSchedule?.repeat_days || ''}
                   className="w-full px-3 py-2 border rounded-md"
                 />
-                <p className="text-xs text-gray-500 mt-1">Comma-separated: MON,TUE,WED,THU,FRI,SAT,SUN</p>
+                <p className="text-xs text-gray-500 mt-1">Comma-separated days: {REPEAT_DAYS.join(', ')}</p>
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">One-time Date</label>

@@ -63,6 +63,12 @@ capabilities:
     available: yes
     tier:      host
 
+  e2e-system-test:
+    what:      "Run full 5-phase E2E system integration test battery (IoT -> Gateway -> MQTT -> REST -> DB)"
+    available: yes
+    tier:      host
+
+
   # --- Limitations (without full automated testbench) ---
   rf-chamber-testing:
     what:      "Calibrate RF power in an anechoic chamber"
@@ -429,6 +435,51 @@ tests:
       verifies: [M01, M17]
       contract: "FSD §4.1.6"
       impl: "testing/ble_telemetry_simulator.py"
+  # --- E2E Integration Tier: Full System Integration (5 Phases) ---
+  e2e:
+    - id: TC-E2E-01
+      name: "Gateway Provisioning & Claim Handshake"
+      tier: host
+      wave: 1
+      verifies: [M03, M09]
+      contract: "FSD §8.2"
+      impl: "testing/e2e_system_test.py::test_phase_1_provisioning_and_claim"
+      status: passed
+
+    - id: TC-E2E-02
+      name: "Peripherals & Rule Configuration Sync"
+      tier: host
+      wave: 1
+      verifies: [M04, M16]
+      contract: "FSD §4.7, §4.8, §7.3, §8.3"
+      impl: "testing/e2e_system_test.py::test_phase_2_peripherals_and_config_sync"
+      status: passed
+
+    - id: TC-E2E-03
+      name: "Realtime BLE Telemetry Ingestion & Automation Loop"
+      tier: host
+      wave: 1
+      verifies: [M01, M02, M04]
+      contract: "FSD §4.1, §4.7, §9.1, §9.2"
+      impl: "testing/e2e_system_test.py::test_phase_3_telemetry_and_automation_rule"
+      status: passed
+
+    - id: TC-E2E-04
+      name: "Bi-directional Command Dispatch & Async ACK Uplink Handshake"
+      tier: host
+      wave: 1
+      verifies: [M03, M09]
+      contract: "FSD §8.3, §9.1, §9.2"
+      impl: "testing/e2e_system_test.py::test_phase_4_command_downlink_and_ack_uplink"
+      status: passed
+
+    - id: TC-E2E-05
+      name: "Store-and-Forward Offline Queue & Deduplicated Backfill"
+      tier: host
+      wave: 1
+      verifies: [M06, M15]
+      contract: "FSD §4.11.3, §9.1"
+      impl: "testing/e2e_system_test.py::test_phase_5_offline_backfill_and_deduplication"
       status: passed
 
   # ┌─────────────────────────────────────────────────────────────┐

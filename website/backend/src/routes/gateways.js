@@ -24,7 +24,8 @@ router.post('/', [
 // POST /gateways/register-claim — Gateway registers initial claim code (FSD §8.2)
 router.post('/register-claim', [
   body('mac_address').trim().isLength({ min: 11, max: 18 }),
-  body('claim_code').trim().isLength({ min: 4, max: 16 }),
+  body('claim_code').optional().trim().isLength({ min: 4, max: 16 }),
+  body('gateway_id').optional().trim(),
   body('firmware_version').optional().isString(),
   (req, res, next) => {
     const errors = validationResult(req);

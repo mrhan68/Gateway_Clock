@@ -57,6 +57,7 @@ export const gatewaysAPI = {
   list: () => api.get('/api/v1/gateways'),
   get: (id) => api.get(`/api/v1/gateways/${id}`),
   create: (payload) => api.post('/api/v1/gateways', payload),
+  claim: (payload) => api.post('/api/v1/gateways/claim', payload),
   update: (id, payload) => api.put(`/api/v1/gateways/${id}`, payload),
 }
 

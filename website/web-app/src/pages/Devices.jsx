@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react'
 import StatusBadge from '../components/StatusBadge'
 import ConfirmDialog from '../components/ConfirmDialog'
+import TelemetryChart from '../components/TelemetryChart'
 import {
   getActiveGateway,
   devicesAPI,
+  telemetryAPI,
 } from '../api/client'
 
 function Devices() {
@@ -15,6 +17,11 @@ function Devices() {
   const [deleteDevice, setDeleteDevice] = useState(null)
   const [commandDevice, setCommandDevice] = useState(null)
   const [commandText, setCommandText] = useState('')
+  const [togglingDevices, setTogglingDevices] = useState({})
+  const [notification, setNotification] = useState(null)
+  const [telemetryDevice, setTelemetryDevice] = useState(null)
+  const [telemetryData, setTelemetryData] = useState([])
+  const [loadingTelemetry, setLoadingTelemetry] = useState(false)
 
   useEffect(() => {
     if (gatewayId) {
@@ -78,10 +85,60 @@ function Devices() {
     if (!commandDevice || !commandText) return
     try {
       await devicesAPI.sendCommand(gatewayId, commandDevice.device_id, commandText)
+      setNotification({ type: 'success', message: `Command "${commandText}" dispatched to ${commandDevice.name} (QUEUED)` })
+      setTimeout(() => setNotification(null), 4000)
       setCommandDevice(null)
       setCommandText('')
+      loadDevices()
     } catch (err) {
       alert(err.message || 'Failed to send command')
+    }
+  }
+
+  const handleQuickToggle = async (device) => {
+    const isCurrentlyOn =
+      String(device.last_value).toUpperCase() === 'ON' ||
+      device.last_value === 1 ||
+      device.last_value === '1' ||
+      device.last_value === true
+    const nextCommand = isCurrentlyOn ? 'OFF' : 'ON'
+
+    setTogglingDevices((prev) => ({ ...prev, [device.device_id]: true }))
+    try {
+      await devicesAPI.sendCommand(gatewayId, device.device_id, nextCommand)
+      // Optimistic update of local state
+      setDevices((prev) =>
+        prev.map((d) =>
+          d.device_id === device.device_id ? { ...d, last_value: nextCommand } : d
+        )
+      )
+      setNotification({
+        type: 'success',
+        message: `Relay ${device.name}: Switched to ${nextCommand} (Dispatched via MQTT)`,
+      })
+      setTimeout(() => setNotification(null), 4000)
+    } catch (err) {
+      setNotification({
+        type: 'error',
+        message: err.message || `Failed to toggle ${device.name}`,
+      })
+      setTimeout(() => setNotification(null), 5000)
+    } finally {
+      setTogglingDevices((prev) => ({ ...prev, [device.device_id]: false }))
+    }
+  }
+
+  const handleOpenTelemetry = async (device) => {
+    setTelemetryDevice(device)
+    setLoadingTelemetry(true)
+    try {
+      const res = await telemetryAPI.list(gatewayId, device.device_id, { limit: 50 })
+      setTelemetryData(res.data || [])
+    } catch (err) {
+      console.error('Failed to load telemetry:', err)
+      setTelemetryData([])
+    } finally {
+      setLoadingTelemetry(false)
     }
   }
 
@@ -115,6 +172,25 @@ function Devices() {
         </button>
       </div>
 
+      {/* Notification Toast */}
+      {notification && (
+        <div
+          className={`p-3 rounded-md text-sm border flex items-center justify-between transition-all ${
+            notification.type === 'success'
+              ? 'bg-green-50 text-green-800 border-green-200'
+              : 'bg-red-50 text-red-800 border-red-200'
+          }`}
+        >
+          <span>{notification.message}</span>
+          <button
+            onClick={() => setNotification(null)}
+            className="text-gray-400 hover:text-gray-600 font-bold ml-3"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
       {/* Device grid */}
       {devices.length === 0 ? (
         <div className="text-center py-12 text-gray-500">
@@ -128,58 +204,137 @@ function Devices() {
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {devices.map((device) => (
-            <div key={device.id} className="bg-white rounded-lg shadow p-4">
-              <div className="flex items-start justify-between">
-                <div className="flex-1">
-                  <h3 className="font-semibold text-gray-800">{device.name}</h3>
-                  <p className="text-sm text-gray-500 font-mono mt-0.5">{device.device_id}</p>
-                </div>
-                <StatusBadge status={device.status} />
-              </div>
+          {devices.map((device) => {
+            const isActuator = device.device_type === 'actuator'
+            const isSensor = device.device_type === 'sensor'
+            const isRelayOn =
+              String(device.last_value).toUpperCase() === 'ON' ||
+              device.last_value === 1 ||
+              device.last_value === '1' ||
+              device.last_value === true
+            const isToggling = !!togglingDevices[device.device_id]
 
-              <div className="mt-3 grid grid-cols-2 gap-3 text-sm">
+            return (
+              <div key={device.id} className="bg-white rounded-lg shadow p-4 flex flex-col justify-between">
                 <div>
-                  <span className="text-gray-500">Type:</span> {device.device_type}
-                </div>
-                <div>
-                  <span className="text-gray-500">Protocol:</span> {device.protocol}
-                </div>
-                {device.last_value !== null && device.last_value !== undefined && (
-                  <div className="col-span-2">
-                    <span className="text-gray-500">Last Value:</span>{' '}
-                    <span className="font-medium">{device.last_value}</span>
+                  <div className="flex items-start justify-between">
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2">
+                        <h3 className="font-semibold text-gray-800">{device.name}</h3>
+                        <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${
+                          isActuator ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700'
+                        }`}>
+                          {device.device_type}
+                        </span>
+                      </div>
+                      <p className="text-sm text-gray-500 font-mono mt-0.5">{device.device_id}</p>
+                    </div>
+                    <StatusBadge status={device.status} />
                   </div>
-                )}
-                {device.mac_address && (
-                  <div className="col-span-2">
-                    <span className="text-gray-500">MAC:</span> {device.mac_address}
-                  </div>
-                )}
-              </div>
 
-              <div className="mt-4 flex gap-2">
-                <button
-                  onClick={() => setCommandDevice(device)}
-                  className="flex-1 px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50"
-                >
-                  Send Command
-                </button>
-                <button
-                  onClick={() => openEdit(device)}
-                  className="flex-1 px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50"
-                >
-                  Edit
-                </button>
-                <button
-                  onClick={() => setDeleteDevice(device)}
-                  className="px-3 py-1.5 text-sm text-red-600 border border-red-200 rounded hover:bg-red-50"
-                >
-                  Delete
-                </button>
+                  <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+                    <div>
+                      <span className="text-gray-500">Protocol:</span>{' '}
+                      <span className="font-medium uppercase">{device.protocol}</span>
+                    </div>
+                    <div>
+                      <span className="text-gray-500">Last seen:</span>{' '}
+                      <span className="font-medium text-gray-700">
+                        {device.last_seen ? new Date(device.last_seen).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Never'}
+                      </span>
+                    </div>
+                    {device.mac_address && (
+                      <div className="col-span-2 text-gray-500 truncate">
+                        <span>MAC:</span> <span className="font-mono">{device.mac_address}</span>
+                      </div>
+                    )}
+                    {device.mqtt_topic && (
+                      <div className="col-span-2 text-gray-500 truncate">
+                        <span>Topic:</span> <span className="font-mono">{device.mqtt_topic}</span>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Relay Toggle Switch (Actuator) */}
+                  {isActuator && (
+                    <div className="mt-4 p-3 bg-gray-50 rounded-lg border border-gray-100 flex items-center justify-between">
+                      <div>
+                        <span className="text-xs font-semibold text-gray-700 block">Relay Power</span>
+                        <span className="text-xs text-gray-500">
+                          State:{' '}
+                          <span
+                            className={`font-bold ${
+                              isRelayOn ? 'text-green-600' : 'text-gray-500'
+                            }`}
+                          >
+                            {isRelayOn ? '● ON' : '○ OFF'}
+                          </span>
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleQuickToggle(device)}
+                        disabled={isToggling}
+                        title={`Click to switch ${isRelayOn ? 'OFF' : 'ON'}`}
+                        className={`relative inline-flex h-7 w-12 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                          isRelayOn ? 'bg-green-600' : 'bg-gray-300'
+                        } ${isToggling ? 'opacity-60 cursor-not-allowed' : ''}`}
+                      >
+                        <span
+                          className={`pointer-events-none inline-block h-6 w-6 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                            isRelayOn ? 'translate-x-5' : 'translate-x-0'
+                          }`}
+                        />
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Sensor Last Reading & Telemetry Link */}
+                  {isSensor && (
+                    <div className="mt-4 p-3 bg-blue-50/60 rounded-lg border border-blue-100 flex items-center justify-between">
+                      <div>
+                        <span className="text-xs text-blue-800 font-medium block">Last Reading</span>
+                        <span className="text-base font-bold text-blue-900">
+                          {device.last_value !== null && device.last_value !== undefined
+                            ? `${device.last_value}`
+                            : 'No data'}
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleOpenTelemetry(device)}
+                        className="px-2.5 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors shadow-sm"
+                      >
+                        📊 Telemetry
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                {/* Card Actions */}
+                <div className="mt-4 pt-3 border-t border-gray-100 flex gap-2">
+                  <button
+                    onClick={() => setCommandDevice(device)}
+                    className="flex-1 px-2.5 py-1.5 text-xs font-medium border border-gray-300 rounded hover:bg-gray-50 text-gray-700"
+                  >
+                    Custom Cmd
+                  </button>
+                  <button
+                    onClick={() => openEdit(device)}
+                    className="px-2.5 py-1.5 text-xs font-medium border border-gray-300 rounded hover:bg-gray-50 text-gray-700"
+                  >
+                    Edit
+                  </button>
+                  <button
+                    onClick={() => setDeleteDevice(device)}
+                    className="px-2.5 py-1.5 text-xs font-medium text-red-600 border border-red-200 rounded hover:bg-red-50"
+                  >
+                    Delete
+                  </button>
+                </div>
               </div>
-            </div>
-          ))}
+            )
+          })}
         </div>
       )}
 
@@ -332,6 +487,48 @@ function Devices() {
                 className="flex-1 px-4 py-2 bg-gray-200 text-gray-800 rounded-md hover:bg-gray-300"
               >
                 Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Sensor Telemetry Modal */}
+      {telemetryDevice && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg p-6 w-full max-w-xl shadow-xl">
+            <div className="flex items-center justify-between pb-3 border-b mb-4">
+              <div>
+                <h3 className="text-lg font-bold text-gray-800">
+                  {telemetryDevice.name} — Telemetry
+                </h3>
+                <p className="text-xs text-gray-500 font-mono">
+                  Device ID: {telemetryDevice.device_id} | Protocol: {telemetryDevice.protocol}
+                </p>
+              </div>
+              <button
+                onClick={() => setTelemetryDevice(null)}
+                className="text-gray-400 hover:text-gray-600 text-lg font-bold"
+              >
+                ✕
+              </button>
+            </div>
+
+            <TelemetryChart
+              data={telemetryData}
+              title={`${telemetryDevice.name} Historical Trend`}
+              unit={telemetryDevice.capabilities?.includes('humidity') ? '%' : '°C'}
+              color="blue"
+              loading={loadingTelemetry}
+              height={220}
+            />
+
+            <div className="mt-4 flex justify-end">
+              <button
+                onClick={() => setTelemetryDevice(null)}
+                className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-medium rounded-md transition-colors"
+              >
+                Close
               </button>
             </div>
           </div>

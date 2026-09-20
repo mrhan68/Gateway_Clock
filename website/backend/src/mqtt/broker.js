@@ -27,12 +27,15 @@ async function startBroker(port = 1883) {
   // aedes.listen() sets up internal state (persistence, heartbeat, $SYS topics)
   await aedes.listen();
 
-  server = net.createServer((socket) => {
-    aedes.handle(socket);
-  });
-  server.listen(port, () => {
-    isRunning = true;
-    console.log(`[MQTT] Broker listening on port ${port}`);
+  await new Promise((resolve) => {
+    server = net.createServer((socket) => {
+      aedes.handle(socket);
+    });
+    server.listen(port, () => {
+      isRunning = true;
+      console.log(`[MQTT] Broker listening on port ${port}`);
+      resolve();
+    });
   });
 
   // ─── Connection events ───
@@ -405,6 +408,33 @@ async function publishScheduleConfig(gatewayId) {
     console.error(`[MQTT] Error preparing schedule config push for gateway ${gatewayId}:`, err.message);
     return false;
   }
+}
+
+/**
+ * Stop the MQTT broker and close server/broker connections.
+ * @returns {Promise<void>}
+ */
+async function stopBroker() {
+  return new Promise((resolve) => {
+    if (!isRunning) {
+      return resolve();
+    }
+    if (server) {
+      server.close(() => {
+        aedes.close(() => {
+          isRunning = false;
+          console.log('[MQTT] Broker stopped');
+          resolve();
+        });
+      });
+    } else {
+      aedes.close(() => {
+        isRunning = false;
+        console.log('[MQTT] Broker stopped');
+        resolve();
+      });
+    }
+  });
 }
 
 module.exports = {

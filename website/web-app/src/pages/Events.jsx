@@ -12,7 +12,6 @@ function Events() {
     limit: 50,
     offset: 0,
   })
-  const [total, setTotal] = useState(0)
 
   useEffect(() => {
     if (gatewayId) loadEvents()
