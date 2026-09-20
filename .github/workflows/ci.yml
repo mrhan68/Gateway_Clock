@@ -66,8 +66,10 @@ jobs:
       - name: Collect artefacts
         run: |
           V="${{ steps.plan.outputs.version }}"
-          cp build/smart_clock_gateway.bin firmware_v${V}.bin
-          cp build/smart_clock_gateway.elf firmware_v${V}.elf
+
+          cp build/smart_clock_gateway.bin "firmware_v${V}.bin"
+          cp build/smart_clock_gateway.elf "firmware_v${V}.elf"
+
           mkdir -p coldflash/bootloader coldflash/partition_table
           cp build/flash_args coldflash/
           cp build/bootloader/bootloader.bin coldflash/bootloader/
@@ -77,13 +79,13 @@ jobs:
           cp build/bootloader/bootloader.bin coldflash/
           cp build/partition_table/partition-table.bin coldflash/
           cp build/sdkconfig sdkconfig.generated
-          cp -r coldflash firmware_v${V}.bin firmware_v${V}.elf sdkconfig.generated "${{ github.workspace }}/"
 
       - uses: actions/upload-artifact@v4
         with:
           name: firmware-v${{ steps.plan.outputs.version }}
           path: |
-            firmware_v*.bin
-            firmware_v*.elf
-            sdkconfig.generated
-            coldflash/
+            firmware/firmware_v*.bin
+            firmware/firmware_v*.elf
+            firmware/sdkconfig.generated
+            firmware/coldflash/
+
