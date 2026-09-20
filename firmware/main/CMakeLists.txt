@@ -11,5 +11,6 @@ idf_component_register(SRCS "main.c"
                             "scheduler.c"
                             "mock_peripherals.c"
                             "web_server.c"
+                            "ble_adapter.c"
                    INCLUDE_DIRS "."
-                   REQUIRES freertos esp_system esp_timer log nvs_flash driver esp_wifi esp_event esp_netif esp_http_server lwip mqtt json)
+                   REQUIRES freertos esp_system esp_timer log nvs_flash driver esp_wifi esp_event esp_netif esp_http_server lwip mqtt json bt)

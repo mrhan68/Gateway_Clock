@@ -16,6 +16,7 @@ extern "C" {
 #define TASK_HEARTBEAT_SCHEDULER   (1 << 4)
 #define TASK_HEARTBEAT_DISPLAY     (1 << 5)
 #define TASK_HEARTBEAT_CLI         (1 << 6)
+#define TASK_HEARTBEAT_BLE         (1 << 7)
 
 #define SUPERVISOR_TIMEOUT_MS      15000  // 15 giây không báo nhịp tim -> Coi như task bị treo
 #define SUPERVISOR_TASK_PRIO       7      // Mức ưu tiên cao nhất Core 0

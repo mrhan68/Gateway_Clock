@@ -3,7 +3,6 @@ Test TC-HOST-04: MQTT Topic Routing & Telemetry Packaging
 Traces to: FSD §4.6 (MQTT Adapter), Requirement [M03]
 """
 import json
-import pytest
 
 class MqttTopicManager:
     def __init__(self, gateway_id: str):

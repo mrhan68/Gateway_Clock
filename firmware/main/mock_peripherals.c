@@ -29,6 +29,7 @@ static float s_manual_temp = -999.0f;
 static float s_manual_hum = -999.0f;
 static bool s_manual_valid = true;
 static char s_fault_mode[16] = "none"; // "none", "timeout", "invalid"
+static bool s_mock_frozen = false;
 
 // State of Mock Relay Board (Slave ID 2)
 static uint8_t s_mock_relay_coils[4] = {0, 0, 0, 0};
@@ -43,6 +44,11 @@ static void mock_rs485_task(void *pvParameters)
     ESP_LOGI(TAG, "Mock RS485 polling task running on Core %d", xPortGetCoreID());
 
     while (1) {
+        if (s_mock_frozen) {
+            // FSD §4.13.4 FR-SUP-02: Deliberately freeze task to test watchdog stall detection
+            vTaskDelay(portMAX_DELAY);
+        }
+
         supervisor_report_heartbeat(TASK_HEARTBEAT_RS485);
 
         if (!s_mock_rs485_running) {
@@ -52,19 +58,15 @@ static void mock_rs485_task(void *pvParameters)
 
         s_mock_poll_count++;
 
-        // 1. Simulate Fault Injection
+        // 1. Simulate Bus Timeout Fault Injection
         if (strcmp(s_fault_mode, "timeout") == 0) {
             ESP_LOGW(TAG, "[MOCK_RS485] Bus timeout simulated! Slave #1 did not respond.");
             vTaskDelay(pdMS_TO_TICKS(s_mock_poll_interval_ms));
             continue;
         }
 
-        bool is_valid = true;
-        if (strcmp(s_fault_mode, "invalid") == 0) {
-            is_valid = false;
-        }
-
         // 2. Compute Temperature & Humidity
+        bool is_valid = true;
         float temp, hum;
         if (s_manual_temp > -100.0f) {
             temp = s_manual_temp;
@@ -74,6 +76,11 @@ static void mock_rs485_task(void *pvParameters)
             // Sine wave oscillation: 28 +/- 5 deg C, 65 +/- 15 %RH
             temp = 28.0f + 5.0f * sinf((float)s_mock_poll_count * 0.3f);
             hum = 65.0f + 15.0f * cosf((float)s_mock_poll_count * 0.3f);
+        }
+
+        // Fault injection override: "invalid" forces valid = false (FSD §4.7.5 Safe-Default)
+        if (strcmp(s_fault_mode, "invalid") == 0) {
+            is_valid = false;
         }
 
         time_t now = app_rtc_get_time();
@@ -279,4 +286,11 @@ void mock_rs485_get_relays(uint8_t coils[4])
         }
     }
     if (s_mock_mutex != NULL) xSemaphoreGive(s_mock_mutex);
+}
+
+void mock_rs485_freeze(void)
+{
+    s_mock_frozen = true;
+    printf("[TEST HOOK] Freezing rs485 task indefinitely (stopping heartbeat)... Watchdog timeout in 15s!\n");
+    fflush(stdout);
 }

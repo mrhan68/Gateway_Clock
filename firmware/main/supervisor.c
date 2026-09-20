@@ -8,7 +8,7 @@
 
 static const char *TAG = "SUPERVISOR";
 
-#define NUM_TRACKED_TASKS 7
+#define NUM_TRACKED_TASKS 8
 
 static uint32_t s_active_mask = 0;
 static uint64_t s_last_heartbeats[NUM_TRACKED_TASKS];
@@ -68,6 +68,7 @@ static const char* get_task_name_by_index(int idx)
         case 4: return "SCHEDULER";
         case 5: return "DISPLAY";
         case 6: return "SERIAL_CLI";
+        case 7: return "BLE";
         default: return "UNKNOWN";
     }
 }

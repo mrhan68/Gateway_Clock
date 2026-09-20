@@ -13,6 +13,7 @@
 #include "rule_engine.h"
 #include "scheduler.h"
 #include "mock_peripherals.h"
+#include "ble_adapter.h"
 
 static const char *TAG = "MAIN";
 
@@ -63,26 +64,31 @@ void app_main(void)
     ESP_LOGI(TAG, "[INIT 9/10] Initializing Mock Peripherals...");
     mock_peripherals_init();
 
+    // 10. BLE Wireless Telemetry Adapter
+    ESP_LOGI(TAG, "[INIT 10/11] Initializing BLE Adapter & NimBLE Stack...");
+    ble_adapter_init();
+
     // Dang ky cac task can theo doi heartbeat
     supervisor_set_active_tasks(TASK_HEARTBEAT_EVENT_BUS |
                                 TASK_HEARTBEAT_RS485 |
+                                TASK_HEARTBEAT_BLE |
                                 TASK_HEARTBEAT_CLI |
                                 TASK_HEARTBEAT_UPLINK |
                                 TASK_HEARTBEAT_SCHEDULER);
 
-    // 10. Serial CLI Console
-    ESP_LOGI(TAG, "[INIT 10/10] Starting Serial CLI Console...");
+    // 11. Serial CLI Console
+    ESP_LOGI(TAG, "[INIT 11/11] Starting Serial CLI Console...");
     serial_cli_init();
 
     // Bat dau Dispatcher sau khi tat ca cac module da dang ky handler
     event_bus_start_dispatcher();
 
-    // Khoi dong phat song telemetry RS485 gia lap (chu ky 4 giay)
+    // Khoi dong phat song telemetry RS485 gia lap (chu ky 4 giay) cho cac bai test mo phong
     mock_rs485_start(4000);
 
     // Phat tin hieu song Journey Test JRN-01
     printf("\n[SYS] Alive marker 1\n");
-    printf("[SYS] System fully operational in bare-board network mode.\n\n");
+    printf("[SYS] System fully operational in wireless Smart Home mode (Wi-Fi + BLE).\n\n");
     fflush(stdout);
 
     int marker_count = 1;

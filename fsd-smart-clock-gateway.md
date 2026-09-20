@@ -98,48 +98,47 @@ Smart Clock không phải là một IoT device đơn lẻ, mà là một **Gatew
 └────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### 2.2 Sơ đồ kết nối hiện trường, Topology RS485 & Cấp nguồn
+### 2.2 Sơ đồ kết nối mạng không dây Smart Home (Wi-Fi + BLE) & Cấp nguồn
 
 ```
                       ┌───────────────────────────────────────────────────────────────┐
-                      │ Nguồn công nghiệp: 12V - 24V DC                                │
-                      └───────┬───────────────────────────────────────────────┬───────┘
-                              │                                               │
-               ┌──────────────▼──────────────┐                                │
-               │  Step-down Buck Converter   │                                │ 12V/24V Bus Power
-               │  (12V/24V -> 5V DC @ 2A)    │                                │ (Cấp nguồn sensor)
-               └──────────────┬──────────────┘                                │
-                              │ 5V DC                                         │
-                              ▼                                               │
-               ┌─────────────────────────────┐                                │
-               │     ESP32 Edge Gateway      │                                │
-               │ ┌─────────────────────────┐ │                                │
-               │ │ ESP32-WROOM-32 (240MHz) │ │                                │
-               │ ├─────────────────────────┤ │                                │
-               │ │ SD Card Socket (SPI)    │ │                                │
-               │ │ OLED SSD1327 (I2C)      │ │                                │
-               │ │ RTC DS3231 (I2C)        │ │                                │
-               │ │ Buzzer + Nút bấm        │ │                                │
-               │ ├─────────────────────────┤ │                                │
-               │ │ IC RS485 (SP3485/MAX485)│ │                                │
-               │ └────────────┬────────────┘ │                                │
-               └──────────────┼──────────────┘                                │
-                              │ A (+), B (-), GND                             │
-     [120Ω Term] ─────────────┴───────────────────────────────────────────────┼───────────── [120Ω Term]
-      (Bắt buộc)   Đường trục RS485 Tuyến tính (Daisy-chain)                  │               (Cuối bus)
-                              ├─── A, B, GND ────────────┬─── A, B, GND ──────┴──── A, B, GND ───┐
-                              ▼                          ▼                                        ▼
-                     ┌─────────────────┐        ┌─────────────────┐                      ┌─────────────────┐
-                     │  Node RS485 #1  │        │  Node RS485 #2  │                      │  Node RS485 #N  │
-                     │  (Sensor T&H)   │        │ (Đồng hồ điện)  │   ... (Tối đa 32)    │  (Relay 4 kênh) │
-                     │  Slave ID: 0x01 │        │  Slave ID: 0x02 │                      │  Slave ID: 0x10 │
-                     └─────────────────┘        └─────────────────┘                      └─────────────────┘
+                      │ Nguồn điện gia đình: Adapter USB 5V DC @ 2A (Type-C/MicroUSB) │
+                      └───────────────────────────────┬───────────────────────────────┘
+                                                      │ 5V DC
+                                                      ▼
+                                       ┌─────────────────────────────┐
+                                       │  ESP32 Smart Clock Gateway  │
+                                       │ ┌─────────────────────────┐ │
+                                       │ │ ESP32-S3 (Wi-Fi + BLE)  │ │
+                                       │ ├─────────────────────────┤ │
+                                       │ │ SD Card Socket (SPI)    │ │
+                                       │ │ OLED SSD1327 (I2C)      │ │
+                                       │ │ RTC DS3231 (I2C)        │ │
+                                       │ │ Buzzer + Nút bấm        │ │
+                                       │ └─────────────────────────┘ │
+                                       └──────────────┬──────────────┘
+                                                      │
+                       ┌──────────────────────────────┴──────────────────────────────┐
+                       │ Không dây (Wireless RF 2.4 GHz - Ăng-ten tích hợp)          │
+                       ▼                                                             ▼
+        ┌─────────────────────────────┐                               ┌─────────────────────────────┐
+        │       Kênh Wi-Fi 2.4 GHz    │                               │     Kênh Bluetooth BLE      │
+        └──────────────┬──────────────┘                               └──────────────┬──────────────┘
+                       │                                                             │
+         ┌─────────────┴─────────────┐                                 ┌─────────────┴─────────────┐
+         ▼                           ▼                                 ▼                           ▼
+┌──────────────────┐       ┌──────────────────┐               ┌──────────────────┐       ┌──────────────────┐
+│ Wi-Fi Router LAN │       │ Thiết bị Wi-Fi   │               │ Cảm biến BLE T&H │       │ BLE Smart Plug   │
+│ - SoftAP Portal  │       │ - Smart Socket   │               │ - Đọc Telemetry  │       │ - Điều khiển     │
+│ - Web Dashboard  │       │ - Tasmota / Tuya │               │ - Beacon / Adv   │       │   bật/tắt quạt   │
+│ - MQTT Broker    │       │   qua MQTT       │               │   (GATT Read)    │       │   (GATT Write)   │
+└──────────────────┘       └──────────────────┘               └──────────────────┘       └──────────────────┘
 ```
 
-#### Quy tắc đường truyền RS485:
-- **Topology:** Tuyến tính (Daisy-chain) từ Gateway đến Node cuối cùng. Tuyệt đối không đấu nối hình sao (Star) hoặc phân nhánh dài (Stub > 30cm).
-- **Điện trở đầu cuối:** Gắn điện trở 120Ω (1/4W) tại hai đầu xa nhất của bus (1 điện trở tại Gateway, 1 điện trở tại Node cuối cùng).
-- **Cáp truyền thông:** Sử dụng cáp xoắn đôi có bọc kim chống nhiễu (Shielded Twisted Pair - STP, AWG 24/22). Cặp xoắn nối cho A (+) và B (-), vỏ bọc giáp nối chung mass GND tại một điểm duy nhất để tránh ground loop.
+#### Quy tắc mạng không dây:
+- **Tập trung 100% không dây:** Toàn bộ liên kết giữa Gateway với các cảm biến và thiết bị chấp hành trong nhà đều thông qua sóng **Wi-Fi** hoặc **Bluetooth Low Energy (BLE)**, loại bỏ hoàn toàn nhu cầu đục tường kéo cáp vật lý.
+- **Không dùng RS485:** Chuẩn truyền thông dây đồng RS485 được lược bỏ để tối ưu chi phí linh kiện, đơn giản hóa mạch và tiết kiệm chân GPIO.
+- **Sóng Zigbee (IEEE 802.15.4):** Được bảo lưu trong định hướng mở rộng tương lai (Could Have); giai đoạn hiện tại ưu tiên tối đa cho 2 sóng có sẵn trên chip là **Wi-Fi và BLE**.
 
 ### 2.3 Bảng phân bổ chân GPIO ESP32 (Chống xung đột phần cứng)
 
@@ -147,9 +146,9 @@ Smart Clock không phải là một IoT device đơn lẻ, mà là một **Gatew
 |---|---|---|---|
 | **GPIO 1** | `U0TXD` | USB-UART Console | Log hệ thống & Serial CLI cứu hộ |
 | **GPIO 3** | `U0RXD` | USB-UART Console | Nhận lệnh Serial CLI cứu hộ |
-| **GPIO 16** | `U2RXD` | RS485 Transceiver | Nhận dữ liệu RX từ SP3485 / MAX485 |
-| **GPIO 17** | `U2TXD` | RS485 Transceiver | Gửi dữ liệu TX tới SP3485 / MAX485 |
-| **GPIO 4** | `RTS / DE_RE` | RS485 Transceiver | Điều khiển hướng truyền (HIGH = TX, LOW = RX) |
+| **GPIO 16** | `RESERVED` | Dự phòng | Giải phóng từ RS485 (dành cho mở rộng ngoại vi) |
+| **GPIO 17** | `RESERVED` | Dự phòng | Giải phóng từ RS485 (dành cho mở rộng ngoại vi) |
+| **GPIO 4** | `RESERVED` | Dự phòng | Giải phóng từ RS485 DE/RE |
 | **GPIO 21** | `I2C_SDA` | I2C Bus chung | Chia sẻ cho OLED (0x3C) & RTC DS3231 (0x68) |
 | **GPIO 22** | `I2C_SCL` | I2C Bus chung | Kéo trở pull-up 4.7kΩ lên 3.3V |
 | **GPIO 14** | `SPI_CLK / SCK` | MicroSD Card (SPI) | Clock thẻ nhớ SD |
@@ -159,7 +158,7 @@ Smart Clock không phải là một IoT device đơn lẻ, mà là một **Gatew
 | **GPIO 18** | `PWM_BUZZER` | Còi chip Buzzer | Điều khiển âm lượng và tần số qua LEDC PWM |
 | **GPIO 19** | `BUTTON_STOP` | Nút bấm 1 | Tắt báo thức khẩn cấp (ngắt cạnh xuống, pull-up) |
 | **GPIO 23** | `BUTTON_NEXT` | Nút bấm 2 | Chuyển đổi trang màn hình OLED (ngắt cạnh xuống, pull-up) |
-| **GPIO 6–11** | `SPI Flash` | Flash 4MB nội bộ | **CẤM SỬ DỤNG** (kết nối chip nhớ SPI nội bộ) |
+| **GPIO 6–11** | `SPI Flash` | Flash 16MB nội bộ | **CẤM SỬ DỤNG** (kết nối chip nhớ SPI nội bộ) |
 
 ### 2.4 Phân loại tính năng (MoSCoW)
 
@@ -180,7 +179,7 @@ Smart Clock không phải là một IoT device đơn lẻ, mà là một **Gatew
 | M11 | Web App: CRUD device, schedule, xem trạng thái | Web App |
 | M12 | Personal schedule/alarm: CRUD trên Web, kêu chuông tại Gateway | Gateway + Web App |
 | M13 | Nút tắt/snooze báo thức tại đồng hồ | Gateway |
-| **M14** | **RS485 Polling Task: Quét thiết bị Modbus RTU, timeout, retry, circuit breaker** | **Gateway** |
+| **M14** | *(Đã lược bỏ)* RS485 Polling: Không áp dụng cho phiên bản Smart Home không dây | *(Out of Scope)* |
 | **M15** | **SD Card Logger: Lưu dữ liệu cục bộ, Store-and-Forward Sync Queue, crash log** | **Gateway** |
 | **M16** | **Config Manager: Lưu cấu hình node/topic; hỗ trợ cấu hình tại chỗ qua SD/CLI** | **Gateway** |
 | **M17** | **Task Supervisor: Task Watchdog (TWDT) giám sát timeout & sức khỏe từng task** | **Gateway** |
@@ -192,18 +191,17 @@ Smart Clock không phải là một IoT device đơn lẻ, mà là một **Gatew
 | S01 | MQTT over TLS | Gateway |
 | S02 | Authentication (JWT/API Key) | Backend + Web App |
 | S03 | OTA firmware update | Gateway + Backend |
-| S04 | BLE auto-discovery | Gateway |
+| S04 | BLE auto-discovery & Passive Beacon Scanning (Mijia/Tuya) | Gateway |
 | S05 | Event logging + xem lịch sử trên Web | Backend + Web App |
 | S06 | Luân phiên nhiều màn hình OLED | Gateway |
-| **S07** | **Modbus Auto-scan tìm node RS485 mới qua Serial CLI** | **Gateway** |
-| **S08** | **Cảnh báo mất kết nối bus RS485 lên màn hình OLED & Buzzer** | **Gateway** |
+| **S08** | **Cảnh báo mất kết nối cảm biến không dây BLE lên màn hình OLED & Buzzer** | **Gateway** |
 
 #### Could Have (có thể có)
 
 | ID | Tính năng | Thành phần |
 |---|---|---|
 | C01 | Matter / Google Home | Gateway |
-| C02 | Zigbee protocol | Gateway |
+| C02 | Zigbee protocol (Định hướng mở rộng tương lai qua module Co-processor) | Gateway |
 | C03 | Multi-gateway | Backend |
 | C04 | Voice control | Gateway |
 | C05 | AI/ML tại Edge | Gateway |
@@ -218,18 +216,17 @@ Smart Clock không phải là một IoT device đơn lẻ, mà là một **Gatew
 ```
 ┌──────────────────────────────────────── ESP32 ────────────────────────────────────────┐
 │                                                                                       │
-│   Core 0 (Real-Time, Field Bus & Giám sát hệ thống)                                  │
+│   Core 0 (Real-Time, Wireless BLE & Giám sát hệ thống)                               │
 │   ┌─────────────────────────────────────────────────────────────────────────┐         │
 │   │  supervisor_task       (Priority 7) - Task Watchdog (TWDT) & Heartbeat  │         │
 │   │  event_bus dispatcher  (Priority 6) - Điều phối Queue sự kiện trung tâm │         │
-│   │  rs485_task            (Priority 5) - Polling Modbus RTU, Timeout/Retry │         │
-│   │  ble_scan_task         (Priority 5) - Quét & đọc BLE GATT Sensor        │         │
+│   │  ble_scan_task         (Priority 5) - Quét & đọc BLE Sensor (GATT/Beacon)│        │
 │   │  scheduler_task        (Priority 4) - Báo thức & Lịch tự động (RTC)     │         │
 │   │  display_task          (Priority 3) - Cập nhật màn hình OLED SSD1327    │         │
 │   │  rule_engine           (Chạy trong ngữ cảnh event_bus dispatcher)       │         │
 │   └─────────────────────────────────────────────────────────────────────────┘         │
 │                                                                                       │
-│   Core 1 (I/O Mạng, Lưu trữ SD Card & Cấu hình tại chỗ)                              │
+│   Core 1 (I/O Mạng Wi-Fi, Lưu trữ SD Card & Cấu hình tại chỗ)                        │
 │   ┌─────────────────────────────────────────────────────────────────────────┐         │
 │   │  uplink_task           (Priority 5) - Quản lý Wi-Fi, MQTT & Reconnect   │         │
 │   │  sd_log_task           (Priority 4) - Ghi FATFS: Log, Telemetry, Queue  │         │
@@ -241,24 +238,24 @@ Smart Clock không phải là một IoT device đơn lẻ, mà là một **Gatew
 │   ┌─────────────────────────────────────────────────────────────────────────┐         │
 │   │                    HỆ THỐNG QUEUE ĐỆM & EVENT BUS                       │         │
 │   │  - Event Bus Queue: 20 slots (phân phối sự kiện toàn hệ thống)          │         │
-│   │  - RS485 Command Queue: 10 slots (hàng đợi lệnh ghi Modbus Master)      │         │
+│   │  - BLE Command Queue: 10 slots (hàng đợi lệnh GATT Write / Điều khiển)  │         │
 │   │  - SD Logger Queue: 30 slots (hàng đợi ghi file tránh block I/O)        │         │
 │   │  - Uplink Outbox Queue: 20 slots (hàng đợi gửi MQTT khi online)         │         │
 │   └─────────────────────────────────────────────────────────────────────────┘         │
 │                                                                                       │
 │   Phần cứng kết nối:                                                                 │
 │   - I2C (GPIO 21, 22): OLED SSD1327 + RTC DS3231                                     │
-│   - UART2 (GPIO 16, 17, 4): RS485 Transceiver (A/B bus)                              │
 │   - SPI (GPIO 14, 15, 2, 13): MicroSD Card Socket (FATFS)                            │
 │   - UART0 (GPIO 1, 3): Debug Serial Console & Serial CLI cứu hộ                      │
 │   - GPIO 18: Còi chip Buzzer (LEDC PWM)                                              │
 │   - GPIO 19, 23: Nút bấm điều khiển tại chỗ                                         │
+│   - Không dây: Wi-Fi 2.4 GHz + Bluetooth Low Energy (BLE 5.0) tích hợp               │
 └───────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 > **Ghi chú phân tách Task & Quản lý I/O:**
-> - `rs485_task` chạy trên Core 0 với priority cao (5) để đảm bảo độ chính xác của timing Modbus RTU (khoảng lặng t1.5 và t3.5 giữa các frame). Task này **hoàn toàn độc lập** với Wi-Fi/Internet; dù mạng mất, RS485 vẫn polling đều đặn.
-> - Thao tác ghi thẻ nhớ SD (`sd_log_task`) được cô lập sang Core 1. Do tốc độ ghi thẻ SD có thể trễ đột ngột tới 100–300ms khi controller của thẻ bận làm Garbage Collection hoặc flush block, việc tách riêng task kèm `sd_log_queue` giúp các task real-time (RS485, Display, Rule Engine) không bao giờ bị nghẽn (non-blocking).
+> - `ble_scan_task` chạy trên Core 0 với priority cao (5) để đảm bảo chu kỳ quét passive beacon và kết nối GATT ổn định. Task này **hoàn toàn độc lập** với Wi-Fi/Internet; dù mạng mất, BLE vẫn đọc cảm biến và cấp dữ liệu cho Rule Engine đều đặn.
+> - Thao tác ghi thẻ nhớ SD (`sd_log_task`) được cô lập sang Core 1. Do tốc độ ghi thẻ SD có thể trễ đột ngột tới 100–300ms khi controller của thẻ bận làm Garbage Collection hoặc flush block, việc tách riêng task kèm `sd_log_queue` giúp các task real-time (BLE, Display, Rule Engine) không bao giờ bị nghẽn (non-blocking).
 
 ### 3.2 Sơ đồ luồng dữ liệu tổng thể (Store-and-Forward Data Flow)
 
@@ -269,22 +266,22 @@ Smart Clock không phải là một IoT device đơn lẻ, mà là một **Gatew
            ┌────────────┼────────────────────────┐
            ▼            ▼                        ▼
         main.c ──► Tất cả module             Shared payload:
-                   đều depend vào              - rs485_telemetry_t
-                   event_bus.h                 - ble_telemetry_t
+                   đều depend vào              - ble_telemetry_t
+                   event_bus.h                 - mqtt_telemetry_t
                                                - rule_action_request_t
                                                - config_updated_t
 
 Luồng dữ liệu chính:
 
-  Luồng 1 — Telemetry từ hiện trường (RS485 & BLE) → Rule Engine, OLED, SD & Cloud:
-  RS485 Node ──► rs485_task ──[EVT_RS485_DEVICE_DATA]─┬──► rule_engine (đánh giá IF-THEN)
-  BLE Sensor ──► ble_adapter ─[EVT_BLE_DEVICE_DATA]───┼──► display (hiển thị thông số OLED)
-                                                      ├──► sd_log_task (ghi CSV thẻ nhớ)
-                                                      └──► uplink_task (MQTT publish)
-                                                                 │
-                                                       (Nếu mất mạng / offline)
-                                                                 ▼
-                                                       sd_log_task (đẩy vào FIFO queue SD)
+  Luồng 1 — Telemetry không dây (BLE & Wi-Fi MQTT) → Rule Engine, OLED, SD & Cloud:
+  BLE Sensor ──► ble_adapter ─[EVT_BLE_DEVICE_DATA]──────┬──► rule_engine (đánh giá IF-THEN)
+  Wi-Fi Device ─► mqtt_adapter [EVT_MQTT_MESSAGE_RECV]───┼──► display (hiển thị thông số OLED)
+                                                         ├──► sd_log_task (ghi CSV thẻ nhớ)
+                                                         └──► uplink_task (MQTT publish lên Cloud)
+                                                                    │
+                                                          (Nếu mất mạng / offline)
+                                                                    ▼
+                                                          sd_log_task (đẩy vào FIFO queue SD)
 
   Luồng 2 — Điều khiển từ xa (Downlink Command) & Local Rule Action:
   Server ──(MQTT Topic Command)──► uplink_task
@@ -401,27 +398,27 @@ BaseType_t event_bus_post(gateway_event_code_t code, void *data,
 | `EVT_WIFI_CREDENTIALS_RECEIVED` | wifi_provisioning | rtc | NULL |
 | `EVT_WIFI_CONNECTED` | wifi_provisioning | rtc, storage, display, uplink_task | NULL |
 | `EVT_WIFI_LOST` | wifi_provisioning | display, uplink_task | NULL |
-| `EVT_RS485_DEVICE_DATA` | rs485_adapter | rule_engine, display, sd_log_task, uplink_task | `rs485_telemetry_t*` |
-| `EVT_RS485_COMMAND_REQUEST` | rule_engine, uplink_task | rs485_adapter | `rs485_cmd_t*` |
-| `EVT_DEVICE_OFFLINE_ALERT` | rs485_adapter, ble_adapter | display, sd_log_task, uplink_task | `device_alert_t*` |
-| `EVT_SD_STATUS_CHANGED` | sd_logger | display, supervisor | `sd_status_t*` |
-| `EVT_CONFIG_RELOAD_REQUEST` | serial_cli, config_mgr | rs485_adapter, uplink_task, rule_engine | NULL |
 | `EVT_BLE_DEVICE_DATA` | ble_adapter | rule_engine, mqtt_adapter, display, sd_log_task | `ble_telemetry_t*` |
+| `EVT_BLE_COMMAND_REQUEST` | rule_engine, mqtt_adapter | ble_adapter | `rule_action_request_t*` |
+| `EVT_DEVICE_OFFLINE_ALERT` | ble_adapter, uplink_task | display, sd_log_task, uplink_task | `device_alert_t*` |
+| `EVT_SD_STATUS_CHANGED` | sd_logger | display, supervisor | `sd_status_t*` |
+| `EVT_CONFIG_RELOAD_REQUEST` | serial_cli, config_mgr | uplink_task, rule_engine, ble_adapter | NULL |
 | `EVT_MQTT_MESSAGE_RECEIVED` | mqtt_adapter | rule_engine, display | `mqtt_telemetry_t*` (xem §4.6.7) |
 | `EVT_MQTT_CONNECTED` | mqtt_adapter | storage, display, sd_log_task | NULL |
 | `EVT_MQTT_DISCONNECTED` | mqtt_adapter | display, sd_log_task | NULL |
-| `EVT_REMOTE_COMMAND_REQUEST` | mqtt_adapter | rs485_adapter, ble_adapter, mqtt_adapter, display | `rule_action_request_t*` |
-| `EVT_COMMAND_RESPONSE` | rs485_adapter, ble_adapter | uplink_task, sd_log_task | `command_ack_t*` |
+| `EVT_REMOTE_COMMAND_REQUEST` | mqtt_adapter | ble_adapter, mqtt_adapter, display | `rule_action_request_t*` |
+| `EVT_COMMAND_RESPONSE` | ble_adapter, mqtt_adapter | uplink_task, sd_log_task | `command_ack_t*` |
 | `EVT_SCHEDULE_AUTOMATION_TRIGGERED` | scheduler | rule_engine | `automation_rule_t*` |
 | `EVT_SCHEDULE_ALARM_TRIGGERED` | scheduler | display | `alarm_entry_t*` |
-| `EVT_RULE_ACTION_REQUEST` | rule_engine | rs485_adapter, ble_adapter, mqtt_adapter, display | `rule_action_request_t*` |
+| `EVT_RULE_ACTION_REQUEST` | rule_engine | ble_adapter, mqtt_adapter, display | `rule_action_request_t*` |
 | `EVT_SENSOR_VALUE_INVALID` | rule_engine | display, sd_log_task | NULL |
 | `EVT_BUTTON_ALARM_STOP` | GPIO ISR | display | NULL |
 | `EVT_BUTTON_SCREEN_NEXT` | GPIO ISR | display | NULL |
 | `EVT_DISPLAY_UPDATE_REQUEST` | (bất kỳ module) | display | NULL |
-| `EVT_CONFIG_UPDATED_FROM_CLOUD` | storage | rule_engine, scheduler, rs485_adapter | `config_updated_t*` |
+| `EVT_CONFIG_UPDATED_FROM_CLOUD` | storage | rule_engine, scheduler | `config_updated_t*` |
 | `EVT_EVENT_LOG_APPENDED` | storage, sd_logger | (cloud sync trigger) | NULL |
 | `EVT_SYNC_COMPLETED` | storage, sd_logger | display | NULL |
+| `EVT_RS485_DEVICE_DATA` *(Lược bỏ)* | *(Deprecated)* | Không dùng trong bản Smart Home không dây | NULL |
 
 > **Phân biệt `EVT_RULE_ACTION_REQUEST` vs `EVT_REMOTE_COMMAND_REQUEST`:**
 > - `EVT_RULE_ACTION_REQUEST` — do **Rule Engine** sinh ra sau khi đánh giá điều kiện (sensor telemetry hoặc schedule automation). Đây là lệnh **tự động** từ logic nội bộ Gateway.
@@ -842,6 +839,30 @@ static void on_rule_action_request(gateway_event_t *evt) {
 
 Rule Engine **không cần biết** giao thức nào xử lý device nào — mỗi adapter tự quyết định.
 
+#### 4.5.6 Verification Contracts
+
+**Verification Contract — FR-BLE-01: Quét Passive Beacon / Advertisement và Thu thập Telemetry BLE**
+
+- **Tier:** target
+- **Preconditions:** Board nạp firmware bật NimBLE stack; task `ble_scan_task` hoạt động trên Core 0; Rule Engine đã đăng ký nhận `EVT_BLE_DEVICE_DATA`.
+- **Stimulus:** Thiết bị phát BLE (cảm biến thật, app điện thoại nRF Connect, hoặc lệnh CLI) phát quảng bá BLE Advertisement chứa Service Data Environmental Sensing (`0x181A`), BTHome (`0xFCD2`), hoặc thiết bị có Local Name / Device ID `sensor_temp_01`.
+- **Expected:**
+  1. BLE Adapter phân tích (parse) thành công gói tin advertisement, trích xuất `device_id` và giá trị cảm biến (`value`).
+  2. Phục hồi cấu trúc `sensor_telemetry_t` với `valid=true` và post `EVT_BLE_DEVICE_DATA` lên Event Bus trong vòng ≤ 500ms.
+  3. Serial console in log nhận dạng cảm biến: `[BLE] Discovered sensor ...` và Rule Engine kích hoạt quy tắc tự động hóa tương ứng (VD: Rule #1 nhiệt độ > 30.0°C bật quạt làm mát).
+  4. Task `ble_scan_task` định kỳ báo danh `TASK_HEARTBEAT_BLE` tới Supervisor, không gây treo hệ thống.
+- **Timing / tolerance:** Phát hiện và chuyển tiếp lên Event Bus trong vòng ≤ 1.0 giây từ khi nhận gói tin quảng bá.
+- **Prohibited:**
+  - Treo Event Bus Dispatcher do gọi hàm BLE blocking trong callback.
+  - Rò rỉ bộ nhớ (memory leak) do không giải phóng packet mbuf hoặc payload event bus.
+  - Watchdog timeout hoặc Guru Meditation crash.
+- **Operator instructions:**
+  1. Mở Serial Console ở tốc độ 115200 baud.
+  2. Dùng điện thoại (app **nRF Connect for Mobile** hoặc tương đương), vào tab *Advertiser*, tạo gói tin quảng bá với Complete Local Name `sensor_temp_01` và Service Data UUID `0x181A` chứa giá trị hex `0x1A 0x18 0xB8 0x0C` (tương ứng 32.56°C).
+  3. Bật phát quảng bá (Enable Advertising) gần mạch ESP32-S3.
+  4. Quan sát console: xác nhận log Gateway nhận dạng được `sensor_temp_01`, giá trị `32.5°C`, và Rule Engine in thông báo: `[RULE_ENGINE] >>> MATCHED Rule #1! Device 'sensor_temp_01' val=... > thr=30.00 -> Target 'fan_relay_01' CMD='ON'`.
+  5. Nếu không có sẵn điện thoại tại thời điểm test, sử dụng lệnh CLI `ble test` để bơm gói tin raw advertisement tương đương vào parser và kiểm chứng cùng chu trình.
+
 ---
 
 ### 4.6 Module: MQTT Adapter (`mqtt_adapter.h/.c`)
@@ -1203,10 +1224,15 @@ static void on_button_alarm_stop(gateway_event_t *evt) {
 
 ---
 
-### 4.10 Module: RS485 Modbus Master Adapter (`rs485_adapter.h/.c`)
+### 4.10 Phân hệ Mở Rộng: RS485 Modbus Master Adapter (Đã lược bỏ / Deprecated)
 
-#### 4.10.1 Mô tả
-Chịu trách nhiệm quản lý toàn bộ giao tiếp vật lý RS485 (Half-Duplex) với các thiết bị cảm biến và cơ cấu chấp hành hiện trường theo chuẩn Modbus RTU Master. Thực hiện quét (polling) chu kỳ, giám sát timeout phản hồi, retry có kiểm soát, cơ chế cách ly (circuit breaker) thiết bị lỗi, và tiếp nhận lệnh điều khiển ghi dữ liệu xuống hiện trường.
+> [!NOTE]
+> **Trạng thái phân hệ:** ĐÃ LƯỢC BỎ (OUT OF SCOPE / DEPRECATED)
+> Để phục vụ mục tiêu hệ thống Smart Home 100% không dây và tinh giản phần cứng, toàn bộ việc kết nối dây qua RS485, chip transceiver SP3485/MAX485 và các bài test `FR-RS485-01`, `FR-RS485-02`, `FR-RS485-03` được gỡ bỏ khỏi phạm vi bắt buộc của dự án. Hệ thống ưu tiên tối đa cho 2 chuẩn không dây tích hợp sẵn trên chip là **Bluetooth Low Energy (BLE)** và **Wi-Fi 2.4 GHz**.
+> Nội dung mục 4.10 dưới đây chỉ được lưu giữ dưới dạng tài liệu kỹ thuật tham khảo cho các kịch bản mở rộng công nghiệp tương lai.
+
+#### 4.10.1 Mô tả (Tham khảo)
+Chịu trách nhiệm quản lý toàn bộ giao tiếp vật lý RS485 (Half-Duplex) với các thiết bị cảm biến và cơ cấu chấp hành hiện trường theo chuẩn Modbus RTU Master.
 
 #### 4.10.2 Cấu hình phần cứng & Thông số
 | Tham số | Giá trị | Ghi chú |
@@ -1474,7 +1500,7 @@ Module đóng vai trò "người giám sát độc lập" (Watchdog Supervisor) 
 #### 4.13.2 Bảng phân bổ Heartbeat Bitmask các Task
 ```c
 #define TASK_HEARTBEAT_EVENT_BUS   (1 << 0)  // event_dispatcher_task
-#define TASK_HEARTBEAT_RS485       (1 << 1)  // rs485_task
+#define TASK_HEARTBEAT_BLE         (1 << 1)  // ble_scan_task
 #define TASK_HEARTBEAT_UPLINK      (1 << 2)  // uplink_task
 #define TASK_HEARTBEAT_SD_LOGGER   (1 << 3)  // sd_log_task
 #define TASK_HEARTBEAT_SCHEDULER   (1 << 4)  // scheduler_task
@@ -1510,15 +1536,15 @@ Module đóng vai trò "người giám sát độc lập" (Watchdog Supervisor) 
 
 **Verification Contract — FR-SUP-02: Bắt lỗi Task bị treo & Tự khôi phục an toàn**
 - **Tier:** target
-- **Preconditions:** Nạp firmware kích hoạt chế độ test chẩn đoán (Test Hook: lệnh `test freeze rs485`).
-- **Stimulus:** Gửi lệnh qua Serial CLI: `test freeze rs485` (khiến `rs485_task` rơi vào `vTaskDelay(portMAX_DELAY)` vô hạn mà không báo heartbeat).
+- **Preconditions:** Nạp firmware kích hoạt chế độ test chẩn đoán (Test Hook: lệnh `test freeze event_bus`).
+- **Stimulus:** Gửi lệnh qua Serial CLI: `test freeze event_bus` (khiến `event_dispatcher_task` rơi vào vòng lặp vô hạn mà không báo heartbeat).
 - **Expected:**
-  1. Đúng 15 giây sau khi task bị đóng băng, `supervisor_task` phát hiện thiếu cờ `TASK_HEARTBEAT_RS485`.
-  2. Ghi cảnh báo ra log Serial: `[SUP] CRITICAL: Task 'rs485_task' stalled > 15s! Flushing crash log...`.
-  3. File `/sdcard/logs/crash.log` được ghi thành công với nguyên nhân `TASK_STALL_RS485`.
+  1. Đúng 15 giây sau khi task bị đóng băng, `supervisor_task` phát hiện thiếu cờ `TASK_HEARTBEAT_EVENT_BUS`.
+  2. Ghi cảnh báo ra log Serial: `[SUP] CRITICAL: Task 'event_bus' stalled > 15s! Flushing crash log...`.
+  3. File `/sdcard/logs/crash.log` được ghi thành công với nguyên nhân `TASK_STALL_EVENT_BUS`.
   4. Gateway thực hiện `esp_restart()` và khởi động lại hoàn tất trong < 3 giây.
 - **Operator instructions:**
-  1. Mở Serial terminal, gõ `test freeze rs485`.
+  1. Mở Serial terminal, gõ `test freeze event_bus`.
   2. Bấm đồng hồ đếm: Đúng 15 giây sau, xác nhận thấy log crash và gateway tự reboot.
   3. Sau khi reboot, kiểm tra file `/sdcard/logs/crash.log` ghi lại sự kiện đóng băng chính xác.
 

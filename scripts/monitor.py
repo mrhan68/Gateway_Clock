@@ -1,4 +1,6 @@
-import serial, sys, time
+import serial
+import sys
+import time
 
 port = '/dev/ttyACM0'
 print(f"Opening {port} at 115200 baud...")

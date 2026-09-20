@@ -84,6 +84,11 @@ BaseType_t event_bus_post(gateway_event_code_t code, void *data, size_t len, boo
  */
 void event_bus_start_dispatcher(void);
 
+/**
+ * @brief Freeze the event bus dispatcher indefinitely (FR-SUP-02 test hook)
+ */
+void event_bus_freeze(void);
+
 #ifdef __cplusplus
 }
 #endif

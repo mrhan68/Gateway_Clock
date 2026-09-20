@@ -19,7 +19,7 @@ jobs:
 
   build:
     runs-on: ubuntu-latest
-    container: espressif/idf:v6.0.2
+    container: espressif/idf:v5.3.1
     defaults:
       run:
         working-directory: firmware
@@ -53,7 +53,7 @@ jobs:
           idf.py -B build -DSDKCONFIG=$PWD/build/sdkconfig \
             -DSDKCONFIG_DEFAULTS=sdkconfig.defaults \
             -DPROJECT_VER=${{ steps.plan.outputs.version }} \
-            set-target esp32
+            set-target esp32s3
           idf.py -B build -DSDKCONFIG=$PWD/build/sdkconfig \
             -DSDKCONFIG_DEFAULTS=sdkconfig.defaults \
             -DPROJECT_VER=${{ steps.plan.outputs.version }} \
@@ -62,8 +62,8 @@ jobs:
       - name: Collect artefacts
         run: |
           V="${{ steps.plan.outputs.version }}"
-          cp build/*.bin firmware_v${V}.bin
-          cp build/*.elf firmware_v${V}.elf
+          cp build/smart_clock_gateway.bin firmware_v${V}.bin
+          cp build/smart_clock_gateway.elf firmware_v${V}.elf
           mkdir -p coldflash
           cp build/flash_args coldflash/
           awk '$1 ~ /^0x/ {print $2}' build/flash_args | while read -r f; do

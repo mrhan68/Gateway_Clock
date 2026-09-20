@@ -80,6 +80,11 @@ void mock_rs485_get_latest(float *temp, float *hum, bool *valid);
  */
 void mock_rs485_get_relays(uint8_t coils[4]);
 
+/**
+ * @brief Freeze the RS485 task indefinitely (FR-SUP-02 test hook)
+ */
+void mock_rs485_freeze(void);
+
 #ifdef __cplusplus
 }
 #endif

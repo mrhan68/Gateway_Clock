@@ -8,7 +8,7 @@ Tests pure evaluation logic:
 """
 
 from enum import Enum
-from typing import List, Optional, NamedTuple
+from typing import List, NamedTuple
 
 
 class RuleConditionType(Enum):

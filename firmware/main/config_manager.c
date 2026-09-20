@@ -50,12 +50,12 @@ esp_err_t config_manager_init(void)
     size_t len = sizeof(s_active_config.gateway_id);
     nvs_get_str(handle, "gw_id", s_active_config.gateway_id, &len);
 
-    // Chế độ RAM tạm thời: Xóa Wi-Fi trong NVS nếu có để luôn khởi động vào SoftAP
-    nvs_erase_key(handle, "wifi_ssid");
-    nvs_erase_key(handle, "wifi_pass");
-    nvs_commit(handle);
-    s_active_config.wifi_ssid[0] = '\0';
-    s_active_config.wifi_password[0] = '\0';
+    // Đọc Wi-Fi SSID & Password từ NVS Flash
+    len = sizeof(s_active_config.wifi_ssid);
+    nvs_get_str(handle, "wifi_ssid", s_active_config.wifi_ssid, &len);
+
+    len = sizeof(s_active_config.wifi_password);
+    nvs_get_str(handle, "wifi_pass", s_active_config.wifi_password, &len);
 
     // Đọc MQTT Broker
     len = sizeof(s_active_config.mqtt_broker_uri);

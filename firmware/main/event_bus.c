@@ -12,6 +12,7 @@ static QueueHandle_t s_event_queue = NULL;
 static gateway_event_handler_t s_handlers[EVT_MAX_CODES][EVENT_BUS_MAX_HANDLERS];
 static uint8_t s_handler_counts[EVT_MAX_CODES];
 static TaskHandle_t s_dispatcher_task_handle = NULL;
+static bool s_event_bus_frozen = false;
 
 void event_bus_init(void)
 {
@@ -90,6 +91,11 @@ static void event_dispatcher_task(void *pvParameters)
     gateway_event_t evt;
 
     while (1) {
+        if (s_event_bus_frozen) {
+            // FSD §4.13.4 FR-SUP-02: Deliberately freeze task to test watchdog stall detection
+            vTaskDelay(portMAX_DELAY);
+        }
+
         // Báo cáo nhịp tim tới Task Supervisor
         supervisor_report_heartbeat(TASK_HEARTBEAT_EVENT_BUS);
 
@@ -135,4 +141,11 @@ void event_bus_start_dispatcher(void)
     } else {
         ESP_LOGI(TAG, "Event dispatcher initialized successfully");
     }
+}
+
+void event_bus_freeze(void)
+{
+    s_event_bus_frozen = true;
+    printf("[TEST HOOK] Freezing event_bus task indefinitely (stopping heartbeat)... Watchdog timeout in 15s!\n");
+    fflush(stdout);
 }

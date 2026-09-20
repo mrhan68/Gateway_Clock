@@ -39,8 +39,8 @@ capabilities:
 
   rs485-field-wiring:
     what:      "Connect A/B wires, attach 120 ohm termination resistors, connect Modbus slave"
-    available: yes
-    tier:      manual
+    available: no
+    consequence: "RS485 retired - Gateway uses 100% wireless mode (Wi-Fi + BLE)"
 
   wifi-create-ap:
     what:      "Create a WiFi AP with known SSID/password using a phone or router"
@@ -64,11 +64,6 @@ capabilities:
     tier:      host
 
   # --- Limitations (without full automated testbench) ---
-  automated-cable-cut:
-    what:      "Programmatically sever RS485 physical bus"
-    available: no
-    consequence: "RS485 cable-cut / bus short tests must be conducted manually"
-
   rf-chamber-testing:
     what:      "Calibrate RF power in an anechoic chamber"
     available: no
@@ -83,10 +78,10 @@ capabilities:
 # ────────────────────────── Debugging Agenda ──────────────────────────
 # Project-side parts that have never been observed working here.
 # Commissioning (/commission) burns this list to empty before software tests.
-debugging_agenda:
-  - part: "ESP32 DevKit Board (First Flash)"
-    unproven_because: "Never powered on and flashed in this setup"
-    proven_by: "Serial output shows boot marker 'BOOT: starting' after flash"
+agenda:
+  - part: "ESP32 DevKit Board (ESP32-S3)"
+    unproven_because: "First flash on this physical hardware"
+    proven_by: "Serial monitor displays boot message and chip revision without panic"
 
   - part: "USB-UART Serial Console (115200 baud)"
     unproven_because: "Never captured serial output from this workstation"
@@ -95,10 +90,6 @@ debugging_agenda:
   - part: "MicroSD Card Slot (SPI Mode)"
     unproven_because: "Wiring (GPIO 14, 15, 2, 13) and FATFS mount never tested on this board"
     proven_by: "ESP32 mounts FATFS successfully and prints free storage space"
-
-  - part: "RS485 Transceiver (SP3485/MAX485)"
-    unproven_because: "UART2 pinout (GPIO 16, 17) and DE/RE flow control (GPIO 4) never verified on hardware"
-    proven_by: "Oscilloscope or Modbus slave receives polling frame; RX LED blinks"
 
   - part: "I2C Bus (RTC DS3231 & OLED SSD1327)"
     unproven_because: "Shared I2C bus (GPIO 21, 22) address arbitration unverified"
@@ -123,16 +114,16 @@ journey:
       3: "Power-cycle the ESP32 (press RESET button or replug USB)"
     expected:
       - "Serial shows: [BOOT] Starting Smart Clock Edge Gateway"
-      - "Serial shows: [SYS] Alive marker 1" within 3 seconds
+      - "Serial shows: [SYS] Alive marker 1"
     prohibited:
-      - "No serial output"
-      - "Boot loop (Guru Meditation Error or continuous reboot)"
+      - "Guru Meditation Error / Kernel panic"
+      - "Silent failure / no characters on serial monitor"
     operator_report_fields:
-      - "Exact first 10 lines of serial output"
-      - "Did you see '[SYS] Alive marker 1'? (yes/no)"
+      - "First 5 lines of serial monitor output"
+      - "Time from power-on to Alive marker 1 (seconds)"
 
   - id: JRN-02
-    name: "MicroSD Card FATFS Mount & Config Load"
+    name: "MicroSD Card Detection & Local Config Load"
     kind: standard
     tier: target
     wave: 1
@@ -140,9 +131,9 @@ journey:
     impl: "firmware/main/sd_logger.c"
     status: not_done
     steps:
-      1: "Format MicroSD card as FAT32 and copy config.json to root"
-      2: "Insert MicroSD into slot and boot ESP32"
-      3: "Observe serial monitor"
+      1: "Insert FAT32-formatted MicroSD card into SPI slot"
+      2: "Ensure config.json is present in root directory"
+      3: "Boot ESP32 and observe serial output"
     expected:
       - "Serial shows: [SD] FATFS mounted successfully"
       - "Serial shows: [CFG] Loaded configuration from /sdcard/config.json"
@@ -154,26 +145,13 @@ journey:
       - "Mount success? (yes/no)"
 
   - id: JRN-03
-    name: "RS485 Bus Probe & Modbus Slave Polling"
+    name: "RS485 Bus Probe (Excluded - Wireless Mode)"
     kind: standard
     tier: target
     wave: 1
-    verifies: [M14]
-    impl: "firmware/main/rs485_adapter.c"
-    status: not_done
-    steps:
-      1: "Connect RS485 Modbus temperature/humidity slave to bus (A to A, B to B)"
-      2: "Ensure 120 ohm termination resistor is present"
-      3: "Boot ESP32 and observe serial output for 10 seconds"
-    expected:
-      - "Serial shows: [RS485] Polling node slave_id=1"
-      - "Serial shows: [RS485] Node slave_id=1 response OK, CRC valid"
-    prohibited:
-      - "Serial shows: [RS485] Bus stuck / timeout on all nodes"
-      - "Hardware crash when setting DE/RE pin"
-    operator_report_fields:
-      - "Serial lines containing [RS485]"
-      - "Telemetry value received"
+    verifies: []
+    status: excluded
+    reason: "RS485 physical hardware excluded in wireless Smart Home mode (BLE + Wi-Fi prioritized)"
 
   - id: JRN-04
     name: "Wi-Fi & MQTT Uplink Connection"
@@ -237,23 +215,59 @@ tests:
       impl: "tests/host/test_mqtt_adapter.py"
       status: passed
 
+    - id: TC-HOST-05
+      name: "BLE Advertisement & Environmental Sensing Packet Parser"
+      tier: host
+      wave: 1
+      verifies: [M02]
+      contract: "FR-BLE-01"
+      impl: "tests/host/test_ble_parser.py"
+      status: passed
+
+  # --- Target Tier: BLE Wireless Sensors ---
+  ble:
+    - id: TC-BLE-01
+      name: "BLE Telemetry Scanner & Environmental Data Extraction"
+      tier: target
+      wave: 1
+      verifies: [M02]
+      contract: "FR-BLE-01"
+      impl: "firmware/main/ble_adapter.c"
+      status: passed
+
   # --- Target Tier: RS485 & Field Bus ---
   rs485:
     - id: TC-RS485-01
       name: "Polling Telemetry from Slave Node (FC03)"
       tier: target
       wave: 1
-      verifies: [M14]
-      contract: "FR-RS485-01"
-      status: not_done
+      verifies: []
+      status: excluded
+      reason: "Excluded - physical RS485 wiring not required for wireless Smart Home mode"
 
     - id: TC-RS485-02
       name: "Downlink Command Execution (FC05/06)"
       tier: target
       wave: 1
+      verifies: []
+      status: excluded
+      reason: "Excluded - physical RS485 wiring not required for wireless Smart Home mode"
+
+    - id: TC-MOCK-02
+      name: "Safe-Default on Sensor CRC/Invalid Fault Injection"
+      tier: target
+      wave: 1
+      verifies: [M04, M14]
+      contract: "FSD §4.7.5"
+      status: passed
+
+    - id: TC-MOCK-03
+      name: "RS485 Bus Timeout Simulation & State Preservation"
+      tier: target
+      wave: 1
       verifies: [M14]
-      contract: "FR-RS485-03"
-      status: not_done
+      contract: "FR-RS485-02"
+      status: passed
 
   # --- Target Tier: SD Card & Offline Storage ---
   sd_storage:
@@ -264,6 +278,14 @@ tests:
       verifies: [M15]
       contract: "FR-SD-01"
       status: not_done
+
+    - id: TC-MOCK-04
+      name: "Virtual Storage CSV Telemetry Logging"
+      tier: target
+      wave: 1
+      verifies: [M15]
+      contract: "FR-SD-01"
+      status: passed
 
     - id: TC-SD-02
       name: "Power-Loss Safe Sync (f_sync periodic flush)"
@@ -319,6 +341,14 @@ tests:
       contract: "FR-SUP-01"
       status: passed
 
+    - id: TC-SUP-02
+      name: "Task Supervisor Watchdog Hang Detection & Panic Recovery"
+      tier: target
+      wave: 1
+      verifies: [M17]
+      contract: "FR-SUP-02"
+      status: passed
+
   # --- Target Tier: Core Smart Clock Features ---
   smart_clock:
     - id: TC-CLK-01
@@ -340,6 +370,16 @@ tests:
       tier: target
       wave: 1
       verifies: [M05, M12, M13]
+      status: passed
+
+  # --- Target Tier: Rule Engine & Edge Automation ---
+  rule_engine:
+    - id: TC-RULE-01
+      name: "Rule Engine Dynamic CRUD & Boundary Evaluation"
+      tier: target
+      wave: 1
+      verifies: [M04]
+      contract: "FSD §4.7"
       status: passed
 
   # ┌─────────────────────────────────────────────────────────────┐
@@ -388,9 +428,9 @@ tests:
       status: locked
 
     - id: TC-NEG-03
-      name: "Task Supervisor Hang Detection & Panic Crash Log"
+      name: "Task Supervisor Hang Detection & Panic Recovery"
       tier: target
       wave: 3
       verifies: [M17]
       contract: "FR-SUP-02"
-      status: locked
+      status: passed

@@ -139,8 +139,8 @@ static uint16_t perform_wifi_scan(void)
         .channel = 0,
         .show_hidden = true,
         .scan_type = WIFI_SCAN_TYPE_ACTIVE,
-        .scan_time.active.min = 100,
-        .scan_time.active.max = 150,
+        .scan_time.active.min = 0,
+        .scan_time.active.max = 0,
     };
 
     esp_err_t err = esp_wifi_scan_start(&scan_config, true);
@@ -265,9 +265,10 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
             ESP_LOGI(TAG, "Wi-Fi Station idle, waiting for configuration...");
         }
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
+        wifi_event_sta_disconnected_t *disconn = (wifi_event_sta_disconnected_t *)event_data;
         s_is_connected = false;
         strcpy(s_current_ip, "0.0.0.0");
-        ESP_LOGW(TAG, "[WIFI] Disconnected from AP.");
+        ESP_LOGW(TAG, "[WIFI] Disconnected from AP (Reason code: %d).", disconn ? disconn->reason : -1);
         event_bus_post(EVT_WIFI_LOST, NULL, 0, false);
         if (wifi_provisioning_is_configured()) {
             esp_wifi_connect();

@@ -16,6 +16,8 @@
 #include "rule_engine.h"
 #include "scheduler.h"
 #include "mock_peripherals.h"
+#include "event_bus.h"
+#include "ble_adapter.h"
 
 static const char *TAG __attribute__((unused)) = "CLI";
 
@@ -46,6 +48,11 @@ static void print_help(void)
     printf("  help                                 - Show this help message\n");
     printf("  status                               - Show system uptime, heap and task health\n");
     printf("  time                                 - Show current RTC / NTP system time\n");
+    printf("  ble status                           - Show BLE scanner status and discovered devices\n");
+    printf("  ble start                            - Start BLE GAP scanner\n");
+    printf("  ble stop                             - Stop BLE GAP scanner\n");
+    printf("  ble reg <device_id> [mac]            - Register a BLE sensor mapping\n");
+    printf("  ble test [val]                       - Inject synthetic BLE telemetry (default 32.5 C)\n");
     printf("  wifi status                          - Show current Wi-Fi status and IP address\n");
     printf("  wifi scan                            - Scan and list nearby Wi-Fi networks\n");
     printf("  wifi select <index> [password]       - Connect to a scanned Wi-Fi by list number\n");
@@ -63,7 +70,7 @@ static void print_help(void)
     printf("  rule delete <id>                     - Delete a rule by ID\n");
     printf("  rule clear                           - Clear all active rules\n");
     printf("  schedule list                        - List all active schedule entries\n");
-    printf("  schedule add <alarm|auto> <HH:MM> <title_or_target> [cmd] - Add schedule\n");
+    printf("  schedule add [id] <alarm|auto> <HH:MM> <title_or_target> [cmd] - Add schedule\n");
     printf("  schedule test [title]                - Manually trigger an alarm notification\n");
     printf("  schedule clear                       - Clear all schedule entries\n");
     printf("  cmd send <target_id> <command>       - Dispatch command to device\n");
@@ -74,7 +81,8 @@ static void print_help(void)
     printf("  mock rs485 fault <none|timeout|invalid> - Inject simulated bus faults\n");
     printf("  mock storage test                    - Write sample telemetry to virtual storage\n");
     printf("  modbus scan [start_id] [end_id]      - Probe RS485 slave devices (mock mode)\n");
-    printf("  test freeze event_bus                - Test hook: simulate frozen event_bus task\n");
+    printf("  test freeze rs485                    - Test hook: simulate frozen rs485 task (FR-SUP-02)\n");
+    printf("  test freeze event_bus                - Test hook: simulate frozen event_bus task (FR-SUP-02)\n");
     printf("  reboot                               - Reboot the ESP32 gateway\n\n");
 }
 
@@ -94,6 +102,40 @@ static void handle_command(char *cmd_line)
         char time_buf[64];
         app_rtc_get_formatted_time(time_buf, sizeof(time_buf));
         printf("Current System Time: %s (Epoch: %ld)\n", time_buf, (long)app_rtc_get_time());
+    } else if (strcmp(cmd_line, "ble status") == 0) {
+        ble_adapter_print_status();
+    } else if (strcmp(cmd_line, "ble start") == 0) {
+        ble_adapter_start_scan();
+        printf("OK: BLE GAP passive scanner started.\n");
+    } else if (strcmp(cmd_line, "ble stop") == 0) {
+        ble_adapter_stop_scan();
+        printf("OK: BLE GAP passive scanner stopped.\n");
+    } else if (strncmp(cmd_line, "ble reg", 7) == 0) {
+        char dev_id[32] = {0}, mac[32] = {0};
+        int parsed = sscanf(cmd_line + 7, "%31s %31s", dev_id, mac);
+        if (parsed >= 1) {
+            ble_adapter_register_device(dev_id, parsed >= 2 ? mac : NULL);
+            printf("OK: Registered BLE device '%s' (MAC: %s)\n", dev_id, parsed >= 2 ? mac : "Auto");
+        } else {
+            printf("Usage: ble reg <device_id> [mac_address]\n");
+        }
+    } else if (strncmp(cmd_line, "ble test", 8) == 0) {
+        char arg1[32] = {0};
+        float val = 32.50f;
+        char dev[32] = "sensor_temp_01";
+        int parsed = sscanf(cmd_line + 8, "%31s %f", arg1, &val);
+        if (parsed == 1) {
+            if ((arg1[0] >= '0' && arg1[0] <= '9') || arg1[0] == '-') {
+                val = strtof(arg1, NULL);
+                strcpy(dev, "sensor_temp_01");
+            } else {
+                strncpy(dev, arg1, sizeof(dev) - 1);
+                val = 32.50f;
+            }
+        } else if (parsed >= 2) {
+            strncpy(dev, arg1, sizeof(dev) - 1);
+        }
+        ble_adapter_inject_test_packet(dev, val);
     } else if (strcmp(cmd_line, "wifi status") == 0) {
         bool connected = wifi_provisioning_is_connected();
         printf("Wi-Fi Status: %s\n", connected ? "CONNECTED" : "DISCONNECTED / SOFTAP");
@@ -271,10 +313,31 @@ static void handle_command(char *cmd_line)
         printf("==============================\n\n");
     } else if (strncmp(cmd_line, "schedule add", 12) == 0) {
         int id = 0;
+        char token1[16] = {0}, token2[64] = {0}, token3[64] = {0}, token4[64] = {0}, token5[32] = {0};
+        int parsed = sscanf(cmd_line + 12, "%15s %63s %63s %63s %31s",
+                            token1, token2, token3, token4, token5);
         char type[16] = {0}, time_str[8] = {0}, title[64] = {0}, cmd[32] = {0};
-        int parsed = sscanf(cmd_line + 12, "%d %15s %7s %63s %31s",
-                            &id, type, time_str, title, cmd);
-        if (parsed >= 4) {
+
+        if (parsed >= 3 && (strcmp(token1, "alarm") == 0 || strcmp(token1, "automation") == 0 || strcmp(token1, "auto") == 0)) {
+            // Format without ID: schedule add <type> <HH:MM> <title> [cmd]
+            id = scheduler_get_entry_count() + 1;
+            strncpy(type, token1, sizeof(type) - 1);
+            strncpy(time_str, token2, sizeof(time_str) - 1);
+            strncpy(title, token3, sizeof(title) - 1);
+            strncpy(cmd, token4, sizeof(cmd) - 1);
+            parsed = 4;
+        } else if (parsed >= 4) {
+            // Format with ID: schedule add <id> <type> <HH:MM> <title> [cmd]
+            id = atoi(token1);
+            strncpy(type, token2, sizeof(type) - 1);
+            strncpy(time_str, token3, sizeof(time_str) - 1);
+            strncpy(title, token4, sizeof(title) - 1);
+            strncpy(cmd, token5, sizeof(cmd) - 1);
+        } else {
+            parsed = 0;
+        }
+
+        if (parsed >= 4 && id > 0) {
             int h = 0, m = 0;
             sscanf(time_str, "%d:%d", &h, &m);
             schedule_entry_t e = {
@@ -287,14 +350,15 @@ static void handle_command(char *cmd_line)
             strncpy(e.type, type, sizeof(e.type) - 1);
             strncpy(e.title, title, sizeof(e.title) - 1);
             for (int d = 0; d < 7; d++) e.repeat_days[d] = true;
-            if (strcmp(type, "automation") == 0) {
+            if (strcmp(type, "automation") == 0 || strcmp(type, "auto") == 0) {
+                strncpy(e.type, "automation", sizeof(e.type) - 1);
                 strncpy(e.target_device_id, title, sizeof(e.target_device_id) - 1);
                 strncpy(e.action_command, cmd, sizeof(e.action_command) - 1);
             }
             scheduler_add_entry(&e);
             printf("OK: Schedule #%d added (%02d:%02d).\n", id, h, m);
         } else {
-            printf("Usage: schedule add <id> <alarm|automation> <HH:MM> <title_or_target> [cmd]\n");
+            printf("Usage: schedule add [id] <alarm|automation> <HH:MM> <title_or_target> [cmd]\n");
         }
     } else if (strncmp(cmd_line, "schedule test", 13) == 0) {
         char title[64] = "Manual Test Alarm";
@@ -354,8 +418,14 @@ static void handle_command(char *cmd_line)
         printf("  - Slave ID 0x01: Simulated T&H Sensor (Present)\n");
         printf("  - Slave ID 0x02: Simulated 4-Ch Relay Board (Present)\n");
         printf("Scan complete. 2 nodes found in configuration table.\n");
+    } else if (strcmp(cmd_line, "test freeze rs485") == 0) {
+        printf("TEST HOOK: Simulating RS485 task stall (FSD §4.13.4 FR-SUP-02)...\n");
+        printf("Task will stop heartbeat. Supervisor should reboot in 15 seconds!\n");
+        mock_rs485_freeze();
     } else if (strcmp(cmd_line, "test freeze event_bus") == 0) {
-        printf("TEST HOOK: Simulating task stall... Supervisor should reboot in 15 seconds!\n");
+        printf("TEST HOOK: Simulating EVENT_BUS task stall (FSD §4.13.4 FR-SUP-02)...\n");
+        printf("Task will stop heartbeat. Supervisor should reboot in 15 seconds!\n");
+        event_bus_freeze();
     } else if (strcmp(cmd_line, "reboot") == 0) {
         printf("Restarting ESP32 Gateway...\n");
         vTaskDelay(pdMS_TO_TICKS(500));
