@@ -22,14 +22,12 @@ Test Scenarios / Phases:
 import argparse
 import json
 import logging
-import os
 import random
 import struct
-import sys
 import threading
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 import paho.mqtt.client as mqtt
@@ -453,7 +451,7 @@ class E2ESystemTestSuite:
         url_sync = f"{self.api_base}/api/v1/gateways/{self.gateway_id}/sync/schedule"
         res_sync = requests.get(url_sync)
         sync_ok = res_sync.status_code == 200 and len(res_sync.json().get("rules", [])) >= 1
-        self.log_result("PHASE-2.6-REST-SYNC-FALLBACK", sync_ok, f"REST sync schedule endpoint verified")
+        self.log_result("PHASE-2.6-REST-SYNC-FALLBACK", sync_ok, "REST sync schedule endpoint verified")
 
     # ── Phase 3: BLE Telemetry Ingestion & Automation Loop ──────────────────
     def test_phase_3_telemetry_and_automation_rule(self):
