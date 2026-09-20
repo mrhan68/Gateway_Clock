@@ -91,10 +91,11 @@ Smart Clock không phải là một IoT device đơn lẻ, mà là một **Gatew
 │                                                  (0x181A/BT)   (Ch 1-4)    Actuators   │
 │                                                                                        │
 │  Lưu trữ & Giám sát tại chỗ:                                                           │
-│  - Bộ nhớ Flash / SD: Telemetry CSV log, Event log, Crash log, Offline Sync FIFO Queue │
+│  - Bộ nhớ Flash / SD: Telemetry CSV log, Event log, RTC Memory Crash Dump, Sync Queue  │
 │  - Flash NVS: Wi-Fi credentials, Broker URI, Gateway ID, Timezone (POSIX ICT-7)        │
-│  - Task Supervisor: TWDT + Heartbeat bitmask (0xD7) giám sát 8 task FreeRTOS, hang 10s │
+│  - Task Supervisor: TWDT + Heartbeat bitmask (0x7F) giám sát 7 task FreeRTOS, hang 15s │
 │  - Cấu hình tại chỗ: Web Dashboard (Port 80) + Serial CLI tương tác (UART0 115200 baud)│
+│  - Broker MQTT: Embedded Aedes (Backend port 1883) hoặc Mosquitto bảo mật TLS (8883)   │
 └────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -148,19 +149,26 @@ Smart Clock không phải là một IoT device đơn lẻ, mà là một **Gatew
 | Chân GPIO | Chức năng gán | Giao tiếp / Module | Ghi chú thiết kế phần cứng ESP32-S3 |
 |---|---|---|---|
 | **GPIO 43** | `U0TXD` | USB-UART Console | Cổng UART0 TX nối chip nạp CH343 / Terminal 115200 baud |
-| **GPIO 44** | `U0RXD` | USB-UART Console | Cổng UART0 RX nối chip nạp CH343 / Nhận lệnh CLI |
-| **GPIO 8** | `I2C_SDA` | I2C Bus chung | Chia sẻ cho OLED SSD1327 (`0x3C`) & RTC DS3231 (`0x68`) |
-| **GPIO 9** | `I2C_SCL` | I2C Bus chung | Trở kéo pull-up 4.7kΩ lên 3.3V |
+| **GPIO 44** | `U0RXD` | USB-UART Console | Cổng UART0 RX nối chip nạp CH343 / Nhận lệnh CLI cứu hộ |
+| **GPIO 8** | `I2C_SDA` | I2C0 Bus chung | Chia sẻ cho OLED SSD1327 (`0x3C`) & RTC DS3231 (`0x68`), pull-up 4.7kΩ |
+| **GPIO 9** | `I2C_SCL` | I2C0 Bus chung | Clock I2C 400kHz |
 | **GPIO 10** | `SPI_CS` | MicroSD Card (SPI) | Chip Select thẻ nhớ SD (tích cực mức LOW) |
-| **GPIO 11** | `SPI_MOSI` | MicroSD Card (SPI) | Data In thẻ nhớ MicroSD (Master Out Slave In) |
-| **GPIO 12** | `SPI_CLK` | MicroSD Card (SPI) | Clock thẻ nhớ MicroSD |
-| **GPIO 13** | `SPI_MISO` | MicroSD Card (SPI) | Data Out thẻ nhớ MicroSD (Master In Slave Out) |
+| **GPIO 11** | `SPI_MOSI` | MicroSD Card (SPI) | Master Out Slave In trên bus `SPI2_HOST` |
+| **GPIO 12** | `SPI_CLK` | MicroSD Card (SPI) | Clock SPI thẻ nhớ MicroSD (20MHz) |
+| **GPIO 13** | `SPI_MISO` | MicroSD Card (SPI) | Master In Slave Out thẻ nhớ MicroSD |
 | **GPIO 1** | `PWM_BUZZER` | Còi chip Buzzer | Điều khiển âm lượng và tần số qua LEDC PWM (Tự ngắt sau 60s) |
-| **GPIO 2** | `STATUS_LED` | LED trạng thái | Đèn nhấp nháy nhịp tim và hiển thị trạng thái kết nối |
-| **GPIO 0** | `BTN_1` | Nút bấm 1 (BOOT) | Short press: Đổi màn hình / Snooze (+9m); Long press (≥5s): Reset Wi-Fi |
-| **GPIO 4** | `BTN_2` | Nút bấm 2 | Tắt / Dừng chuông báo thức tức thì (Alarm Dismiss) |
-| **Chân ảo / NVS** | `RELAY_1..4` | Relay Driver | Điều khiển 4 kênh Relay (`fan_relay_01`, `heater_01`, `dehum_01`, `aux_04`) |
+| **GPIO 2** | `STATUS_LED` | LED trạng thái | Đèn nhấp nháy nhịp tim và hiển thị trạng thái kết nối Wi-Fi/MQTT |
+| **GPIO 0** | `BTN_BOOT_ALARM` | Nút bấm 1 (BOOT) | Khi chuông reo: Nhấn nhanh = Snooze (+9m); Giữ ≥2s = Tắt chuông (Dismiss). Khi rỗi: Giữ ≥5s = Reset Wi-Fi |
+| **GPIO 4** | `BTN_SCREEN_NEXT` | Nút bấm 2 | Chuyển đổi trang màn hình OLED: Đồng hồ ↔ Lịch biểu ↔ Rơ-le ↔ Thông tin hệ thống (Claim Code) |
+| **GPIO 15** | `RELAY_1` | Relay Quạt (Fan) | Kênh điều khiển Quạt làm mát (Active HIGH, cách ly quang, `gpio_hold_en` chống chattering) |
+| **GPIO 16** | `RELAY_2` | Relay Sưởi (Heater) | Kênh Máy sưởi nhiệt (Active HIGH, Fail-safe TẮT khi mất cảm biến, giới hạn tối đa 30 phút) |
+| **GPIO 17** | `RELAY_3` | Relay Hút ẩm (Dehum) | Kênh Máy hút ẩm không khí (Active HIGH, Fail-safe TẮT khi lỗi, giới hạn 60 phút) |
+| **GPIO 18** | `RELAY_4` | Relay Tải phụ (Aux) | Kênh Đèn / Thiết bị phụ trợ (Active HIGH) |
 | **SiP Package** | `Flash & PSRAM` | SPI nội bộ | 16MB Quad SPI Flash + 8MB Embedded PSRAM tích hợp sẵn trong chip |
+
+> **Quy chuẩn phần cứng bắt buộc:**
+> - **Tuyệt đối không dùng GPIO 22, 23, 24, 25:** Các chân này **không tồn tại** trên package chip ESP32-S3.
+> - **Màn hình OLED:** Sử dụng giao tiếp I2C0 (chân GPIO 8/9, địa chỉ `0x3C`). Không dùng bus SPI cho màn hình, giải phóng hoàn toàn bus `SPI2_HOST` cho khe cắm thẻ nhớ MicroSD.
 
 ### 2.4 Phân loại tính năng (MoSCoW)
 
@@ -246,11 +254,11 @@ Smart Clock không phải là một IoT device đơn lẻ, mà là một **Gatew
 │   └─────────────────────────────────────────────────────────────────────────┘         │
 │                                                                                       │
 │   Phần cứng kết nối:                                                                 │
-│   - I2C (GPIO 21, 22): OLED SSD1327 + RTC DS3231                                     │
-│   - SPI (GPIO 14, 15, 2, 13): MicroSD Card Socket (FATFS)                            │
-│   - UART0 (GPIO 1, 3): Debug Serial Console & Serial CLI cứu hộ                      │
+│   - I2C (GPIO 8, 9): OLED SSD1327 + RTC DS3231                                     │
+│   - SPI (GPIO 11, 12, 13, 10): MicroSD Card Socket (FATFS)                            │
+│   - UART0 (GPIO 43, 44): Debug Serial Console & Serial CLI cứu hộ                      │
 │   - GPIO 18: Còi chip Buzzer (LEDC PWM)                                              │
-│   - GPIO 19, 23: Nút bấm điều khiển tại chỗ                                         │
+│   - GPIO 0, 4: Nút bấm điều khiển tại chỗ                                         │
 │   - Không dây: Wi-Fi 2.4 GHz + Bluetooth Low Energy (BLE 5.0) tích hợp               │
 └───────────────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -420,7 +428,7 @@ BaseType_t event_bus_post(gateway_event_code_t code, void *data,
 | `EVT_CONFIG_UPDATED_FROM_CLOUD` | storage | rule_engine, scheduler | `config_updated_t*` |
 | `EVT_EVENT_LOG_APPENDED` | storage, sd_logger | (cloud sync trigger) | NULL |
 | `EVT_SYNC_COMPLETED` | storage, sd_logger | display | NULL |
-| `EVT_BLE_DEVICE_DATA` | `ble_telemetry_t*` | Dữ liệu cảm biến không dây BLE giải mã thành công | free() |
+| `EVT_DEVICE_COMMAND_REQUEST` | mqtt_adapter | ble_adapter, relay_controller | `device_command_req_t*` |
 
 > **Phân biệt `EVT_RULE_ACTION_REQUEST` vs `EVT_REMOTE_COMMAND_REQUEST`:**
 > - `EVT_RULE_ACTION_REQUEST` — do **Rule Engine** sinh ra sau khi đánh giá điều kiện (sensor telemetry hoặc schedule automation). Đây là lệnh **tự động** từ logic nội bộ Gateway.
@@ -475,11 +483,13 @@ typedef struct {
 
 1. **Nguyên tắc bất biến của Dispatcher:** Dispatcher handler **tuyệt đối không được thực hiện I/O blocking**, không gọi kết nối mạng (SNTP, HTTP), không ghi Flash/SD Card, và không thực hiện parse JSON cJSON phức tạp. Handler chỉ được phép sao chép dữ liệu nhỏ vào task queue của worker tương ứng hoặc bật cờ sự kiện.
 2. **Quy tắc giải phóng bộ nhớ (Memory Ownership):**
-   - Caller cấp phát động qua `malloc()` và truyền cờ `is_allocated=true`.
-   - Dispatcher chịu trách nhiệm gọi `free(payload)` sau khi tất cả handler hoàn thành.
-   - **Xử lý khi Queue đầy:** Nếu `event_bus_post()` thất bại (hàng đợi 32 slots bị đầy), chính hàm `event_bus_post()` có nghĩa vụ giải phóng `free(payload)` ngay lập tức để chống rò rỉ bộ nhớ (Memory Leak).
-   - Sự kiện ưu tiên cao (như `EVT_BUTTON_ALARM_STOP`) được đẩy bằng `xQueueSendToFront()` để không bao giờ bị drop.
-3. **An toàn đa luồng (Mutex Protection):**
+   - **Cấp phát:** Module phát sự kiện (Producer) chịu trách nhiệm cấp phát động bộ nhớ payload qua `malloc()` nếu có dữ liệu gửi kèm (hoặc truyền `data = NULL` nếu không có payload).
+   - **Giải phóng duy nhất:** Dispatcher task sau khi gọi lần lượt tất cả handler đã đăng ký cho event code đó sẽ gọi `free(evt.data)` một lần duy nhất tại điểm kết thúc vòng lặp. Các handler nhận event tuyệt đối **không được gọi free()** trên con trỏ nhận được.
+   - **Xử lý chống tràn & rò rỉ khi Queue đầy:** Nếu hàng đợi Event Bus (32 slots) bị đầy dẫn đến `event_bus_post()` thất bại (trả về `pdFALSE`), chính hàm `event_bus_post()` có nghĩa vụ giải phóng `free(data)` ngay lập tức và ghi log cảnh báo `ESP_LOGW("Event queue full, payload freed")` để loại trừ hoàn toàn nguy cơ rò rỉ bộ nhớ (Memory Leak).
+3. **Cơ chế xử lý nút bấm vật lý (Chống nghẽn Queue):**
+   - Để tránh rủi ro mất sự kiện khi hàng đợi Event Bus bị đầy hoặc nghẽn, tín hiệu ngắt nút bấm vật lý (GPIO 0 `BTN_BOOT_ALARM` và GPIO 4 `BTN_SCREEN_NEXT`) sử dụng cơ chế **Direct-to-Task Notification** (`vTaskNotifyGiveFromISR`) gửi thẳng tới `display_task`.
+   - `display_task` phản hồi ngay lập tức (Snooze +9m, Tắt chuông hoặc đổi trang màn hình OLED) mà không cần đợi luân chuyển qua Event Queue. Sau đó, `display_task` mới post sự kiện nhật ký lên Event Bus ở ngữ cảnh task thông thường (`from_isr = false`).
+4. **An toàn đa luồng (Mutex Protection):**
    - Bảng lịch biểu `entries[]` của Scheduler được bảo vệ bởi `s_scheduler_mutex`.
    - Bảng đăng ký thiết bị `s_known_devices` được bảo vệ bởi `s_device_mutex`.
    - Các thao tác đọc/ghi file nhật ký sự kiện `event_log.json` và `sync_queue.bin` được bảo vệ bởi `s_storage_mutex`.
@@ -532,7 +542,7 @@ bool rtc_sync_from_ntp_and_save(void);
 
 void rtc_set_timezone(const char *tz_string);
 // Hành vi: setenv("TZ", tz_string, 1); tzset();
-// Input ví dụ: "Asia/Ho_Chi_Minh"
+// Input ví dụ: "ICT-7"
 // Gọi khi: Nhận timezone từ captive portal form
 ```
 
@@ -542,8 +552,8 @@ void rtc_set_timezone(const char *tz_string);
 |---|---|
 | Chip | DS3231 |
 | Giao tiếp | I2C |
-| SDA pin | GPIO 21 (mặc định ESP32) |
-| SCL pin | GPIO 22 (mặc định ESP32) |
+| SDA pin | GPIO 8 (mặc định ESP32) |
+| SCL pin | GPIO 9 (mặc định ESP32) |
 | I2C address | 0x68 |
 | Clock speed | 400 kHz |
 | Pin backup | CR2032 (giữ giờ ~8 năm khi mất điện chính) |
@@ -740,7 +750,7 @@ User                    ESP32 SoftAP              NVS        Event Bus
 |---|---|---|---|
 | `wifi_cfg` | `ssid` | string (max 33) | `"MyHomeWiFi"` |
 | `wifi_cfg` | `password` | string (max 65) | `"secret123"` |
-| `wifi_cfg` | `timezone` | string (max 64) | `"Asia/Ho_Chi_Minh"` |
+| `wifi_cfg` | `timezone` | string (max 64) | `"ICT-7"` |
 
 ---
 
@@ -973,7 +983,7 @@ typedef struct {
 
 | ID | Chức năng | Mô tả |
 |---|---|---|
-| RE-01 | Nạp rule từ storage | Parse `schedule.json`, lọc `type="automation"` |
+| RE-01 | Nạp rule từ storage | Đọc và phân tích cú pháp tệp `/spiffs/rules.json` |
 | RE-02 | Đánh giá telemetry BLE | Handler `EVT_BLE_DEVICE_DATA`: so khớp rule |
 | RE-03 | Đánh giá telemetry MQTT | Handler `EVT_MQTT_MESSAGE_RECEIVED`: tương tự |
 | RE-04 | Thực thi automation theo giờ | Handler `EVT_SCHEDULE_AUTOMATION_TRIGGERED` |
@@ -998,20 +1008,46 @@ void rule_engine_reload_rules(void);
 
 ```c
 typedef enum {
-    RULE_CONDITION_SENSOR_GT,   // sensor_value > threshold
-    RULE_CONDITION_SENSOR_LT,   // sensor_value < threshold
-    RULE_CONDITION_TIME_MATCH,  // đúng giờ (thường đã được scheduler lọc sẵn)
+    RULE_CONDITION_SENSOR_GT,   // sensor_value >= threshold (Ngưỡng trên, vd: Quạt làm mát)
+    RULE_CONDITION_SENSOR_LT,   // sensor_value <= threshold (Ngưỡng dưới, vd: Máy sưởi)
+    RULE_CONDITION_TIME_MATCH,  // Đúng giờ hẹn (do scheduler lọc sẵn)
 } rule_condition_type_t;
 
 typedef struct {
     int id;
-    char device_id[32];              // sensor phát sinh điều kiện
+    char device_id[32];              // Cảm biến phát sinh dữ liệu (vd: "ble_temp_01")
     rule_condition_type_t condition_type;
-    float threshold;
-    char target_device_id[32];       // thiết bị bị tác động
+    float threshold;                 // Ngưỡng nhiệt độ / độ ẩm kích hoạt
+    float hysteresis;                // Biên trễ chống dao động tiếp điểm (mặc định 1.5°C)
+    uint32_t cooldown_s;             // Thời gian trễ tối thiểu giữa 2 lần bật/tắt (mặc định 60s)
+    char target_device_id[32];       // Relay hoặc cơ cấu chấp hành (vd: "relay_1", "relay_2")
     char action_command[32];         // "ON", "OFF", "SET:75"
+    bool is_active;                  // Trạng thái kích hoạt của luật
+    // Quản lý trạng thái nội bộ (Runtime State)
+    bool current_state;              // true: đang trong trạng thái kích hoạt (Active Zone)
+    uint32_t last_triggered_ts;      // Epoch thời điểm kích hoạt gần nhất để tính cooldown
 } automation_rule_t;
 ```
+
+#### 4.7.5 Thuật toán Hysteresis, Kích hoạt cạnh (Edge-Triggering) & Khóa an toàn
+
+1. **Công thức toán học của Hysteresis cho cả hai chiều:**
+   - **Chiều Ngưỡng Trên (`SENSOR_GT` — Quạt làm mát `RELAY_1`, ngưỡng 30.0°C, biên trễ 1.5°C):**
+     - **Kích hoạt BẬT quạt (`RELAY_1 ON`):** Khi $T \ge 	ext{threshold}$ (tức $T \ge 30.0^\circ	ext{C}$) **VÀ** `current_state == false` **VÀ** $(t_{	ext{now}} - t_{	ext{last\_trigger}} \ge 	ext{cooldown\_s})$.
+       - *Chuyển trạng thái:* `current_state = true`, gán $t_{	ext{last\_trigger}} = t_{	ext{now}}$, phát lệnh `ON`.
+     - **Giải phóng TẮT quạt (`RELAY_1 OFF`):** Khi $T \le (	ext{threshold} - 	ext{hysteresis})$ (tức $T \le 28.5^\circ	ext{C}$) **VÀ** `current_state == true` **VÀ** $(t_{	ext{now}} - t_{	ext{last\_trigger}} \ge 	ext{cooldown\_s})$.
+       - *Chuyển trạng thái:* `current_state = false`, gán $t_{	ext{last\_trigger}} = t_{	ext{now}}$, phát lệnh `OFF`.
+     - **Vùng đệm giữ nguyên (Deadband):** Khi $28.5^\circ	ext{C} < T < 30.0^\circ	ext{C}$, không phát bất kỳ lệnh nào, giữ nguyên trạng thái trước đó.
+   - **Chiều Ngưỡng Dưới (`SENSOR_LT` — Máy sưởi `RELAY_2`, ngưỡng 22.0°C, biên trễ 1.5°C):**
+     - **Kích hoạt BẬT máy sưởi (`RELAY_2 ON`):** Khi $T \le 	ext{threshold}$ (tức $T \le 22.0^\circ	ext{C}$) **VÀ** `current_state == false` **VÀ** $(t_{	ext{now}} - t_{	ext{last\_trigger}} \ge 	ext{cooldown\_s})$.
+       - *Chuyển trạng thái:* `current_state = true`, gán $t_{	ext{last\_trigger}} = t_{	ext{now}}$, phát lệnh `ON`.
+     - **Giải phóng TẮT máy sưởi (`RELAY_2 OFF`):** Khi $T \ge (	ext{threshold} + 	ext{hysteresis})$ (tức $T \ge 23.5^\circ	ext{C}$) **VÀ** `current_state == true` **VÀ** $(t_{	ext{now}} - t_{	ext{last\_trigger}} \ge 	ext{cooldown\_s})$.
+       - *Chuyển trạng thái:* `current_state = false`, gán $t_{	ext{last\_trigger}} = t_{	ext{now}}$, phát lệnh `OFF`.
+     - **Vùng đệm giữ nguyên (Deadband):** Khi $22.0^\circ	ext{C} < T < 23.5^\circ	ext{C}$, không phát bất kỳ lệnh nào.
+2. **Kích hoạt theo cạnh (Edge-Triggering):** Lệnh điều khiển chỉ được phát sinh tại thời điểm chuyển trạng thái (Cạnh lên `false → true` hoặc Cạnh xuống `true → false`). Khi cảm biến tiếp tục gửi telemetry nằm trong cùng một vùng trạng thái, Rule Engine bỏ qua, loại bỏ hoàn toàn hiện tượng bão tin nhắn (message storm) lên MQTT hay chattering tiếp điểm rơ-le.
+3. **Khóa liên động phần cứng (Hardware Interlock) & Thứ tự ưu tiên an toàn:**
+   - Trong cùng một phòng/không gian, Quạt làm mát (`RELAY_1`) và Máy sưởi nhiệt (`RELAY_2`) **tuyệt đối không được phép cùng BẬT đồng thời**.
+   - **Ưu tiên chống quá nhiệt (Cooling Safety Override):** Nếu do sai sót cấu hình mà cả hai điều kiện cùng thỏa mãn, cơ chế an toàn cưỡng chế: TẮT ngay Máy sưởi (`RELAY_2 = OFF`) trước khi cho phép Quạt hoạt động.
 
 #### 4.7.5 Luồng đánh giá BLE Telemetry (ví dụ đầy đủ)
 
@@ -1223,106 +1259,43 @@ static void on_button_alarm_stop(gateway_event_t *evt) {
 
 ---
 
-### 4.10 Phân hệ Mở Rộng: RS485 Modbus Master Adapter (Đã lược bỏ / Deprecated)
+### 4.10 Module: BLE Telemetry Adapter (`ble_adapter.h/.c`)
 
-> [!NOTE]
-> **Trạng thái phân hệ:** ĐÃ LƯỢC BỎ (OUT OF SCOPE / DEPRECATED)
-> Để phục vụ mục tiêu hệ thống Smart Home 100% không dây và tinh giản phần cứng, toàn bộ việc kết nối dây qua RS485, chip transceiver SP3485/MAX485 và các bài test `FR-RS485-01`, `FR-RS485-02`, `FR-RS485-03` được gỡ bỏ khỏi phạm vi bắt buộc của dự án. Hệ thống ưu tiên tối đa cho 2 chuẩn không dây tích hợp sẵn trên chip là **Bluetooth Low Energy (BLE)** và **Wi-Fi 2.4 GHz**.
-> Nội dung mục 4.10 dưới đây chỉ được lưu giữ dưới dạng tài liệu kỹ thuật tham khảo cho các kịch bản mở rộng công nghiệp tương lai.
+#### 4.10.1 Mô tả
+Chịu trách nhiệm quét thụ động (Passive/Active BLE Observer) các gói tin quảng bá môi trường (Service UUID `0x181A`, định dạng BTHome / Xiaomi BLE) từ các cảm biến nhiệt ẩm không dây xung quanh.
 
-#### 4.10.1 Mô tả (Tham khảo)
-Chịu trách nhiệm quản lý toàn bộ giao tiếp vật lý RS485 (Half-Duplex) với các thiết bị cảm biến và cơ cấu chấp hành hiện trường theo chuẩn Modbus RTU Master.
-
-#### 4.10.2 Cấu hình phần cứng & Thông số
-| Tham số | Giá trị | Ghi chú |
-|---|---|---|
-| UART Peripheral | UART2 | Chân TX: GPIO 17, RX: GPIO 16 |
-| Flow Control (DE/RE) | GPIO 4 | Mức HIGH: Truyền (TX), Mức LOW: Nhận (RX) |
-| Baudrate mặc định | 9600 bps (hỗ trợ 19200, 115200) | Cấu hình qua Config Manager |
-| Data Frame | 8 data bits, 1 stop bit, No parity (8-N-1) | |
-| Task Priority / Core | Priority 5 / Core 0 | Chạy độc lập với mạng Wi-Fi |
-| Command Queue Depth | 10 slots (`s_rs485_cmd_queue`) | Hàng đợi lệnh điều khiển ghi |
-| Response Timeout | 300 ms (mặc định) | Timeout cho mỗi frame phản hồi từ Slave |
-| Max Consecutive Retries | 3 lần | Sau 3 lần thất bại liên tiếp coi như Offline |
-| Turnaround Delay (t3.5) | ~3.5 ký tự (~4ms ở 9600bps) | Khoảng lặng tối thiểu giữa các frame |
-
-#### 4.10.3 Bảng cấu hình Polling Node (`rs485_node_cfg_t`)
-```c
-typedef struct {
-    char     device_id[32];        // Mã định danh thiết bị (VD: "rs485_th_01")
-    uint8_t  slave_id;             // Địa chỉ Slave Modbus (1 - 247)
-    uint8_t  function_code;        // 0x03 (Read Holding) hoặc 0x04 (Read Input)
-    uint16_t start_reg;            // Địa chỉ thanh ghi bắt đầu
-    uint16_t reg_count;            // Số lượng thanh ghi cần đọc
-    uint32_t poll_interval_ms;     // Chu kỳ polling (VD: 5000ms)
-    uint32_t last_polled_ms;       // Timestamp lần poll gần nhất
-    float    scale;                // Hệ số nhân (VD: 0.1 nếu giá trị trả về nhân 10)
-    float    offset;               // Giá trị bù
-    uint8_t  consecutive_failures; // Số lần timeout liên tiếp hiện tại
-    bool     is_online;            // Trạng thái online của node
-} rs485_node_cfg_t;
-```
-
-#### 4.10.4 State Machine & Circuit Breaker
-```
-  [IDLE] ◄────────────────────────────────────────────────────────┐
-    │                                                             │
-    ├── Có lệnh trong s_rs485_cmd_queue? ──► [XỬ LÝ GHI FC05/06]──┤
-    │                                                             │
-    └── Đến hạn poll node tiếp theo (is_online=true hoặc hết backoff)?
-          │
-          ▼
-    [SEND_REQUEST] (Bật GPIO4 HIGH -> Gửi Modbus Frame -> Kéo GPIO4 LOW)
-          │
-          ▼
-    [WAIT_RESPONSE] (Chờ byte UART2, Timeout 300ms)
-          ├── Nhận đủ frame & CRC16 đúng ──► [PARSE_DATA] ──► Post EVT_RS485_DEVICE_DATA
-          │                                                    (Reset failures = 0, online=true)
-          └── Timeout hoặc CRC16 sai
-                    │
-                    ├── failures < 3 ──► Tăng failures, Retry ngay sau khoảng lặng t3.5
-                    │
-                    └── failures >= 3 ──► [CIRCUIT BREAKER TRIGGERED]
-                                          - Đánh dấu is_online = false
-                                          - Post EVT_DEVICE_OFFLINE_ALERT
-                                          - Bỏ qua sang node kế tiếp (không nghẽn bus)
-                                          - Áp dụng Backoff: Chỉ thử lại sau mỗi 60 giây
-```
-
-#### 4.10.5 Verification Contracts — RS485 Adapter (Mô phỏng hồi quy tại `mock_peripherals.c`)
-
-**Verification Contract — FR-RS485-01: Polling Telemetry Modbus RTU (Mô phỏng phần mềm)**
-- **Tier:** host / target (mock)
-- **Preconditions:** Firmware kích hoạt tầng ngoại vi ảo `mock_peripherals.c` với Slave ID 0x01 (Reg 0x0001 = 250 -> 25.0°C).
-- **Stimulus:** Khởi động Gateway, quan sát bus ảo trong chu kỳ 4 giây.
-- **Expected:** Task `mock_rs485_task` sinh frame Modbus RTU chuẩn, giải mã thành công nhiệt độ 25.0°C, post `EVT_BLE_DEVICE_DATA` hoặc telemetry nội bộ.
-- **Operator instructions:**
-  1. Mở serial monitor 115200 baud.
-  2. Gõ lệnh `mock rs485 start 4000`.
-  3. Xác nhận trên log xuất hiện dòng `[MOCK_RS485] Telemetry generated: 25.0 C`.
-
-**Verification Contract — FR-RS485-02: Timeout, Retry & Safe-Default (Mô phỏng phần mềm)**
-- **Tier:** target (mock)
-- **Preconditions:** Tầng ngoại vi ảo đang phát telemetry định kỳ.
-- **Stimulus:** Bơm lỗi bus timeout qua Serial CLI: `mock rs485 fault timeout`.
-- **Expected:** Hệ thống phát hiện Slave không phản hồi, không bị treo bus UART, giữ nguyên trạng thái an toàn hiện hành và post cảnh báo.
-- **Operator instructions:**
-  1. Gõ `mock rs485 fault timeout` trên Serial CLI.
-  2. Quan sát log hệ thống: xác nhận xuất hiện cảnh báo timeout và Rule Engine duy trì trạng thái an toàn Safe-Default.
-  3. Gõ `mock rs485 fault none` để khôi phục hoạt động bình thường.
-
-**Verification Contract — FR-RS485-03: Downlink Command Execution (Mô phỏng phần mềm)**
-- **Tier:** target (mock)
-- **Preconditions:** Hệ thống nhận lệnh điều khiển thiết bị qua MQTT hoặc Serial CLI.
-- **Stimulus:** Gõ lệnh `cmd send fan_relay_01 ON` hoặc gửi qua MQTT.
-- **Expected:** Lệnh được tiếp nhận, chuyển đổi trạng thái relay đích, và gửi bản tin ACK về `gateway/{id}/command/ack` với `success=true`.
-- **Operator instructions:**
-  1. Gõ `cmd send fan_relay_01 ON` trên Serial CLI.
-  2. Quan sát log: xác nhận relay chuyển trạng thái ON và Event Bus phát `EVT_COMMAND_ACK`.
+#### 4.10.2 Nguyên tắc hoạt động
+1. **Chu kỳ quét:** Quét liên tục hoặc chia sẻ thời gian với Wi-Fi thông qua Software Coexistence (`CONFIG_SW_COEXIST_ENABLE=y`).
+2. **Giải mã gói tin:** Bóc tách Nhiệt độ, Độ ẩm, Mức Pin, RSSI từ advertisement payload. Post `EVT_BLE_DEVICE_DATA` với struct `ble_telemetry_t*`.
+3. **Cơ chế phát hiện ngoại tuyến (Device Offline Detection):**
+   - Nếu một cảm biến đã đăng ký trong `device_list.json` không phát beacon trong **60 giây liên tiếp**:
+   - Gateway tự động chuyển trạng thái cảm biến sang `is_online = false`, post `EVT_DEVICE_OFFLINE_ALERT`.
+   - Rule Engine chuyển sang chế độ an toàn **Safe-Default**: Ngắt ngay các cơ cấu chấp hành nguy hiểm (vd: Máy sưởi `RELAY_2`).
 
 ---
 
-### 4.11 Module: SD Card Storage & Store-and-Forward Queue (`sd_logger.h/.c`)
+### 4.11 Module: Bộ Điều Khiển Relay & Cơ Cấu Chấp Hành (`relay_controller.h/.c`)
+
+#### 4.11.1 Mô tả
+Quản lý trực tiếp 4 kênh Relay vật lý trên bo mạch thông qua GPIO 15, 16, 17, 18 của ESP32-S3. Chịu trách nhiệm thực thi các lệnh bật/tắt từ Rule Engine, Scheduler, Web Dashboard hoặc MQTT Downlink.
+
+#### 4.11.2 Bảng phân bổ tải & Chính sách an toàn (Fail-Safe Matrix)
+
+| Kênh Relay | Chân GPIO | Tải kết nối | Trạng thái mặc định khi Boot / Panic | Hành vi khi cảm biến mất tín hiệu (>60s) | Giới hạn thời gian bật liên tục tối đa |
+|---|---|---|---|---|---|
+| **RELAY_1** | **GPIO 15** | Quạt làm mát (Fan) | TẮT (LOW) | Giữ nguyên hoặc BẬT quạt làm mát | 4 giờ (240 phút) |
+| **RELAY_2** | **GPIO 16** | Máy sưởi nhiệt (Heater) | **BẮT BUỘC TẮT (LOW)** | **CƯỠNG CHẾ TẮT NGAY LẬP TỨC (OFF)** | **30 phút** (Tự ngắt chống cháy nổ) |
+| **RELAY_3** | **GPIO 17** | Máy hút ẩm (Dehumidifier) | TẮT (LOW) | TẮT (OFF) | 60 phút |
+| **RELAY_4** | **GPIO 18** | Đèn / Thiết bị phụ trợ | TẮT (LOW) | Giữ nguyên trạng thái cuối | Không giới hạn |
+
+#### 4.11.3 Cơ chế chống ngắt tải khi Reset ấm (`gpio_hold_en`)
+- Trong trường hợp hệ thống khởi động lại mềm (Warm Reboot do Task Supervisor kích hoạt hoặc OTA hoàn tất), các chân GPIO điều khiển Relay được kích hoạt hàm `gpio_hold_en()`.
+- Trạng thái logic vật lý trên các chân rơ-le được giữ nguyên trong suốt quá trình khởi động lại (~2.5s), không làm ngắt nhả tải đột ngột, bảo vệ tuổi thọ relay cơ và thiết bị điện dân dụng.
+- Riêng đối với tải nguy cơ nhiệt (`RELAY_2` - Máy sưởi), hàm kiểm tra an toàn sau khi khởi động sẽ giải phóng hold và TẮT máy sưởi nếu sau 10 giây không nhận được dữ liệu nhiệt độ hợp lệ.
+
+---
+
+### 4.12 Module: SD Card Storage & Store-and-Forward Queue (`sd_logger.h/.c`)
 
 #### 4.11.1 Mô tả
 Chịu trách nhiệm toàn bộ thao tác I/O với thẻ nhớ MicroSD qua chuẩn SPI và hệ thống tệp FATFS (`esp_vfs_fat_sdspi_mount`). Module hoạt động hoàn toàn bất đồng bộ thông qua `sd_log_task` trên Core 1, tiếp nhận bản tin qua `s_sd_log_queue` (30 slots) để đảm bảo không làm nghẽn các tác vụ thời gian thực. Cung cấp chức năng ghi log lịch sử, log sự cố (crash log) và cơ chế bộ đệm ngoại tuyến FIFO (**Store-and-Forward**) giúp dữ liệu không bị thất thoát khi mất kết nối mạng dài ngày.
@@ -1370,7 +1343,7 @@ Chịu trách nhiệm toàn bộ thao tác I/O với thẻ nhớ MicroSD qua chu
 
 **Verification Contract — FR-SD-01: Ghi Telemetry CSV vào thẻ nhớ**
 - **Tier:** target
-- **Preconditions:** Thẻ nhớ MicroSD định dạng FAT32 được cắm vào khe thẻ (GPIO 14, 15, 2, 13).
+- **Preconditions:** Thẻ nhớ MicroSD định dạng FAT32 được cắm vào khe thẻ (GPIO 11, 12, 13, 10).
 - **Stimulus:** Khởi động hệ thống, để hệ thống thu thập dữ liệu cảm biến BLE và nội bộ trong 30 giây.
 - **Expected:** Thẻ SD mount thành công, LED báo SD sáng (hoặc log xác nhận). Sau 30s, file `/sdcard/data/telemetry/YYYY-MM-DD.csv` được tạo ra chứa các dòng dữ liệu định dạng chuẩn: `timestamp,device_id,value,valid`.
 - **Operator instructions:**
@@ -1397,7 +1370,7 @@ Chịu trách nhiệm toàn bộ thao tác I/O với thẻ nhớ MicroSD qua chu
 
 ---
 
-### 4.12 Module: Config Manager & Cấu hình tại chỗ (`config_manager.h/.c`)
+### 4.13 Module: Config Manager & Cấu hình tại chỗ (`config_manager.h/.c`)
 
 #### 4.12.1 Mô tả
 Chịu trách nhiệm lưu trữ, quản lý và cập nhật toàn bộ tham số hoạt động của Gateway bao gồm: cấu hình mạng Wi-Fi, địa chỉ Server/Broker, múi giờ (POSIX ICT-7), danh sách ánh xạ cảm biến không dây BLE và thiết bị chấp hành, cùng các ngưỡng cảnh báo. Cung cấp cơ chế **cấu hình tại chỗ không phụ thuộc Cloud** thông qua 3 kênh: nạp tệp `config.json` từ thẻ nhớ Flash/SD, giao diện Dark Mode **Web Dashboard** (Port 80) và console **Serial CLI** tương tác qua cổng USB UART0 (115200 baud).
@@ -1437,7 +1410,7 @@ Chịu trách nhiệm lưu trữ, quản lý và cập nhật toàn bộ tham s�
 | Lệnh | Cú pháp | Chức năng |
 |---|---|---|
 | `help` | `help` | Hiển thị danh sách câu lệnh hỗ trợ |
-| `status` | `status` | In trạng thái hệ thống, Uptime, Heap, Active & Alive Heartbeat Mask (`0xD7`) |
+| `status` | `status` | In trạng thái hệ thống, Uptime, Heap, Active & Alive Heartbeat Mask (`0x7F`) |
 | `time` | `time` | In thời gian hiện hành (ICT-7) và epoch timestamp |
 | `config show` | `config show` | In toàn bộ cấu hình đang chạy (Wi-Fi, MQTT Broker, Gateway ID, BLE Devices) |
 | `config set wifi` | `config set wifi <ssid> <pass>` | Cập nhật SSID và mật khẩu Wi-Fi vào NVS |
@@ -1474,37 +1447,49 @@ Chịu trách nhiệm lưu trữ, quản lý và cập nhật toàn bộ tham s�
 
 ---
 
-### 4.13 Module: Task Supervisor & Watchdog (`supervisor.h/.c`)
+### 4.14 Module: Task Supervisor & Watchdog (`supervisor.h/.c`)
 
 #### 4.13.1 Mô tả
 Module đóng vai trò "người giám sát độc lập" (Watchdog Supervisor) chịu trách nhiệm đảm bảo tính khả dụng 24/7 của toàn bộ hệ thống. Sử dụng kết hợp **Hardware Watchdog (WDT)** của SoC ESP32 và cơ chế **Heartbeat Bitmask** trên FreeRTOS để theo dõi từng task nghiệp vụ riêng lẻ. Nếu bất kỳ task nào (dù là task mạng, task RS485, task thẻ nhớ hay task hiển thị) bị rơi vào trạng thái treo (Deadlock, Stuck ở hàm I/O blocking hoặc vòng lặp vô hạn), Supervisor sẽ phát hiện, ghi lại chẩn đoán lỗi vào thẻ nhớ SD và kích hoạt reset an toàn.
 
-#### 4.13.2 Bảng phân bổ Heartbeat Bitmask các Task
-```c
-#define TASK_HEARTBEAT_EVENT_BUS   (1 << 0)  // event_dispatcher_task
-#define TASK_HEARTBEAT_BLE         (1 << 1)  // ble_scan_task
-#define TASK_HEARTBEAT_UPLINK      (1 << 2)  // uplink_task
-#define TASK_HEARTBEAT_SD_LOGGER   (1 << 3)  // sd_log_task
-#define TASK_HEARTBEAT_SCHEDULER   (1 << 4)  // scheduler_task
-#define TASK_HEARTBEAT_DISPLAY     (1 << 5)  // display_task
+#### 4.14.2 Bảng phân bổ Heartbeat Bitmask các Task (Chuẩn hóa 7 Task Production, Mask 0x7F)
 
-#define TASK_ALL_HEARTBEATS_MASK   (0x3F)    // Tất cả 6 task bắt buộc
-```
+| Bit | Tên Task | Cờ Heartbeat (`task_mask`) | Chu kỳ báo danh | Chu kỳ kiểm tra | Timeout tối đa |
+|:---:|---|---|:---:|:---:|:---:|
+| **0** | `event_dispatcher` | `TASK_HEARTBEAT_EVENT_BUS` (`1 << 0`) | Mỗi event / Timeout 1s | 1000ms | **15 giây** |
+| **1** | `ble_scan_task` | `TASK_HEARTBEAT_BLE` (`1 << 1`) | 1000ms | 1000ms | **15 giây** |
+| **2** | `uplink_task` | `TASK_HEARTBEAT_UPLINK` (`1 << 2`) | 1000ms | 1000ms | **15 giây** |
+| **3** | `sd_log_task` | `TASK_HEARTBEAT_SD_LOGGER` (`1 << 3`) | Mỗi log ghi / Timeout 1s | 1000ms | **15 giây** |
+| **4** | `scheduler_task` | `TASK_HEARTBEAT_SCHEDULER` (`1 << 4`) | 1000ms | 1000ms | **15 giây** |
+| **5** | `display_task` | `TASK_HEARTBEAT_DISPLAY` (`1 << 5`) | 1000ms (1 FPS) | 1000ms | **15 giây** |
+| **6** | `serial_cli_task` | `TASK_HEARTBEAT_CLI` (`1 << 6`) | UART read timeout 1s | 1000ms | **15 giây** |
+| *(7)*| *(mock_harness)* | *(Chỉ bật trong môi trường test)* | *1000ms* | *1000ms* | *15 giây* |
 
-#### 4.13.3 Chu trình giám sát & Xử lý sự cố
-1. `supervisor_task` chạy ở mức ưu tiên cao nhất (**Priority 7**, Core 0), thức dậy mỗi **1000ms**.
-2. Mỗi task nghiệp vụ sau khi hoàn thành một chu kỳ làm việc (hoặc sau mỗi lượt xử lý queue) bắt buộc phải gọi hàm:
-   ```c
-   supervisor_report_heartbeat(uint32_t task_mask);
-   ```
-3. `supervisor_task` tích lũy các cờ đã báo danh vào biến `s_current_heartbeats`.
-4. Nếu một task **không báo danh liên tục quá 15 giây** (`SUPERVISOR_MAX_STALL_TIME_MS`):
-   - Supervisor xác định chính xác Task ID bị treo.
-   - Ghi khẩn cấp thông tin chẩn đoán lỗi vào file `/sdcard/logs/crash.log`: Task Name, Thời gian treo, Bộ nhớ Free Heap khả dụng, Stack Watermark nhỏ nhất của task.
-   - Ép `f_sync()` tức thời.
-   - Gọi `esp_restart()` để đưa Gateway trở lại trạng thái vận hành ổn định.
+- **Mặt nạ giám sát chuẩn Production (Active Mask):** `#define TASK_ACTIVE_MASK_PRODUCTION (0x7F)` (bật đủ 7 bit 0..6: `(1<<0)|...|(1<<6) = 127 = 0x7F`).
+- **Ghi chẩn đoán sự cố vào RTC Slow Memory (Không phụ thuộc SD Card):**
+  - Khi phát hiện bất kỳ task nào không báo nhịp tim quá **15 giây**:
+  - `supervisor_task` đóng gói chẩn đoán vào vùng nhớ **RTC Slow SRAM (`RTC_NOINIT_ATTR`)** vốn được duy trì qua reset phần mềm:
+    ```c
+    typedef struct {
+        uint32_t magic;           // 0xDEADBEEF
+        uint8_t  failed_task_bit; // Bit task bị treo (0..6)
+        char     task_name[16];   // Tên task (vd: "display_task")
+        uint32_t free_heap;       // Dung lượng heap tại thời điểm treo
+        uint32_t uptime_s;        // Thời gian hoạt động trước khi chết
+        uint32_t timestamp;       // UNIX epoch
+    } rtc_crash_dump_t;
+    ```
+  - In cảnh báo khẩn cấp ra cổng Serial Console UART0: `[SUP] CRITICAL: Task '%s' STALLED! Dumping to RTC Memory & restarting...`.
+  - Gọi hàm khởi động lại an toàn: `esp_restart()`.
+  - Khi boot lại: Hệ thống kiểm tra magic `0xDEADBEEF` trong RTC Memory, in báo cáo chẩn đoán sự cố ra terminal, post sự kiện ghi log và xóa cờ magic.
 
-#### 4.13.4 Verification Contracts — Task Supervisor
+#### 4.14.3 Chu trình giám sát & Xử lý sự cố
+1. `supervisor_task` chạy ở mức ưu tiên cao nhất (**Priority 7**, Core 0), thức dậy mỗi **1000ms**. Định kỳ gọi `esp_task_wdt_reset()` để nuôi phần cứng TWDT của chip ESP32-S3.
+2. Tất cả 7 task định kỳ báo danh qua hàm `supervisor_report_heartbeat(task_mask)`.
+3. `serial_cli_task` sử dụng hàm đọc `uart_read_bytes` kèm timeout `pdMS_TO_TICKS(1000)` để đảm bảo vòng lặp không bị kẹt vô hạn khi không có người gõ phím.
+4. `ble_scan_task` sử dụng khoảng delay 1 giây và định kỳ báo nhịp tim, loại bỏ hoàn toàn hiện tượng delay 10 giây gây reset nhầm.
+
+#### 4.14.4 Verification Contracts — Task Supervisor
 
 **Verification Contract — FR-SUP-01: Báo danh Heartbeat bình thường**
 - **Tier:** target
@@ -1514,7 +1499,7 @@ Module đóng vai trò "người giám sát độc lập" (Watchdog Supervisor) 
 - **Prohibited:** Reset ngẫu nhiên khi hệ thống hoạt động bình thường.
 - **Operator instructions:**
   1. Khởi động thiết bị, mở serial monitor.
-  2. Quan sát log định kỳ: `[SUP] System healthy. Heap free: XXX KB, All tasks alive (mask=0x3F)`.
+  2. Quan sát log định kỳ: `[SUP] System healthy. Heap free: XXX KB, All tasks alive (mask=0x7F)`.
 
 **Verification Contract — FR-SUP-02: Bắt lỗi Task bị treo & Tự khôi phục an toàn**
 - **Tier:** target
@@ -1532,39 +1517,36 @@ Module đóng vai trò "người giám sát độc lập" (Watchdog Supervisor) 
 
 ---
 
-### 4.14 Boot Sequence tổng thể (Cập nhật)
+### 4.15 Boot Sequence tổng thể (Hoàn chỉnh & Chuẩn hóa)
 
 ```
 app_main()
     │
-    ├── 1. nvs_flash_init()                          ← Khởi tạo NVS Flash lưu trữ tham số
-    ├── 2. event_bus_init()                          ← Khởi tạo Event Queue (32 slots)
-    ├── 3. supervisor_init()                         ← Khởi tạo Task Supervisor (TWDT, Core 0, Prio 10)
-    │       ├── Khởi tạo ESP Task WDT (TWDT)
-    │       ├── Đăng ký mask giám sát 8 tasks (0xD7)
-    │       └── Tạo supervisor_task (Core 0)
+    ├── 1. nvs_flash_init()                          ← Khởi tạo NVS Flash lưu Wi-Fi & System parameters
+    ├── 2. storage_init()                            ← Gắn kết (Mount) phân vùng SPIFFS /spiffs (2MB)
+    ├── 3. sd_logger_init()                          ← Khởi tạo SPI2 host & Thẻ nhớ SD (hoặc fallback /spiffs)
+    ├── 4. event_bus_init()                          ← Khởi tạo Event Queue trung tâm (32 slots)
+    ├── 5. supervisor_init()                         ← Khởi tạo Task Supervisor (Core 0, Priority 7, Mask 0x7F, 15s)
+    │       ├── Khởi tạo ESP Task WDT phần cứng (TWDT 15s)
+    │       ├── Kiểm tra & in Crash Dump từ RTC Slow Memory (nếu có sau sự cố)
+    │       └── Đăng ký Active Task Mask = 0x7F
     │
-    ├── 4. rtc_init()                                ← Nạp POSIX Timezone "ICT-7" từ NVS & RTC DS3231
-    ├── 5. config_manager_init()                     ← Nạp cấu hình Wi-Fi, MQTT, danh sách BLE
-    ├── 6. wifi_provisioning_init() & web_server()   ← Wi-Fi SoftAP Portal & Web Dashboard (Port 80)
-    ├── 7. mqtt_adapter_init() & uplink_init()       ← Uplink Client & Telemetry Publisher (Core 1)
-    ├── 8. rule_engine_init()                        ← Engine IF-THEN đánh giá cạnh & trễ hysteresis
-    │       └── register EVT_BLE_DEVICE_DATA,
-    │                    EVT_SCHEDULE_AUTOMATION_TRIGGERED
+    ├── 6. rtc_init()                                ← Khởi tạo bus I2C0 (GPIO 8/9), đọc UTC từ DS3231, nạp TZ "ICT-7"
+    ├── 7. relay_init()                              ← Cấu hình GPIO 15, 16, 17, 18 (Safe-State LOW, bật gpio_hold_en)
+    ├── 8. display_init()                            ← Khởi tạo OLED SSD1327 (I2C 0x3C), nút bấm (GPIO 0/4), buzzer (GPIO 1)
+    │       └── VẼ MÀN HÌNH ĐỒNG HỒ NGAY LẬP TỨC (Đạt KPI-BOOT-01 < 1.5s không phụ thuộc mạng)
     │
-    ├── 9. scheduler_init()                          ← Bộ lập lịch báo thức và tự động hóa (Core 0)
-    │       └── Tạo scheduler_task (Core 0, priority 5)
+    ├── 9. config_manager_init()                     ← Nạp cấu hình từ /spiffs/config.json
+    ├── 10. wifi_provisioning_init() & web_server()  ← SoftAP cấu hình Wi-Fi & Web Dashboard (Port 80)
+    ├── 11. mqtt_adapter_init() & uplink_init()      ← Khởi tạo MQTT Client kết nối Broker (Core 1, QoS 1)
+    ├── 12. rule_engine_init()                       ← Nạp /spiffs/rules.json, đăng ký đánh giá biên trễ hysteresis
+    ├── 13. scheduler_init()                         ← Nạp /spiffs/schedule.json, tạo scheduler_task (Core 0, Priority 4)
+    ├── 14. ble_adapter_init()                       ← Khởi tạo ngăn xếp NimBLE, bắt đầu passive scan cảm biến môi trường
+    ├── 15. serial_cli_init()                        ← Giao diện dòng lệnh cứu hộ UART0 (Core 1, Priority 2, timeout 1s)
     │
-    ├── 10. mock_peripherals_init()                  ← Tầng ngoại vi ảo chạy ngầm phục vụ kiểm thử
-    ├── 11. ble_adapter_init()                       ← Khởi tạo NimBLE stack & Central Passive Observer
-    │       └── Tạo ble_scan_task (Core 0, priority 5)
-    │
-    ├── 12. serial_cli_init()                        ← Console tương tác UART0 (Core 1, priority 3)
-    │       └── Tạo serial_cli_task (Core 1)
-    │
-    └── 13. event_bus_start_dispatcher()             ← BẮT ĐẦU ĐIỀU PHỐI (SAU CÙNG)
-            ├── Tạo event_dispatcher_task (Core 0, priority 6)
-            └── Phát tín hiệu khởi động [SYS] Alive marker 1
+    └── 16. event_bus_start_dispatcher()             ← BẮT ĐẦU ĐIỀU PHỐI EVENT BUS (SAU CÙNG)
+            ├── Tạo event_dispatcher_task (Core 0, Priority 6)
+            └── Bắt đầu chu trình xử lý sự kiện toàn hệ sinh thái
 ```
 
 > **Tại sao supervisor_init trước dispatcher?** Supervisor cần sẵn sàng giám sát ngay từ thời điểm dispatcher và các tác vụ bắt đầu nhận tải sự kiện đầu tiên. Dispatcher luôn là bước kích hoạt cuối cùng để mọi module đã đăng ký handler đầy đủ.
@@ -1712,7 +1694,7 @@ Giao diện duy nhất để user quản lý hệ thống (không có mobile app
 | status | ENUM | 'online','offline' | Cập nhật qua MQTT LWT |
 | last_seen | TIMESTAMP | | Thời điểm cuối cùng nhận message |
 | firmware_version | VARCHAR(16) | | VD: "1.0.0" |
-| timezone | VARCHAR(64) | | VD: "Asia/Ho_Chi_Minh" |
+| timezone | VARCHAR(64) | | VD: "ICT-7" |
 | created_at | TIMESTAMP | DEFAULT NOW() | |
 
 #### 7.2.3 Device
@@ -1937,7 +1919,29 @@ Lấy thông tin gateway.
   "status": "online",
   "last_seen": "2026-08-14T14:50:00Z",
   "firmware_version": "1.0.0",
-  "timezone": "Asia/Ho_Chi_Minh"
+  "timezone": "ICT-7"
+}
+```
+
+#### POST /gateways/claim
+Gán một Gateway mới vào tài khoản người dùng thông qua mã xác thực cục bộ (Claim Code).
+
+- **Sinh mã Claim Code:** Trong lần đầu khởi động, Gateway tự sinh một chuỗi ngẫu nhiên 6 ký tự chữ hoa và số (vd: `GW-9821A0`), lưu vào NVS và hiển thị trực tiếp trên màn hình OLED (Trang thông tin hệ thống). Người dùng xem mã trên đồng hồ để nhập vào Web App.
+
+- **Request:**
+```json
+{
+  "claim_code": "GW-9821A0",
+  "name": "Đồng hồ Phòng khách"
+}
+```
+
+- **Response (200 OK):**
+```json
+{
+  "gateway_id": "gw_a1b2c3d4",
+  "name": "Đồng hồ Phòng khách",
+  "message": "Gateway claimed successfully"
 }
 ```
 
@@ -1996,6 +2000,28 @@ Thêm thiết bị mới.
   "id": 2,
   "device_id": "sensor_02",
   "message": "Device created successfully"
+}
+```
+
+#### POST /gateways/claim
+Gán một Gateway mới vào tài khoản người dùng thông qua mã xác thực cục bộ (Claim Code).
+
+- **Sinh mã Claim Code:** Trong lần đầu khởi động, Gateway tự sinh một chuỗi ngẫu nhiên 6 ký tự chữ hoa và số (vd: `GW-9821A0`), lưu vào NVS và hiển thị trực tiếp trên màn hình OLED (Trang thông tin hệ thống). Người dùng xem mã trên đồng hồ để nhập vào Web App.
+
+- **Request:**
+```json
+{
+  "claim_code": "GW-9821A0",
+  "name": "Đồng hồ Phòng khách"
+}
+```
+
+- **Response (200 OK):**
+```json
+{
+  "gateway_id": "gw_a1b2c3d4",
+  "name": "Đồng hồ Phòng khách",
+  "message": "Gateway claimed successfully"
 }
 ```
 
@@ -2107,6 +2133,28 @@ Tạo schedule mới.
 }
 ```
 
+#### POST /gateways/claim
+Gán một Gateway mới vào tài khoản người dùng thông qua mã xác thực cục bộ (Claim Code).
+
+- **Sinh mã Claim Code:** Trong lần đầu khởi động, Gateway tự sinh một chuỗi ngẫu nhiên 6 ký tự chữ hoa và số (vd: `GW-9821A0`), lưu vào NVS và hiển thị trực tiếp trên màn hình OLED (Trang thông tin hệ thống). Người dùng xem mã trên đồng hồ để nhập vào Web App.
+
+- **Request:**
+```json
+{
+  "claim_code": "GW-9821A0",
+  "name": "Đồng hồ Phòng khách"
+}
+```
+
+- **Response (200 OK):**
+```json
+{
+  "gateway_id": "gw_a1b2c3d4",
+  "name": "Đồng hồ Phòng khách",
+  "message": "Gateway claimed successfully"
+}
+```
+
 #### PUT /gateways/{gateway_id}/schedules/{id}
 
 Cập nhật schedule.
@@ -2162,6 +2210,28 @@ Tạo rule mới.
 }
 ```
 
+#### POST /gateways/claim
+Gán một Gateway mới vào tài khoản người dùng thông qua mã xác thực cục bộ (Claim Code).
+
+- **Sinh mã Claim Code:** Trong lần đầu khởi động, Gateway tự sinh một chuỗi ngẫu nhiên 6 ký tự chữ hoa và số (vd: `GW-9821A0`), lưu vào NVS và hiển thị trực tiếp trên màn hình OLED (Trang thông tin hệ thống). Người dùng xem mã trên đồng hồ để nhập vào Web App.
+
+- **Request:**
+```json
+{
+  "claim_code": "GW-9821A0",
+  "name": "Đồng hồ Phòng khách"
+}
+```
+
+- **Response (200 OK):**
+```json
+{
+  "gateway_id": "gw_a1b2c3d4",
+  "name": "Đồng hồ Phòng khách",
+  "message": "Gateway claimed successfully"
+}
+```
+
 #### PUT /gateways/{gateway_id}/rules/{id}
 
 Cập nhật rule.
@@ -2170,28 +2240,8 @@ Cập nhật rule.
 
 Xóa rule.
 
-#### POST /api/v1/gateways/claim
 
-Người dùng gán Gateway mới vào tài khoản sau khi thiết bị lên mạng.
 
-**Headers:** `Authorization: Bearer <user-jwt>`  
-**Request Body:**
-```json
-{
-  "claim_code": "GW-9821A0",
-  "name": "Đồng Hồ Thông Minh Phòng Khách"
-}
-```
-**Response 200:**
-```json
-{
-  "success": true,
-  "gateway_id": "gw_9821a0",
-  "message": "Gateway claimed successfully"
-}
-```
-
-### 8.6.2 Cơ Chế Cloud Push Thông Qua MQTT
 
 ### 8.6 Sync APIs (Gateway gọi)
 
@@ -2347,14 +2397,16 @@ Tất cả các endpoint trả về lỗi đều sử dụng chung format JSON s
 
 ```
 gateway/{gateway_id}/                           ← prefix chung
-    status                                       ← "online"/"offline" (retained, LWT)
+    status                                       ← "online"/"offline" (retained, LWT, QoS 1)
     device/{device_id}/
-        telemetry                                ← Gateway → Backend (QoS 0)
-        command                                  ← Backend → Gateway (QoS 1)
+        telemetry                                ← Gateway → Backend (QoS 1)
+        command                                  ← Backend → Gateway (QoS 1, có command_id & ttl)
+        command/ack                              ← Gateway → Backend (QoS 1, phản hồi kết quả thực thi)
+    telemetry/
+        batch                                    ← Gateway → Backend (QoS 1, backfill khi mạng phục hồi)
     config/
         schedule                                 ← Backend → Gateway (QoS 1, retained)
-    sync/
-        event_log                                ← Gateway → Backend (QoS 1)
+    events                                       ← Gateway → Backend (QoS 1, luồng sự kiện thời gian thực)
 ```
 
 ### 9.2 Payload Format
@@ -2372,12 +2424,28 @@ Tất cả payload dùng JSON.
 }
 ```
 
-#### Command (Backend → Gateway)
+#### Command Downlink (Backend → Gateway)
 ```json
 {
+  "command_id": "550e8400-e29b-41d4-a716-446655440000",
+  "target_device_id": "relay_1",
   "command": "ON",
+  "ttl_seconds": 60,
   "source": "web_app",
   "timestamp": 1723621234
+}
+```
+
+#### Command ACK Uplink (Gateway → Backend)
+```json
+{
+  "command_id": "550e8400-e29b-41d4-a716-446655440000",
+  "target_device_id": "relay_1",
+  "success": true,
+  "error_code": 0,
+  "message": "Relay 1 turned ON successfully",
+  "execution_time_ms": 45,
+  "timestamp": 1723621235
 }
 ```
 
@@ -2390,17 +2458,21 @@ hoặc LWT:
 "offline"
 ```
 
-### 9.3 QoS
+### 9.3 QoS & Triển Khai MQTT Broker
 
 | Topic | QoS | Lý do |
 |---|---|---|
-| telemetry | 0 | Mất 1-2 data point không ảnh hưởng lớn |
-| command | 1 | Lệnh điều khiển phải đảm bảo tới nơi |
-| config/schedule | 1 | Config quan trọng, không được mất |
-| status | 0 | Retained, LWT tự xử lý |
-| sync/event_log | 1 | Log cần đảm bảo tới Backend |
+| `gateway/{id}/device/{dev}/telemetry` | 1 | Đảm bảo dữ liệu cảm biến đo lường không bị thất lạc |
+| `gateway/{id}/telemetry/batch` | 1 | Dữ liệu lưu đệm ngoại tuyến (Store-and-Forward) cần đối soát đủ |
+| `gateway/{id}/device/{dev}/command` | 1 | Lệnh điều khiển bắt buộc phải đến đích (Exactly/At-least once) |
+| `gateway/{id}/device/{dev}/command/ack` | 1 | Báo cáo kết quả thực thi lệnh về Backend để cập nhật UI |
+| `gateway/{id}/config/schedule` | 1 | Cấu hình lịch biểu và luật tự động hóa, retained |
+| `gateway/{id}/status` | 1 | Retained Last Will & Testament (LWT) |
+| `gateway/{id}/events` | 1 | Nhật ký sự kiện hệ thống |
 
----
+> **Khuyến nghị môi trường Broker (Bảo mật & Ổn định):**
+> - **Triển khai Production:** Sử dụng **Embedded Aedes MQTT Broker** tích hợp sẵn trên Cloud Backend (cổng 1883 nội bộ Docker) hoặc cài đặt cụm **Eclipse Mosquitto** độc lập có xác thực chứng chỉ TLS/SSL (cổng 8883) và bảo vệ bằng mật khẩu (Username/Password per-gateway).
+> - **Cảnh báo Broker công cộng:** Tùy chọn `mqtt://broker.emqx.io:1883` chỉ được dùng làm môi trường thử nghiệm nhanh (Sandbox/Dev Test). Tuyệt đối không dùng cho vận hành thực tế vì bất kỳ ai cũng có thể đọc/ghi đè lệnh điều khiển thiết bị trong nhà.
 
 ## 10. Use Cases
 
@@ -2524,35 +2596,44 @@ hoặc LWT:
 | NTP sync fail | `rtc_sync_from_ntp_and_save()` | Log WARN, giữ giờ DS3231 cũ | Giờ có thể lệch vài giây/phút |
 | Backend không phản hồi | `cloud_sync_task` | Log ERROR, giữ config local, thử lại lần sau | Gateway chạy bình thường với data cũ |
 
-### 11.2 Safe-default Pattern
+### 11.2 Safe-default Pattern & Ma Trận Ngắt An Toàn Cơ Cấu Chấp Hành
 
 ```
-Sensor đọc lỗi (valid=false)
+Cảm biến mất tín hiệu / Hỏng (valid = false hoặc Timeout > 60s)
     │
-    ├── Rule Engine: KHÔNG đánh giá rule
-    │                KHÔNG toggle thiết bị
-    │                Giữ trạng thái cuối cùng (quạt đang bật → vẫn bật)
+    ├── Rule Engine: NGỪNG đánh giá các luật tự động liên quan
     │
-    ├── Post EVT_SENSOR_VALUE_INVALID
+    ├── RELAY_2 (Máy sưởi nhiệt / Hazard):
+    │     └── BẮT BUỘC NGẮT CƯỠNG CHẾ (OFF) NGAY LẬP TỨC
+    │         (Không cho phép giữ trạng thái cũ, triệt tiêu nguy cơ quá nhiệt gây hỏa hoạn)
     │
-    └── Display: hiển thị cảnh báo sensor lỗi (nếu implement)
+    ├── RELAY_1 (Quạt làm mát / Fan):
+    │     └── Giữ trạng thái ON nếu trước đó nhiệt độ cao, hoặc duy trì tốc độ an toàn
+    │
+    ├── RELAY_3 (Máy hút ẩm): TẮT an toàn (OFF)
+    │
+    └── Hiển thị cảnh báo lên màn hình OLED & Báo động Web Dashboard
 ```
 
-### 11.3 Task Watchdog & Supervisor Matrix (Chuẩn hóa 8 Task, Timeout 10s, Mask 0xD7)
+### 11.3 Task Watchdog & Supervisor Matrix (Chuẩn hóa 7 Task Production, Timeout 15s, Mask 0x7F)
 
-| Task | Watchdog Mechanism | Timeout | Hành vi khi timeout |
-|---|---|---|---|
-| `supervisor_task` | Hardware WDT (ESP TWDT) | 3s | Reset hardware nếu supervisor bị kẹt |
-| `event_dispatcher_task` | Heartbeat bitmask (bit 0) | 10s | Supervisor ghi chẩn đoán vào RTC Fast Memory & Console -> Gọi `esp_restart()` ngay lập tức |
-| `mock_rs485_task` | Heartbeat bitmask (bit 1) | 10s | Supervisor ghi chẩn đoán vào RTC Fast Memory & Console -> Gọi `esp_restart()` ngay lập tức |
-| `uplink_task` | Heartbeat bitmask (bit 2) | 10s | Tự restart Wi-Fi/MQTT; nếu quá 3 lần -> Reset an toàn |
-| `main_task` | Heartbeat bitmask (bit 3) | 10s | Supervisor phát hiện stall -> Reset an toàn |
-| `scheduler_task` | Heartbeat bitmask (bit 4) | 10s | Supervisor log cảnh báo, reset timer/RTC task |
-| `display_task` | Heartbeat bitmask (bit 5) | 10s | Reinit màn hình I2C SSD1327 |
-| `serial_cli_task` | Heartbeat bitmask (bit 6) | 10s | Flush UART0 buffer, reset CLI shell |
-| `ble_scan_task` | Heartbeat bitmask (bit 7) | 10s | Restart NimBLE central scanner, khôi phục passive observation |
+| Task | Watchdog Mechanism | Chu kỳ nhịp tim | Timeout | Hành vi xử lý khi phát hiện Task bị treo |
+|---|---|:---:|:---:|---|
+| `supervisor_task` | Hardware TWDT (Core 0) | 1000ms | 15s | Phần cứng ESP32-S3 tự động reboot khi supervisor bị kẹt |
+| `event_dispatcher_task` | Heartbeat bit 0 | ≤ 1000ms | 15s | Ghi chẩn đoán vào RTC Slow Memory → `esp_restart()` |
+| `ble_scan_task` | Heartbeat bit 1 | 1000ms | 15s | Ghi chẩn đoán vào RTC Slow Memory → `esp_restart()` |
+| `uplink_task` | Heartbeat bit 2 | 1000ms | 15s | Tự kết nối lại Wi-Fi/MQTT; nếu task kẹt loop → Reset an toàn |
+| `sd_log_task` | Heartbeat bit 3 | ≤ 1000ms | 15s | Flush buffer, ghi RTC Slow Memory → `esp_restart()` |
+| `scheduler_task` | Heartbeat bit 4 | 1000ms | 15s | Ghi chẩn đoán vào RTC Slow Memory → `esp_restart()` |
+| `display_task` | Heartbeat bit 5 | 1000ms | 15s | Ghi chẩn đoán vào RTC Slow Memory → `esp_restart()` |
+| `serial_cli_task` | Heartbeat bit 6 | 1000ms (UART read timeout 1s) | 15s | Ghi chẩn đoán vào RTC Slow Memory → `esp_restart()` |
 
-> **Quy chuẩn thời gian khôi phục (M17):** Thời gian phát hiện treo task là **10 giây** (chu kỳ kiểm tra 2 giây); thời gian khởi động lại chip ESP32-S3 là **~2.5 giây**. Tổng thời gian từ khi task chết đến khi hệ thống hồi phục hoàn toàn là **< 12.5 giây**, đáp ứng tuyệt đối chỉ tiêu **M17 (< 15 giây)**.
+> **Quy chuẩn thời gian khôi phục an toàn (M17):**
+> - Ngưỡng phát hiện task treo: **15 giây** (Chu kỳ kiểm tra 1000ms của `supervisor_task`).
+> - Khi phát hiện treo, thông tin chẩn đoán (Task ID, Tên task, Free Heap, Uptime) được lưu vào **RTC Slow Memory** (không bị mất qua software reset).
+> - Chân relay kích hoạt `gpio_hold_en()` để không chattering tải.
+> - Thời gian khởi động lại chip ESP32-S3 đến khi nạp lại trạng thái: **~2.5 giây**.
+> - Sau khi boot, firmware in báo cáo sự cố từ RTC Slow Memory ra serial console.
 
 ### 11.4 Xử lý Lỗi & Nhiễu Sóng Cảm Biến Không Dây BLE
 1. **Cảm biến mất kết nối / Hết pin (Device Offline):**
@@ -2584,7 +2665,7 @@ Sensor đọc lỗi (valid=false)
 
 | Yêu cầu | Chỉ tiêu | Ghi chú |
 |---|---|---|
-| Rule Engine latency | < 50ms từ lúc nhận telemetry tới lúc post action | Đo trên ESP32 240MHz |
+| Rule Engine latency | < 50ms từ lúc nhận telemetry tới lúc post action | Đo trên ESP32-S3 240MHz (160MHz nominal) |
 | Scheduler accuracy | ± 5 giây so với RTC | Poll mỗi 5s |
 | BLE scan interval | 10 giây (giữa các vòng poll) | Mỗi device mất 0.5–3s. Với > 3 device, vòng poll > 10s — xem §4.5.4 |
 | OLED refresh rate | 1 FPS (clock screen) | Đủ cho hiển thị đồng hồ |
@@ -2731,7 +2812,7 @@ Bảng tiêu chí nghiệm thu dưới đây map từng tính năng Must-have (M
 | ID | Tính năng | UC liên quan | Tiêu chí Pass | Tiêu chí Fail |
 |---|---|---|---|---|
 | M01 | Hiển thị giờ, ngày, nhiệt độ trên OLED | UC-01 | OLED hiển thị đúng giờ hiện tại (± 5s so với NTP), ngày, nhiệt độ đọc từ sensor. Tự cập nhật mỗi giây | Giờ sai > 1 phút, hoặc OLED trống/không phản hồi sau boot |
-| M02 | Kết nối BLE sensor, đọc telemetry | UC-02, UC-03 | Gateway scan, kết nối, đọc GATT characteristic từ ≥ 1 BLE sensor đã đăng ký. Giá trị hiển thị trên OLED và/hoặc Web App | Không thể kết nối BLE sau 3 chu kỳ scan (30s), hoặc giá trị `valid` luôn false |
+| M02 | Quét & Đọc Telemetry BLE Sensor | UC-02, UC-03 | Gateway quét thụ động (Passive Advertisement Scan), bóc tách dữ liệu nhiệt ẩm Service 0x181A từ ≥ 1 BLE sensor đã đăng ký. Hiển thị thông số lên màn hình OLED & Web App | Không nhận được beacon BLE sau 60 giây, hoặc giá trị `valid` luôn false |
 | M03 | Kết nối MQTT devices, nhận/gửi lệnh | UC-02, UC-03 | Gateway kết nối MQTT broker, subscribe topic command, publish telemetry. Web App nhận được telemetry real-time | MQTT connection fail liên tục, hoặc lệnh command không tới device |
 | M04 | Rule Engine: IF condition THEN action | UC-03 | Tạo rule "IF sensor_01 > 30 THEN fan_01 = ON" trên Web. Khi sensor báo 31°C → quạt bật trong < 5s. Khi sensor báo 29°C → quạt không bật (hoặc tắt nếu có rule ngược) | Rule không trigger khi điều kiện thỏa, hoặc trigger sai (false positive) |
 | M05 | Local Scheduler: automation/alarm theo giờ | UC-04 | Tạo schedule "17:30 bật đèn" trên Web. Đến 17:30 → đèn bật tự động (± 5s). Tạo alarm "06:30" → đến 06:30 buzzer kêu | Schedule không trigger đúng giờ (sai > 10s), hoặc trigger trùng (bắn 2 lần cùng phút) |
@@ -2746,7 +2827,7 @@ Bảng tiêu chí nghiệm thu dưới đây map từng tính năng Must-have (M
 | **M14** | **BLE Environmental Sensing & Telemetry Ingestion** | **UC-02, UC-03** | **Gateway quét và giải mã thành công gói tin quảng bá BLE (UUID 0x181A / BTHome V2), trích xuất nhiệt độ/độ ẩm và đưa vào Event Bus trong < 500ms.** | **Không quét được cảm biến; sai lệch dữ liệu phân tích.** |
 | **M15** | **SD Card Logger & Offline Store-and-Forward** | **UC-05, UC-06** | **Dữ liệu telemetry ghi vào `/sdcard/data/telemetry/*.csv`. Khi mất mạng, bản tin lưu vào `sync_queue.bin`; khi có mạng lại, tự động gửi bù không sót gói nào.** | **Mất dữ liệu khi offline; crash thẻ nhớ khi mất nguồn đột ngột.** |
 | **M16** | **Config Manager & Dynamic Sensor Registration** | **UC-01** | **Quản lý cấu hình NVS bền vững; lệnh CLI `ble reg`, `wifi scan`, `config show` và Web Dashboard cập nhật thông số hệ thống chính xác.** | **Mất cấu hình khi reset; CLI/Web không lưu được thông số.** |
-| **M17** | **Task Supervisor & Watchdog 24/7** | **UC-05** | **Heartbeat của tất cả task được giám sát liên tục; khi cố tình gây treo 1 task, supervisor ghi `crash.log` ra SD và reboot trong < 15s.** | **Hệ thống treo im lặng không tự reset; WDT không fire.** |
+| **M17** | **Task Supervisor & Watchdog 24/7** | **UC-05** | **Heartbeat của 7 task production (mask 0x7F) được giám sát liên tục; khi cố tình đóng băng 1 task (vd: test freeze), supervisor ghi chẩn đoán vào RTC Slow Memory và reboot an toàn đúng 15 giây.** | **Hệ thống treo im lặng không tự reset; TWDT không kích hoạt sau 15 giây.** |
 
 ### 14.3 Bảng nghiệm thu Should-have
 
@@ -2772,18 +2853,22 @@ Bảng tiêu chí nghiệm thu dưới đây map từng tính năng Must-have (M
 
 ## 15. Phụ lục
 
-### 15.1 Sơ đồ phân bổ Flash Partition (4MB)
+### 15.1 Sơ đồ phân bổ Flash Partition (16MB SPI Flash — ESP32-S3)
 
-```
-Offset     Size    Name        Type     Mô tả
-──────     ────    ────        ────     ─────
-0x9000     24 KB   nvs         data     Wi-Fi credentials, gateway config
-0xF000     8  KB   otadata     data     OTA metadata
-0x11000    4  KB   phy_init    data     RF calibration
-0x20000    1  MB   factory     app      Firmware chính
-0x120000   1  MB   ota_0       app      OTA slot (Should-have)
-0x220000   1.5 MB  storage     data     LittleFS: schedule, device_list, event_log
-```
+Khớp chuẩn xác với file cấu hình [`partitions.csv`](file:///home/chien/ai-workspace/qwen-test/firmware/partitions.csv) của dự án:
+
+| Tên Partition | Phân loại | Kiểu con | Offset | Kích thước | Mục đích sử dụng |
+|---|---|---|---|---|---|
+| `nvs` | data | nvs | `0x9000` | 24 KB (`0x6000`) | Lưu trữ tham số hệ thống, Wi-Fi credentials, Broker URI, Timezone |
+| `otadata` | data | ota | `0xF000` | 8 KB (`0x2000`) | Quản lý trạng thái chuyển đổi slot nạp OTA và Rollback |
+| `phy_init` | data | phy | `0x11000` | 4 KB (`0x1000`) | Dữ liệu cân chỉnh tần số sóng RF Wi-Fi/Bluetooth |
+| `factory` | app | factory | `0x20000` | 2 MB (`0x200000`) | Firmware xuất xưởng ban đầu |
+| `ota_0` | app | ota_0 | `0x220000` | 2 MB (`0x200000`) | Khe nạp ứng dụng OTA chính |
+| `ota_1` | app | ota_1 | `0x420000` | 2 MB (`0x200000`) | Khe nạp ứng dụng OTA phụ (đối xứng phục vụ Rollback) |
+| `storage` | data | spiffs | `0x620000` | 2 MB (`0x200000`) | Phân vùng SPIFFS chứa `schedule.json`, `rules.json`, ringbuffer offline |
+| *(reserved)* | data | - | `0x820000` | ~8 MB | Vùng nhớ mở rộng dành cho coredump, font OLED u8g2 và asset |
+
+---
 
 ### 15.2 Kịch bản demo
 
@@ -2810,3 +2895,17 @@ Offset     Size    Name        Type     Mô tả
 ---
 
 *— Hết tài liệu FSD —*
+
+
+---
+
+## Phụ lục B: Mô phỏng Thiết bị Modbus RS485 (Mock Test Harness)
+
+> **Ghi chú phạm vi:** Chuẩn truyền thông vật lý RS485 đã được **lược bỏ hoàn toàn** khỏi sản phẩm thương mại để chuyển sang cảm biến không dây BLE. Phụ lục này lưu trữ tài liệu kỹ thuật của module giả lập [`mock_peripherals.c`](file:///home/chien/ai-workspace/qwen-test/firmware/main/mock_peripherals.c), được sử dụng độc quyền trong môi trường kiểm thử tự động nội bộ để xác minh tính năng ngắt mạch (Circuit Breaker) và kịch bản đóng băng tác vụ (`test freeze rs485`) nhằm kích hoạt Task Supervisor.
+
+1. **Khung truyền giả lập:** Hỗ trợ Modbus RTU Function Code 03 (Read Holding Registers) và Function Code 06/16 (Write Registers).
+2. **Kịch bản kiểm thử Fault Injection qua Serial CLI:**
+   - `mock rs485 start [interval_ms]`: Bật luồng giả lập cảm biến.
+   - `mock rs485 stop`: Dừng luồng giả lập.
+   - `mock rs485 fault <none|timeout|invalid>`: Tiêm lỗi đường truyền hoặc timeout.
+   - `test freeze rs485`: Cố tình đóng băng vòng lặp để kích hoạt cơ chế phát hiện của Task Supervisor sau đúng 15 giây.
