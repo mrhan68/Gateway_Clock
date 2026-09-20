@@ -160,3 +160,69 @@
   - `schedule test Siren Check`: Kích hoạt banner cảnh báo báo thức thời gian thực `🔔 [ALARM NOTIFICATION TRIGGERED] 🔔`.
   - `cmd send relay_ch3 TOGGLE`: Dispatcher xử lý điều khiển thiết bị đích thành công.
 * **Trạng thái**: Toàn bộ logic phần mềm nội bộ trên Bare-board đã hoàn thành 100% và vượt qua kiểm thử thực tế.
+
+---
+
+### [2026-09-16] Triển khai Web Dashboard SPA & REST API trên ESP32-S3 (`web_server.c`)
+* **Mục tiêu**: Tích hợp máy chủ HTTP phục vụ giao diện Web Dashboard nội bộ và REST API hoàn chỉnh, truy cập trực tiếp từ mạng LAN qua IP của ESP32 (`http://<device-ip>/`).
+* **Các tính năng triển khai**:
+  1. `web_server.h` & `web_server.c` (FSD §4.2, §4.7):
+     - Giao diện Single Page Application (SPA) chủ đề Dark Mode tinh gọn, tích hợp sẵn trong flash firmware.
+     - Đồng hồ thời gian thực RTC, hiển thị thông số nhiệt độ, độ ẩm môi trường, thời gian hoạt động uptime.
+     - 4 công tắc điều khiển trạng thái 4 relay (`fan_relay_01`, `heater_relay_01`, `dehumidifier_01`, `aux_relay_04`).
+     - REST API endpoints:
+       - `GET /api/status`: Lấy thông tin hệ thống (uptime, heap, trạng thái Wi-Fi/MQTT).
+       - `GET /api/telemetry`: Lấy giá trị đo đạc mới nhất của cảm biến.
+       - `POST /api/relay`: Bật/tắt relay theo kênh (`{"relay_id": 1, "state": 1}`).
+       - `GET /api/rules`, `POST /api/rules`, `DELETE /api/rules`: CRUD các quy tắc tự động hóa IF-THEN.
+       - `GET /api/wifi/scan`: Kích hoạt quét sóng Wi-Fi xung quanh và trả về JSON danh sách AP.
+* **Kết quả Kiểm thử Trực tiếp**:
+  - `TC-WEB-01`: Đạt 100% — Truy cập web dashboard từ trình duyệt LAN tại `http://192.168.1.143/`, thao tác bật/tắt relay phản hồi tức thì (<100ms), API REST trả về JSON chuẩn xác.
+
+---
+
+### [2026-09-17] Triển khai Tầng Ngoại Vi Ảo & Bơm Lỗi Kiểm Thử (`mock_peripherals.c`)
+* **Mục tiêu**: Xây dựng hệ thống giả lập ngoại vi hoàn chỉnh chạy ngầm trên chip để phục vụ kiểm thử hồi quy (regression) và kiểm thử nhánh phủ định (Wave 3 Negative tests) mà không phụ thuộc vào dây nối phần cứng.
+* **Các tính năng triển khai**:
+  1. `mock_peripherals.h` & `mock_peripherals.c` (FSD §4.3, §4.5):
+     - Tác vụ `mock_rs485_task` phát dữ liệu telemetry định kỳ theo chu kỳ sóng hình sin.
+     - Bộ tạo lỗi (Fault Injection): Lỗi mất kết nối (timeout), lỗi dữ liệu sai lệch (invalid checksum/data).
+     - Giả lập bộ nhớ Virtual Storage CSV: Ghi dữ liệu cảm biến vào phân vùng flash và đọc lại kiểm tra tính toàn vẹn.
+  2. Tài liệu cấu hình: Ban hành tài liệu [`MOCK_PERIPHERALS.md`](file:///home/chien/ai-workspace/qwen-test/MOCK_PERIPHERALS.md).
+* **Kết quả Kiểm thử Trực tiếp**:
+  - `TC-MOCK-02`: Bơm lỗi `mock rs485 fault invalid` kích hoạt thành công cờ `valid = false`, Rule Engine lập tức bật chế độ Safe-Default, bảo vệ hệ thống không kích hoạt sai relay.
+  - `TC-MOCK-03`: Bơm lỗi `mock rs485 fault timeout` mô phỏng mất kết nối thiết bị ngoại vi, hệ thống không bị crash hoặc treo bus.
+  - `TC-MOCK-04`: Lệnh `mock storage test` ghi thành công bản tin CSV vào bộ nhớ ảo.
+
+---
+
+### [2026-09-18] Định Hướng Không Dây: Chuyển Đổi Sang BLE Environmental Sensing (§4.10)
+* **Mục tiêu**: Theo đặc tả FSD v1.3 §4.10, chính thức lược bỏ kết nối Modbus RS485 có dây phức tạp cho kịch bản Smart Home và chuyển sang thu thập dữ liệu không dây qua Bluetooth Low Energy (BLE).
+* **Kiến trúc BLE tích hợp**:
+  - Sử dụng stack mã nguồn mở **Apache NimBLE** tích hợp trong ESP-IDF v5.3.1 (tiết kiệm hơn 100KB DRAM so với Bluedroid).
+  - Khởi tạo chế độ GAP Central / Passive Observer: Lắng nghe liên tục các gói tin quảng bá (Advertisement / Scan Response) của các cảm biến môi trường lân cận.
+  - Hỗ trợ chuẩn GATT Environmental Sensing (Service UUID `0x181A` - Temperature & Humidity) và định dạng BTHome V2 phổ biến.
+
+---
+
+### [2026-09-19 - 2026-09-20] Triển khai BLE Adapter, Phát Hiện Treo Task & Đóng Vòng Lặp Wave 1
+* **Mục tiêu**: Hoàn thiện module BLE, triển khai cơ chế phát hiện treo task theo FR-SUP-02, viết các bộ kiểm thử tự động, và hoàn thành 100% mục tiêu Wave 1.
+* **Các module triển khai & kiểm thử**:
+  1. `firmware/main/ble_adapter.h` & `ble_adapter.c` (FSD §4.5, FR-BLE-01):
+     - Tác vụ `ble_scan_task` trên Core 0, stack 4096 bytes, đăng ký nhịp tim `TASK_HEARTBEAT_BLE` vào Task Supervisor.
+     - Bảng đăng ký thiết bị động `ble_device_map_t` hỗ trợ gán ID logic (`sensor_temp_01`) với địa chỉ MAC thực tế.
+     - Hàm test hook `ble_adapter_inject_test_packet()` phục vụ kiểm thử telemetry.
+     - Bổ sung các lệnh CLI: `ble status`, `ble start`, `ble stop`, `ble reg <id> [mac]`, `ble test [val]`.
+  2. Bộ giám sát treo tác vụ `supervisor.c` (FSD §4.13.4, FR-SUP-02):
+     - Nâng tổng số task giám sát lên 8 (`NUM_TRACKED_TASKS 8`), mask đầy đủ `0xD7`.
+     - Bộ đếm thời gian kiểm tra mỗi 3 giây. Nếu bất kỳ task nào không cập nhật heartbeat quá 15 giây (15,000 ms), supervisor in log `CRITICAL: Task 'X' STALLED` và gọi `esp_restart()` để khôi phục hệ thống tự động.
+     - Bổ sung lệnh test hook: `test freeze rs485` và `test freeze event_bus`.
+  3. Mở rộng bộ kiểm thử tự động:
+     - `tests/host/test_ble_parser.py`: Kiểm thử phân tích gói tin BLE (UUID 0x181A, BTHome V2, xử lý số âm, tên thiết bị). Nâng tổng số host tests lên **17 passed / 0 failed**.
+     - `scripts/test_bareboard_suite.py`: Kịch bản kiểm thử tự động 8-in-1 trên phần cứng thực tế qua cổng `/dev/ttyACM0`. Đạt **8/8 PASSED**.
+     - `scripts/test_ble_battery.py`: Kịch bản kiểm thử toàn diện phân hệ BLE 6-in-1 trên phần cứng thực tế qua cổng `/dev/ttyACM0`. Đạt **6/6 PASSED**.
+* **Kết quả Kiểm thử Trực tiếp trên Phần cứng (`/dev/ttyACM0`)**:
+  - `TC-SUP-02` / `TC-NEG-03`: Kích hoạt `test freeze rs485`, sau đúng 15s Supervisor phát hiện task bị treo, tự động kích hoạt reboot giải phóng deadlock và khôi phục trạng thái hoạt động bình thường trong < 2.5s.
+  - Phân hệ BLE hoạt động ổn định song song với Wi-Fi (Wi-Fi + BLE Coexistence kích hoạt qua `CONFIG_SW_COEXIST_ENABLE=y`).
+  - Heap DRAM khả dụng: ~116KB, hệ thống vận hành trơn tru và bền bỉ.
+* **Trạng thái hiện tại**: Đóng vòng lặp Wave 1 (100% Green). Tất cả các hợp đồng xác minh và bộ kiểm thử đã vượt qua kiểm định thành công.

@@ -119,13 +119,16 @@ timestamp,device_id,sensor_type,value,unit,status
 
 ---
 
-## 5. Bảng Ánh Xạ Chân Phần Cứng Thực Tế (Future Pinout Migration)
+## 5. Bảng Ánh Xạ Chân Phần Cứng Thực Tế & Định Hướng Không Dây
 
-Khi bạn sẵn sàng cắm dây hoặc hàn linh kiện thật, chỉ cần đấu nối theo đúng sơ đồ bảng này và tắt cờ `#define USE_MOCK_PERIPHERALS`:
+> **Lưu ý quan trọng theo FSD §4.10**: Theo định hướng thiết kế Smart Home không dây, giao tiếp có dây RS485 Modbus RTU đã chính thức được **lược bỏ (Deprecated)** để thay thế hoàn toàn bằng cảm biến không dây **Bluetooth Low Energy (BLE)** qua stack NimBLE (chế độ Central/Observer quét các cảm biến phát quảng bá UUID `0x181A` hoặc BTHome V2).
+> 
+> Tầng giả lập `mock_peripherals.c` và các lệnh `mock rs485` vẫn được duy trì nguyên vẹn trong firmware nhằm phục vụ mục đích kiểm thử hồi quy (regression) và kiểm thử nhánh phủ định (Safe-Default / Watchdog hang recovery).
+> 
+> Đối với các ngoại vi còn lại (MicroSD Card, Màn hình OLED & RTC DS3231), bảng ánh xạ chân phần cứng thực tế như sau:
 
 | Khối linh kiện | Tên chân module | Chân ESP32-S3 (Khuyến nghị) | Chức năng phần cứng |
 |---|---|---|---|
-| **RS485 Transceiver**<br>*(SP3485 / MAX485)* | **TXD / DI**<br>**RXD / RO**<br>**DE / RE**<br>**VCC / GND** | **GPIO 17**<br>**GPIO 16**<br>**GPIO 4**<br>3.3V / GND | UART2 TX<br>UART2 RX<br>Flow control thu/phát nửa song công<br>Nguồn nuôi module |
 | **MicroSD Card Slot**<br>*(SPI Interface)* | **CS / DAT3**<br>**MOSI / CMD**<br>**MISO / DAT0**<br>**SCK / CLK**<br>**VCC / GND** | **GPIO 10**<br>**GPIO 11**<br>**GPIO 13**<br>**GPIO 12**<br>3.3V / GND | Chip Select (SPI)<br>Master Out Slave In<br>Master In Slave Out<br>SPI Clock<br>Nguồn 3.3V |
 | **I2C Bus Chung**<br>*(OLED SSD1327 + RTC DS3231)* | **SDA**<br>**SCL**<br>**VCC / GND** | **GPIO 8**<br>**GPIO 9**<br>3.3V / GND | I2C Data (Trở kéo 4.7kΩ lên 3.3V)<br>I2C Clock (Trở kéo 4.7kΩ lên 3.3V)<br>Nguồn 3.3V |
 
@@ -133,19 +136,17 @@ Khi bạn sẵn sàng cắm dây hoặc hàn linh kiện thật, chỉ cần đ�
 
 ## 6. Danh Mục Lệnh CLI Tương Tác Giả Lập (Mock CLI Commands)
 
-Các lệnh này được tích hợp vào `serial_cli.c` để bạn có thể kiểm tra và thay đổi hành vi ngoại vi ảo trực tiếp qua cổng USB COM7:
+Các lệnh này được tích hợp trực tiếp vào [`serial_cli.c`](file:///home/chien/ai-workspace/qwen-test/firmware/main/serial_cli.c) để kiểm thử tầng ngoại vi ảo và các nhánh an toàn qua console UART0 (115200 baud):
 
 ```text
-mock status                           - Hiển thị trạng thái các ngoại vi giả lập
-mock rs485 start [interval_ms]        - Bắt đầu tự động phát telemetry Modbus ảo
+mock rs485 start [interval_ms]        - Bắt đầu tự động phát telemetry Modbus ảo (mặc định 4000ms)
 mock rs485 stop                       - Dừng phát telemetry Modbus ảo
-mock rs485 set <temp> <hum>           - Cài đặt thủ công giá trị cảm biến ảo
-mock rs485 inject_error <none|crc|timeout|invalid> - Bơm lỗi giả lập vào bus RS485
-mock storage write_test               - Ghi thử file nhật ký CSV vào phân vùng Flash
-mock storage read_csv [lines]         - Đọc nhật ký CSV đã ghi
-mock storage eject                    - Mô phỏng rút thẻ nhớ
-mock storage insert                   - Mô phỏng cắm lại thẻ nhớ
-display show                          - In giao diện màn hình OLED ảo ra màn hình terminal
+mock rs485 set <temp> <hum>           - Cài đặt thủ công giá trị nhiệt độ / độ ẩm cho cảm biến ảo
+mock rs485 fault <none|timeout|invalid> - Bơm lỗi giả lập vào bus RS485 (kiểm thử Safe-Default)
+mock storage test                     - Ghi thử file nhật ký CSV vào phân vùng Virtual Storage Flash
+modbus scan [start_id] [end_id]       - Quét các thiết bị slave Modbus RTU giả lập
+test freeze rs485                     - Giả lập task RS485 bị treo để kiểm tra Watchdog reboot (FR-SUP-02)
+test freeze event_bus                 - Giả lập task Event Bus bị treo để kiểm tra Watchdog reboot (FR-SUP-02)
 ```
 
 ---

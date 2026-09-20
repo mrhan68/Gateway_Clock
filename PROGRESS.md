@@ -87,14 +87,18 @@
   5. *Supervisor Tracking*: Heartbeat mask `0xD7` (Active: 0xD7, Alive: 0xD7), task `ble_scan_task` trên Core 0 báo danh liên tục, hệ thống hoàn toàn khỏe mạnh.
 
 ### 4.3. Bare-board Automated Test Suite (`scripts/test_bareboard_suite.py`)
-* **Tổng số bài test**: 8/8 PASSED trên phần cứng thực tế.
+* **Tổng số bài test**: 8/8 PASSED trên phần cứng thực tế ESP32-S3 (`/dev/ttyACM0`).
+* **Chi tiết 8 bài kiểm tra**:
+  1. `TC-CLI-01`: Interactive CLI console & Help table output.
+  2. `TC-MOCK-02`: Safe-Default fail-safe khi nhận telemetry `valid = false`.
+  3. `TC-MOCK-03`: Bus timeout simulation mà không gây rò rỉ bộ nhớ hay treo bus.
+  4. `TC-RULE-01`: Thêm/xóa rule động và kiểm định ngưỡng kích hoạt action.
+  5. `TC-CLK-03`: Kích hoạt cảnh báo báo thức thời gian thực từ Local Scheduler.
+  6. `TC-MOCK-04`: Ghi bản tin telemetry vào Virtual Storage CSV trên flash.
+  7. `TC-WIFI-02`: Quét mạng Wi-Fi lân cận với chế độ coexistence.
+  8. `TC-SUP-02` / `TC-NEG-03`: Phát hiện treo task sau 15s và tự động panic reboot khôi phục hệ thống (`FR-SUP-02`).
 
-  - `tests/host/test_modbus_crc.py`: Kiểm tra tính toán checksum CRC-16 Modbus (đúng từng byte theo chuẩn công nghiệp).
-  - `tests/host/test_sync_queue.py`: Đóng gói binary header bản tin FIFO lưu thẻ nhớ.
-  - `tests/host/test_rule_engine.py`: Đánh giá toán tử so sánh `>`, `<`, `==`, ngưỡng trễ hysteresis của Rule Engine.
-  - `tests/host/test_mqtt_adapter.py`: Định tuyến topic MQTT và cấu trúc JSON telemetry.
-
-### 4.2. Target Journey Tests (Kiểm thử thực địa trên board ESP32-S3)
+### 4.4. Target Journey Tests (Kiểm thử thực địa trên board ESP32-S3)
 * **`JRN-01` (System Boot and Alive Marker)**: ✅ **PASSED**
   - Bootloader nạp thành công phân vùng `factory` tại địa chỉ `0x20000`.
   - In thông báo khởi động và xuất hiện `[SYS] Alive marker 1` trong vòng 1.5s.
