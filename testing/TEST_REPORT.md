@@ -373,19 +373,37 @@ flowchart TD
 
 ---
 
-## 10. Kết Luận & Biên Bản Nghiệm Thu Tổng Thể QA (QA Final Sign-Off & Verdict)
+## 11. Báo Cáo Kiểm Thử Đồng Thời Toàn Chuỗi Với Phần Cứng Thực ESP32-S3 (Live Hardware System Test)
 
-Chiến dịch kiểm tra toàn diện và giám sát thành phần Test Automation & QA E2E trên hệ thống Smart Clock & Industrial Edge Gateway đã hoàn thành xuất sắc với **100% chỉ tiêu đạt chuẩn**.
+Chiến dịch kiểm thử trực tiếp trên phần cứng thật ESP32-S3 (COM7 / `/dev/ttyACM0`) tích hợp đồng thời cùng Backend REST API Server, Embedded Aedes MQTT Broker và Web App thông qua kịch bản [`testing/live_system_hardware_test.py`](file:///home/chien/ai-workspace/qwen-test/testing/live_system_hardware_test.py) đã hoàn thành với **17 / 17 bước kiểm thử ĐẠT CHUẨN (100% SUCCESS)**.
+
+### 11.1 Chi Tiết Kết Quả Kiểm Thử 7 Bước Khép Kín:
+
+| Bước | Định Danh Kiểm Thử | Hành Động Thực Nghiệm | Kết Quả Ghi Nhận | Trạng Thái |
+|:---:|:---|:---|:---|:---:|
+| **1** | `STEP-1.1-REST-API-READY`<br>`STEP-1.2-MQTT-BROKER-READY` | Khởi động & kiểm tra dịch vụ Backend & MQTT | REST API lắng nghe tại port 3000.<br>Aedes MQTT Broker lắng nghe tại port 1883. | **PASSED** |
+| **2** | `STEP-2.1-SERIAL-CONNECTED` | Mở kết nối Serial UART0 tới ESP32-S3 | Cổng `/dev/ttyACM0` (115200 baud) kết nối thành công, không nghẽn. | **PASSED** |
+| **3** | `STEP-3.1-TASK-SUPERVISOR-HEALTHY`<br>`STEP-3.2-FREE-HEAP-STABILITY`<br>`STEP-3.3-NIMBLE-SCANNER-RUNNING` | Chẩn đoán sức khỏe phần cứng thời gian thực qua CLI `status` | Active Mask: `0x7F`, Alive Mask: `0x7F` (Đủ 7 tasks FreeRTOS ALIVE).<br>Free Heap trên chip: **91,636 bytes** (> 50,000 B).<br>NimBLE BLE Scanner ở trạng thái `RUNNING` trên Core 0. | **PASSED** |
+| **4** | `STEP-4.1-REGISTER-CLAIM`<br>`STEP-4.2-USER-CLAIM`<br>`STEP-4.3-REGISTER-PERIPHERALS`<br>`STEP-4.4-CREATE-RULE-ON-BACKEND` | Bắt tay Provisioning & Claiming thật (FSD §8.2) | Xác nhận MAC `28:84:85:50:69:E0` chuyển trạng thái `ONLINE / ACTIVE`.<br>Đăng ký thiết bị cảm biến `sensor_temp_01` và chấp hành `relay_1`.<br>Lưu trữ quy tắc tự động hóa: IF `sensor_temp_01` > 30.0°C -> `relay_1` ON. | **PASSED** |
+| **5** | `STEP-5.1-HARDWARE-RELAY-ON`<br>`STEP-5.2-HARDWARE-RELAY-OFF`<br>`STEP-5.3-WEB-COMMAND-ACCEPTED-202` | Kích hoạt Rơ-le cơ khí vật lý (GPIO 15) & Lệnh Cloud | Gửi `cmd send relay_1 ON` -> Rơ-le 1 (GPIO 15) đóng tiếp điểm cơ vật lý.<br>Gửi `cmd send relay_1 OFF` -> Rơ-le 1 ngắt tiếp điểm vật lý.<br>Web App gửi REST Command -> Nhận HTTP `202 Accepted` kèm `command_id` UUID. | **PASSED** |
+| **6** | `STEP-6.1-HARDWARE-RULE-ENGINE-TRIGGER`<br>`STEP-6.2-DB-TELEMETRY-VERIFIED` | Nạp luật biên & kích hoạt Rule Engine trên chip | Thêm rule vào firmware: `rule add 1 sensor_temp_01 GT 30.0 relay_1 ON`.<br>Bơm dữ liệu giả lập 33.5°C -> Rule Engine trên chip kích hoạt `[GT EDGE-UP]` và tự động đóng `relay_1` ON.<br>Uplink viễn trắc qua MQTT -> Backend lưu DB chính xác giá trị **33.5°C**. | **PASSED** |
+| **7** | `STEP-7.1-EVENT-BUS-BURST-PASS`<br>`STEP-7.2-POST-TEST-HEALTH` | Bơm tải hàng đợi Event Bus & Giám sát Supervisor | Bơm burst 5 sự kiện vào hàng đợi 32 slots: Chấp nhận 5, Rơi rớt 0.<br>Giám sát Task Supervisor sau kiểm thử: Khẳng định **100% HEALTHY** (Alive Mask `0x7F`). | **PASSED** |
+
+---
+
+## 12. Kết Luận & Biên Bản Nghiệm Thu Tổng Thể QA (QA Final Sign-Off & Verdict)
+
+Chiến dịch kiểm tra toàn diện và giám sát thành phần Test Automation & QA E2E trên hệ thống Smart Clock & Industrial Edge Gateway — bao gồm cả mô phỏng CI/CD và kiểm thử trực tiếp trên phần cứng thật ESP32-S3 — đã hoàn thành xuất sắc với **100% chỉ tiêu đạt chuẩn**.
 
 ### Phán Quyết Nghiệm Thu (QA Final Verdict):
-- **Phần Cứng & Firmware ESP32-S3:** Đạt chuẩn 16/16 bước Boot Sequence, KPI-BOOT-01 (249 ms), Task Supervisor Mask 0x7F (`HEALTHY`), bảo vệ khóa liên động cơ khí và ngắt nhiệt an toàn tuyệt đối.
+- **Phần Cứng & Firmware ESP32-S3:** Đạt chuẩn 16/16 bước Boot Sequence, KPI-BOOT-01 (249 ms), Task Supervisor Mask 0x7F (`HEALTHY`), bảo vệ khóa liên động cơ khí và ngắt nhiệt an toàn tuyệt đối. Đã chứng minh khả năng chuyển mạch vật lý Relay (GPIO 15) và thực thi Rule Engine ngay trên chip.
 - **Bộ Công Cụ Giả Lập BLE Telemetry:** Đạt độ chính xác 100% trong đóng gói/giải mã Bluetooth SIG 0x181A và BTHome V2, hỗ trợ liền mạch cả môi trường phần cứng thật lẫn mô phỏng không đầu (Mock/CI).
 - **Kịch Bản Kiểm Thử Toàn Chuỗi E2E:** Bao phủ đầy đủ và chặt chẽ 5 Pha chức năng theo tài liệu FSD v1.1.0, tương thích hoàn hảo với giao thức MQTT và hệ thống REST API của Backend.
-- **Mức Độ Sẵn Sàng Tại Chỗ (Local Readiness):** 100% các bộ công cụ kiểm thử đều chạy mượt mà tại môi trường local và máy chủ tích hợp liên tục.
+- **Kiểm Thử Trực Tiếp Phần Cứng (Live Hardware Test):** Hoàn tất 17/17 bước kiểm thử đồng thời (Full Stack Integration) giữa phần cứng thật ESP32-S3, REST API, MQTT Broker và Database.
 
 **HỆ THỐNG ĐƯỢC CHÍNH THỨC NGHIỆM THU ĐẠT CHẤT LƯỢNG (ACCEPTED) VÀ SẴN SÀNG TRIỂN KHAI VẬN HÀNH TOÀN DIỆN.**
 
 ---
 *Biên bản được lập bởi: Trưởng nhóm Đảm bảo Chất lượng & Kiểm thử E2E (QA & E2E Testing Lead Agent)*  
-*Thời điểm hoàn tất: 20/09/2026 08:58 UTC*
+*Thời điểm hoàn tất: 20/09/2026 09:37 UTC*
 

@@ -26,7 +26,7 @@ async function getGateway(req, res, next) {
     }
 
     const { _count, ...gatewayData } = gateway;
-    res.json({ ...gatewayData, deviceCount: _count.devices });
+    res.json({ ...gatewayData, deviceCount: _count ? (_count.devices ?? 0) : 0 });
   } catch (err) {
     next(err);
   }

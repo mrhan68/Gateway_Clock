@@ -22,7 +22,22 @@ class InMemoryStore {
 
   // ── Gateway Operations ──
   async findUniqueGateway({ where }) {
-    if (where.id) return this.gateways.get(where.id) || null;
+    if (where.id) {
+      const gw = this.gateways.get(where.id);
+      if (!gw) return null;
+      let countDevices = 0, countSchedules = 0, countRules = 0;
+      for (const d of this.devices.values()) if (d.gatewayId === where.id) countDevices++;
+      for (const s of this.schedules.values()) if (s.gatewayId === where.id) countSchedules++;
+      for (const r of this.rules.values()) if (r.gatewayId === where.id) countRules++;
+      return {
+        ...gw,
+        _count: {
+          devices: countDevices,
+          schedules: countSchedules,
+          automationRules: countRules
+        }
+      };
+    }
     return null;
   }
 
