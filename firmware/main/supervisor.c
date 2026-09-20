@@ -62,13 +62,13 @@ static const char* get_task_name_by_index(int idx)
 {
     switch (idx) {
         case 0: return "EVENT_BUS";
-        case 1: return "RS485";
+        case 1: return "BLE_SCAN";
         case 2: return "UPLINK";
         case 3: return "SD_LOGGER";
         case 4: return "SCHEDULER";
         case 5: return "DISPLAY";
         case 6: return "SERIAL_CLI";
-        case 7: return "BLE";
+        case 7: return "MOCK_PERIPHERALS";
         default: return "UNKNOWN";
     }
 }

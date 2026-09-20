@@ -8,15 +8,20 @@
 extern "C" {
 #endif
 
-// Các cờ Heartbeat đại diện cho từng task trong hệ thống
+// Các cờ Heartbeat đại diện cho 7 task production (Mask 0x7F)
 #define TASK_HEARTBEAT_EVENT_BUS   (1 << 0)
-#define TASK_HEARTBEAT_RS485       (1 << 1)
+#define TASK_HEARTBEAT_BLE         (1 << 1)
 #define TASK_HEARTBEAT_UPLINK      (1 << 2)
 #define TASK_HEARTBEAT_SD_LOGGER   (1 << 3)
 #define TASK_HEARTBEAT_SCHEDULER   (1 << 4)
 #define TASK_HEARTBEAT_DISPLAY     (1 << 5)
 #define TASK_HEARTBEAT_CLI         (1 << 6)
-#define TASK_HEARTBEAT_BLE         (1 << 7)
+
+// Cờ kiểm thử cho Mock / Test Harness giả lập ngoại vi (Bit 7)
+#define TASK_HEARTBEAT_MOCK        (1 << 7)
+#define TASK_HEARTBEAT_RS485       TASK_HEARTBEAT_MOCK
+
+#define TASK_ACTIVE_MASK_PRODUCTION 0x7F
 
 #define SUPERVISOR_TIMEOUT_MS      15000  // 15 giây không báo nhịp tim -> Coi như task bị treo
 #define SUPERVISOR_TASK_PRIO       7      // Mức ưu tiên cao nhất Core 0

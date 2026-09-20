@@ -14,7 +14,7 @@
 
 static const char *TAG = "SCHEDULER";
 
-#define SCHEDULER_TASK_PRIO   5
+#define SCHEDULER_TASK_PRIO   4
 #define SCHEDULER_TASK_CORE   0
 #define SCHEDULER_STACK_SIZE  4096
 
