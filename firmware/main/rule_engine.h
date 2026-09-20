@@ -1,3 +1,12 @@
+/**
+ * @file rule_engine.h
+ * @brief Rule Engine Condition Evaluator with Hysteresis & Edge-Triggering (FSD §4.7)
+ *
+ * Implements local IF-condition-THEN-action evaluation for automation rules.
+ * Supports dual-threshold hysteresis (GT & LT), 60s cooldown on ON, 0ms immediate
+ * turn-off on OFF, 5-minute safety lockout on cutoff, and /spiffs/rules.json sync.
+ */
+
 #ifndef RULE_ENGINE_H
 #define RULE_ENGINE_H
 
@@ -12,46 +21,57 @@ extern "C" {
 
 #define MAX_RULES 16
 
+/**
+ * @brief Rule condition types (FSD §4.7.4)
+ */
 typedef enum {
-    RULE_CONDITION_SENSOR_GT = 0,   // sensor_value > threshold
-    RULE_CONDITION_SENSOR_LT = 1,   // sensor_value < threshold
-    RULE_CONDITION_TIME_MATCH = 2,  // matched by scheduled time
+    RULE_CONDITION_SENSOR_GT = 0,   // sensor_value >= threshold (Ngưỡng trên, vd: Quạt làm mát)
+    RULE_CONDITION_SENSOR_LT = 1,   // sensor_value <= threshold (Ngưỡng dưới, vd: Máy sưởi nhiệt)
+    RULE_CONDITION_TIME_MATCH = 2,  // Đúng giờ hẹn (do scheduler lọc sẵn)
 } rule_condition_type_t;
 
+/**
+ * @brief Automation Rule Data Model (FSD §4.7.4)
+ */
 typedef struct {
     int id;
-    char device_id[32];              // Sensor or trigger source device ID
+    char device_id[32];              // Cảm biến phát sinh dữ liệu (vd: "sensor_temp_01")
     rule_condition_type_t condition_type;
-    float threshold;
-    char target_device_id[32];       // Actuator or output device ID
-    char action_command[32];         // "ON", "OFF", "SET:75", etc.
-    bool enabled;
+    float threshold;                 // Ngưỡng nhiệt độ / độ ẩm kích hoạt
+    float hysteresis;                // Biên trễ chống dao động tiếp điểm (mặc định 1.5°C)
+    uint32_t cooldown_s;             // Thời gian làm nguội tối thiểu cho chiều BẬT (mặc định 60s)
+    char target_device_id[32];       // Relay đích ("relay_1", "relay_2", ...)
+    char action_command[32];         // "ON", "OFF", "SET:75"
+    union {
+        bool is_active;              // Trạng thái bật/tắt của luật (FSD §4.7.4)
+        bool enabled;                // Tương thích ngược với web_server và serial_cli
+    };
+    // Quản lý trạng thái nội bộ (Runtime State)
+    bool current_state;              // true: đang trong vùng kích hoạt (Active Zone)
+    uint32_t last_triggered_ts;      // Epoch thời điểm kích hoạt gần nhất để tính cooldown
+    uint32_t lockout_until_ts;       // Epoch thời hạn khóa an toàn sau khi bị ngắt khẩn cấp
 } automation_rule_t;
 
-typedef struct {
-    char target_device_id[32];
-    char action_command[32];
-    int source_rule_id;
-} rule_action_request_t;
-
-typedef struct {
-    char device_id[32];
-    float value;
-    bool valid;
-} sensor_telemetry_t;
+/**
+ * @brief Sensor telemetry type alias to ble_telemetry_t for unified event bus compatibility
+ */
+typedef ble_telemetry_t sensor_telemetry_t;
 
 /**
- * @brief Initialize Rule Engine: registers event bus handlers and loads default rules.
+ * @brief Initialize Rule Engine: loads rules from /spiffs/rules.json (or defaults)
+ *        and registers event bus handlers.
  */
 void rule_engine_init(void);
 
 /**
- * @brief Reload rules from storage or default configuration.
+ * @brief Reload rules from storage (/spiffs/rules.json) or defaults.
  */
 void rule_engine_reload_rules(void);
 
 /**
- * @brief Add or update an automation rule.
+ * @brief Add or update an automation rule in memory and persist to /spiffs/rules.json.
+ * @param rule Pointer to automation rule struct.
+ * @return true if added/updated, false if table full.
  */
 bool rule_engine_add_rule(const automation_rule_t *rule);
 
@@ -62,6 +82,7 @@ void rule_engine_clear_rules(void);
 
 /**
  * @brief Delete a specific automation rule by ID.
+ * @param rule_id Unique rule ID.
  * @return true if found and deleted, false if not found.
  */
 bool rule_engine_delete_rule(int rule_id);
@@ -72,13 +93,17 @@ bool rule_engine_delete_rule(int rule_id);
 int rule_engine_get_rule_count(void);
 
 /**
- * @brief Copy active rules into user-provided array.
+ * @brief Copy active rules into user-provided destination array.
+ * @param dest Output buffer for rules.
+ * @param max_rules Max number of rules dest can hold.
+ * @return Number of rules copied.
  */
 int rule_engine_get_rules(automation_rule_t *dest, int max_rules);
 
 /**
- * @brief Evaluate telemetry directly against active rules.
- * @return Number of rules matched and triggered.
+ * @brief Evaluate telemetry directly against active rules using Hysteresis & Edge-Triggering.
+ * @param telem Pointer to sensor telemetry data.
+ * @return Number of rules triggered (actions posted).
  */
 int rule_engine_evaluate_telemetry(const sensor_telemetry_t *telem);
 

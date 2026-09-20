@@ -11,12 +11,11 @@ extern "C" {
 
 typedef struct {
     char gateway_id[32];
+    char timezone[16];
     char wifi_ssid[32];
     char wifi_password[64];
     char mqtt_broker_uri[128];
     uint16_t mqtt_telemetry_interval_s;
-    uint32_t rs485_baudrate;
-    uint16_t rs485_timeout_ms;
 } gateway_config_t;
 
 /**
@@ -40,9 +39,20 @@ esp_err_t config_manager_set_wifi(const char *ssid, const char *password);
 esp_err_t config_manager_set_mqtt(const char *uri, uint16_t interval_s);
 
 /**
- * @brief Cập nhật thông số đường truyền RS485
+ * @brief Cập nhật chuỗi POSIX Timezone (VD: "ICT-7")
+ */
+esp_err_t config_manager_set_timezone(const char *tz);
+
+/**
+ * @brief (Deprecated) Stub cấu hình RS485 tương thích ngược
  */
 esp_err_t config_manager_set_rs485(uint32_t baudrate, uint16_t timeout_ms);
+
+/**
+ * @brief Nạp cấu hình từ tệp JSON trên hệ thống tệp (SPIFFS / SD card)
+ * @param filepath Đường dẫn tệp (mặc định "/spiffs/config.json" nếu truyền NULL)
+ */
+esp_err_t config_manager_load_from_file(const char *filepath);
 
 /**
  * @brief Lưu toàn bộ cấu hình vào bộ nhớ NVS Flash nội bộ

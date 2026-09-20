@@ -52,6 +52,11 @@ bool event_bus_register_handler(gateway_event_code_t code, gateway_event_handler
 
 BaseType_t event_bus_post(gateway_event_code_t code, void *data, size_t len, bool from_isr)
 {
+    if (code <= EVT_NONE || code >= EVT_MAX_CODES) {
+        if (data) free(data);
+        return pdFALSE;
+    }
+
     if (s_event_queue == NULL) {
         ESP_LOGE(TAG, "Cannot post: Event bus not initialized");
         if (data) free(data);
@@ -78,7 +83,7 @@ BaseType_t event_bus_post(gateway_event_code_t code, void *data, size_t len, boo
 
     if (result != pdTRUE) {
         ESP_LOGW(TAG, "Event queue full! Dropped event %d", code);
-        // Tránh rò rỉ bộ nhớ nếu queue đầy
+        // FSD §4.1.6: Giai phong bo nho ngay lap tuc neu hang doi day
         if (data) free(data);
     }
 
@@ -129,7 +134,7 @@ void event_bus_start_dispatcher(void)
     BaseType_t ret = xTaskCreatePinnedToCore(
         event_dispatcher_task,
         "event_dispatcher",
-        6144,
+        4096,
         NULL,
         EVENT_BUS_DISPATCHER_PRIO,
         &s_dispatcher_task_handle,

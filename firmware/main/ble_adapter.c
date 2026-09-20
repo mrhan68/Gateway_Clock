@@ -3,6 +3,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <math.h>
+#include <time.h>
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -326,10 +327,12 @@ static int parse_advertisement_data(const struct ble_gap_disc_desc *disc)
     // Post to Event Bus (Rule Engine & Display & SD Logger)
     sensor_telemetry_t *telem = (sensor_telemetry_t *)malloc(sizeof(sensor_telemetry_t));
     if (telem != NULL) {
+        memset(telem, 0, sizeof(sensor_telemetry_t));
         strncpy(telem->device_id, entry->device_id, sizeof(telem->device_id) - 1);
         telem->device_id[sizeof(telem->device_id) - 1] = '\0';
         telem->value = temp_val;
         telem->valid = true;
+        telem->timestamp = (uint32_t)time(NULL);
         event_bus_post(EVT_BLE_DEVICE_DATA, telem, sizeof(sensor_telemetry_t), false);
     }
 
@@ -505,10 +508,12 @@ void ble_adapter_inject_test_packet(const char *device_id, float value)
 
     sensor_telemetry_t *telem = (sensor_telemetry_t *)malloc(sizeof(sensor_telemetry_t));
     if (telem != NULL) {
+        memset(telem, 0, sizeof(sensor_telemetry_t));
         strncpy(telem->device_id, dev, sizeof(telem->device_id) - 1);
         telem->device_id[sizeof(telem->device_id) - 1] = '\0';
         telem->value = value;
         telem->valid = true;
+        telem->timestamp = (uint32_t)time(NULL);
         event_bus_post(EVT_BLE_DEVICE_DATA, telem, sizeof(sensor_telemetry_t), false);
     }
 }

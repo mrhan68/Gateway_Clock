@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "esp_err.h"
+#include "event_bus.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -12,14 +13,7 @@ extern "C" {
 #define BLE_MAX_DEVICES         16
 #define BLE_CMD_QUEUE_DEPTH     10
 
-/**
- * @brief BLE Telemetry structure (conforms to FSD v1.1 §4.1.5 and rule_engine sensor_telemetry_t)
- */
-typedef struct {
-    char device_id[32];  // Matched device_id (e.g., "sensor_temp_01")
-    float value;         // Sensor reading (temperature or humidity)
-    bool valid;          // Data validity flag
-} ble_telemetry_t;
+// Note: ble_telemetry_t is defined in event_bus.h (FSD §4.1.5)
 
 /**
  * @brief BLE Downlink Command
