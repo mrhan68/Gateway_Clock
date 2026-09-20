@@ -24,6 +24,9 @@ model Gateway {
   lastSeen        DateTime?        @db.Timestamp(6)
   firmwareVersion String?          @db.VarChar(16)
   timezone        String?          @db.VarChar(64)
+  claimCode       String?          @db.VarChar(16)
+  claimExpiresAt  DateTime?        @db.Timestamp(6)
+  macAddress      String?          @db.VarChar(18)
   createdAt       DateTime         @default(now()) @db.Timestamp(6)
   updatedAt       DateTime         @updatedAt @db.Timestamp(6)
   automationRules AutomationRule[]
@@ -35,6 +38,7 @@ model Gateway {
 
   @@index([userId])
   @@index([status])
+  @@index([claimCode])
 }
 
 model Device {
@@ -128,6 +132,8 @@ model TelemetryLog {
 enum GatewayStatus {
   online
   offline
+  unclaimed
+  active
 }
 
 enum DeviceType {

@@ -7,6 +7,7 @@
 const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
 const { createError } = require('../middleware/errorHandler');
+const broker = require('../mqtt/broker');
 
 /**
  * GET /gateways/{gateway_id}/schedules?type=...
@@ -120,6 +121,11 @@ async function createSchedule(req, res, next) {
       }
     });
 
+    // Push updated schedule config to Gateway via retained MQTT topic (FSD §4.8.3, §9.1)
+    broker.publishScheduleConfig(gateway_id).catch((err) => {
+      console.error('[SCHEDULE] Failed to publish config to gateway:', err.message);
+    });
+
     res.status(201).json({
       id: schedule.id,
       message: 'Schedule created successfully'
@@ -148,7 +154,7 @@ async function updateSchedule(req, res, next) {
         gatewayId: gateway_id
       },
       data: {
-        type: type ? type.toUpperCase() : undefined,
+        type: type ? type.toLowerCase() : undefined,
         hour: hour ?? undefined,
         minute: minute ?? undefined,
         enabled: enabled ?? undefined,
@@ -165,6 +171,11 @@ async function updateSchedule(req, res, next) {
       throw createError('SCHEDULE_NOT_FOUND',
         `Schedule with id '${id}' not found for gateway '${gateway_id}'`);
     }
+
+    // Push updated schedule config to Gateway via retained MQTT topic (FSD §4.8.3, §9.1)
+    broker.publishScheduleConfig(gateway_id).catch((err) => {
+      console.error('[SCHEDULE] Failed to publish config to gateway:', err.message);
+    });
 
     res.json({ id: schedule.id, message: 'Schedule updated successfully' });
   } catch (err) {
@@ -188,6 +199,11 @@ async function deleteSchedule(req, res, next) {
         id: parseInt(id),
         gatewayId: gateway_id
       }
+    });
+
+    // Push updated schedule config to Gateway via retained MQTT topic (FSD §4.8.3, §9.1)
+    broker.publishScheduleConfig(gateway_id).catch((err) => {
+      console.error('[SCHEDULE] Failed to publish config to gateway:', err.message);
     });
 
     res.status(204).send();
@@ -220,6 +236,11 @@ async function toggleSchedule(req, res, next) {
       throw createError('SCHEDULE_NOT_FOUND',
         `Schedule with id '${id}' not found for gateway '${gateway_id}'`);
     }
+
+    // Push updated schedule config to Gateway via retained MQTT topic (FSD §4.8.3, §9.1)
+    broker.publishScheduleConfig(gateway_id).catch((err) => {
+      console.error('[SCHEDULE] Failed to publish config to gateway:', err.message);
+    });
 
     res.json({
       id: schedule.id,

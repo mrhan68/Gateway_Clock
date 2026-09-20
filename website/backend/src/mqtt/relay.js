@@ -22,7 +22,7 @@ const broker = require('./broker');
  * @param {string} params.command - The command string (e.g., "ON", "OFF", "SET:75")
  * @returns {Promise<{success: boolean, message: string}>}
  */
-async function sendCommand({ gatewayId, deviceId, command }) {
+async function sendCommand({ gatewayId, deviceId, command, commandId, ttlSeconds }) {
   // Check if gateway is online before sending
   const online = await broker.isGatewayOnline(gatewayId);
   if (!online) {
@@ -34,7 +34,13 @@ async function sendCommand({ gatewayId, deviceId, command }) {
   }
 
   // Publish via the in-process MQTT broker
-  const published = await broker.publishDeviceCommand(gatewayId, deviceId, command);
+  const published = await broker.publishDeviceCommand({
+    gatewayId,
+    deviceId,
+    command,
+    commandId,
+    ttlSeconds
+  });
 
   if (!published) {
     return {
@@ -45,7 +51,8 @@ async function sendCommand({ gatewayId, deviceId, command }) {
 
   return {
     success: true,
-    message: `Command '${command}' sent to device '${deviceId}' via gateway '${gatewayId}'`
+    message: `Command '${command}' queued for device '${deviceId}' via gateway '${gatewayId}'`,
+    command_id: commandId
   };
 }
 

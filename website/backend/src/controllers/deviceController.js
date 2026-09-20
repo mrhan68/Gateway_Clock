@@ -220,14 +220,17 @@ async function deleteDevice(req, res, next) {
   }
 }
 
+const crypto = require('crypto');
+
 /**
- * POST /gateways/{gateway_id}/devices/{device_id}/command
+ * POST /gateways/{gateway_id}/devices/{device_id}/command (FSD §8.3)
  * Sends a command to a device via MQTT → Gateway.
  */
 async function sendDeviceCommand(req, res, next) {
   try {
     const { gateway_id, device_id } = req.params;
-    const { command } = req.body;
+    const { command, ttl_seconds } = req.body;
+    const commandId = crypto.randomUUID();
 
     // Verify device exists
     const device = await prisma.device.findFirst({
@@ -239,11 +242,13 @@ async function sendDeviceCommand(req, res, next) {
         `Device '${device_id}' not found in gateway '${gateway_id}'`);
     }
 
-    // Relay command via MQTT
+    // Relay command via MQTT with FSD §9.2 format
     const result = await relay.sendCommand({
       gatewayId: gateway_id,
       deviceId: device_id,
-      command
+      command,
+      commandId,
+      ttlSeconds: ttl_seconds || 60
     });
 
     if (!result.success) {
@@ -254,6 +259,8 @@ async function sendDeviceCommand(req, res, next) {
     }
 
     res.status(202).json({
+      command_id: commandId,
+      status: 'QUEUED',
       message: result.message
     });
   } catch (err) {

@@ -4,6 +4,7 @@
 const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
 const { createError } = require('../middleware/errorHandler');
+const broker = require('../mqtt/broker');
 
 /**
  * GET /gateways/{gateway_id}/rules
@@ -96,6 +97,11 @@ async function createRule(req, res, next) {
       }
     });
 
+    // Push updated schedule/rule config to Gateway via retained MQTT topic (FSD §4.8.3, §9.1)
+    broker.publishScheduleConfig(gateway_id).catch((err) => {
+      console.error('[RULE] Failed to publish config to gateway:', err.message);
+    });
+
     res.status(201).json({
       id: rule.id,
       message: 'Automation rule created successfully'
@@ -131,6 +137,11 @@ async function updateRule(req, res, next) {
       }
     });
 
+    // Push updated schedule/rule config to Gateway via retained MQTT topic (FSD §4.8.3, §9.1)
+    broker.publishScheduleConfig(gateway_id).catch((err) => {
+      console.error('[RULE] Failed to publish config to gateway:', err.message);
+    });
+
     res.json({ id: rule.id, message: 'Rule updated successfully' });
   } catch (err) {
     if (err.code === 'P2025') {
@@ -153,6 +164,11 @@ async function deleteRule(req, res, next) {
         id: parseInt(id),
         gatewayId: gateway_id
       }
+    });
+
+    // Push updated schedule/rule config to Gateway via retained MQTT topic (FSD §4.8.3, §9.1)
+    broker.publishScheduleConfig(gateway_id).catch((err) => {
+      console.error('[RULE] Failed to publish config to gateway:', err.message);
     });
 
     res.status(204).send();

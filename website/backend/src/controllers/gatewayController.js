@@ -132,9 +132,133 @@ async function listGateways(req, res, next) {
   }
 }
 
+/**
+ * POST /gateways/register-claim (FSD §8.2)
+ * Gateway registers its hardware MAC and claim code upon initial boot.
+ */
+async function registerClaim(req, res, next) {
+  try {
+    let { mac_address, claim_code, firmware_version, gateway_id } = req.body;
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + 24 * 60 * 60 * 1000); // TTL 24 hours
+
+    const cleanMac = mac_address ? mac_address.replace(/[^a-zA-Z0-9]/g, '').toLowerCase() : 'unknown';
+    const targetId = gateway_id || `gw_${cleanMac.slice(-8)}`;
+
+    if (!claim_code) {
+      claim_code = `GW-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+    }
+
+    let gateway = await prisma.gateway.findFirst({
+      where: {
+        OR: [
+          ...(mac_address ? [{ macAddress: mac_address }] : []),
+          { id: targetId }
+        ]
+      }
+    });
+
+    if (gateway) {
+      if (gateway.status === 'active' || gateway.status === 'online') {
+        return res.status(200).json({
+          status: gateway.status.toUpperCase(),
+          gateway_id: gateway.id,
+          message: 'Gateway already claimed and active'
+        });
+      }
+
+      gateway = await prisma.gateway.update({
+        where: { id: gateway.id },
+        data: {
+          claimCode: claim_code,
+          claimExpiresAt: expiresAt,
+          firmwareVersion: firmware_version || gateway.firmwareVersion,
+          status: 'unclaimed',
+          macAddress: mac_address,
+          lastSeen: now
+        }
+      });
+    } else {
+      gateway = await prisma.gateway.create({
+        data: {
+          id: targetId,
+          name: `Gateway ${cleanMac.slice(-4).toUpperCase()}`,
+          macAddress: mac_address,
+          claimCode: claim_code,
+          claimExpiresAt: expiresAt,
+          firmwareVersion: firmware_version || '1.0.0',
+          status: 'unclaimed',
+          lastSeen: now
+        }
+      });
+    }
+
+    res.status(200).json({
+      status: 'UNCLAIMED',
+      gateway_id: gateway.id,
+      claim_code: gateway.claimCode,
+      expires_at: gateway.claimExpiresAt.toISOString(),
+      message: 'Gateway claim registered successfully'
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * POST /gateways/claim (FSD §8.2)
+ * User enters claim code in Web App to pair gateway to account.
+ */
+async function claimGateway(req, res, next) {
+  try {
+    const { claim_code, name } = req.body;
+    const now = new Date();
+
+    const gateway = await prisma.gateway.findFirst({
+      where: {
+        claimCode: claim_code,
+        status: 'unclaimed',
+        claimExpiresAt: { gte: now }
+      }
+    });
+
+    if (!gateway) {
+      return res.status(404).json({
+        error: {
+          code: 'CLAIM_CODE_INVALID',
+          message: 'Claim code is invalid or has expired (TTL 24h)',
+          status: 404
+        }
+      });
+    }
+
+    const updated = await prisma.gateway.update({
+      where: { id: gateway.id },
+      data: {
+        name: name || gateway.name,
+        status: 'active',
+        claimCode: null,
+        claimExpiresAt: null,
+        lastSeen: now
+      }
+    });
+
+    res.status(200).json({
+      gateway_id: updated.id,
+      name: updated.name,
+      message: 'Gateway claimed successfully'
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
 module.exports = {
   getGateway,
   updateGateway,
   createGateway,
-  listGateways
+  listGateways,
+  registerClaim,
+  claimGateway
 };
+

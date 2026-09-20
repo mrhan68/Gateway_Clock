@@ -16,4 +16,10 @@ router.get('/:gateway_id/devices/:device_id/telemetry',
   validate,
   telemetryController.getTelemetry);
 
+// POST /gateways/{gateway_id}/telemetry/backfill
+router.post('/:gateway_id/telemetry/backfill',
+  gatewayIdRules,
+  validate,
+  telemetryController.backfillTelemetry);
+
 module.exports = router;

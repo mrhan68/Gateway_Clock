@@ -56,6 +56,74 @@ async function getTelemetry(req, res, next) {
   }
 }
 
+/**
+ * POST /gateways/{gateway_id}/telemetry/backfill
+ *
+ * Batch backfill telemetry records from Gateway (offline store-and-forward recovery).
+ * Per FSD §4.11.3 & §9.1: Deduplicates based on (deviceId, gatewayId, recordedAt).
+ */
+async function backfillTelemetry(req, res, next) {
+  try {
+    const { gateway_id } = req.params;
+    const records = Array.isArray(req.body)
+      ? req.body
+      : (req.body.records || req.body.batch || []);
+
+    // Verify gateway exists
+    const gateway = await prisma.gateway.findUnique({
+      where: { id: gateway_id },
+      select: { id: true }
+    });
+    if (!gateway) {
+      throw createError('GATEWAY_NOT_FOUND', `Gateway '${gateway_id}' not found`);
+    }
+
+    let insertedCount = 0;
+    for (const rec of records) {
+      if (!rec.device_id && !rec.deviceId) continue;
+      const devId = rec.device_id || rec.deviceId;
+      const val = rec.value !== undefined ? rec.value : 0;
+      const recordedAt = rec.timestamp
+        ? new Date(rec.timestamp * 1000)
+        : (rec.recorded_at ? new Date(rec.recorded_at) : new Date());
+
+      // Deduplication: check if already recorded
+      const existing = await prisma.telemetryLog.findFirst({
+        where: {
+          gatewayId: gateway_id,
+          deviceId: devId,
+          recordedAt
+        }
+      });
+
+      if (!existing) {
+        await prisma.telemetryLog.create({
+          data: {
+            gatewayId: gateway_id,
+            deviceId: devId,
+            value: typeof val === 'number' ? val : parseFloat(val),
+            unit: rec.unit || null,
+            recordedAt
+          }
+        });
+        insertedCount++;
+      }
+    }
+
+    res.status(200).json({
+      success: true,
+      total_received: records.length,
+      inserted_count: insertedCount,
+      deduplicated_count: records.length - insertedCount,
+      message: `Backfill processed: ${insertedCount} inserted, ${records.length - insertedCount} deduplicated`
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
 module.exports = {
-  getTelemetry
+  getTelemetry,
+  backfillTelemetry
 };
+

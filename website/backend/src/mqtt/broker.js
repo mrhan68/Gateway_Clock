@@ -69,6 +69,25 @@ async function startBroker(port = 1883) {
       return;
     }
 
+    // ─── Command ACK from gateway → backend (FSD §9.1) ───
+    if (parts[2] === 'device' && parts[4] === 'command' && parts[5] === 'ack') {
+      const deviceId = parts[3];
+      await handleCommandAck(gatewayId, deviceId, payload);
+      return;
+    }
+
+    // ─── Offline telemetry batch backfill (FSD §4.11.3 & §9.1) ───
+    if (parts[2] === 'telemetry' && parts[3] === 'batch') {
+      await handleTelemetryBatch(gatewayId, payload);
+      return;
+    }
+
+    // ─── Realtime event log stream (FSD §9.1) ───
+    if (parts[2] === 'events' && parts.length === 3) {
+      await handleEvents(gatewayId, payload);
+      return;
+    }
+
     // ─── Gateway status (LWT / heartbeat) ───
     if (parts[2] === 'status' && parts.length === 3) {
       await handleGatewayStatus(gatewayId, payload);
@@ -77,9 +96,6 @@ async function startBroker(port = 1883) {
 
     // ─── Device commands (from gateway to devices) ───
     if (parts[2] === 'device' && parts[4] === 'command') {
-      // Commands are received from Web App via REST → this broker → gateway
-      // We don't need to do anything here (already handled by relay)
-      // This is just for logging/debugging
       const deviceId = parts[3];
       console.log(`[MQTT] Command for ${deviceId} on gateway ${gatewayId}: ${payload}`);
       return;
@@ -131,6 +147,114 @@ async function handleTelemetry(gatewayId, deviceId, payload) {
 }
 
 /**
+ * Handle command ACK published by gateway (FSD §9.2).
+ * Topic: gateway/{id}/device/{deviceId}/command/ack
+ */
+async function handleCommandAck(gatewayId, deviceId, payload) {
+  try {
+    const data = JSON.parse(payload);
+    console.log(`[MQTT] Command ACK for ${deviceId} on gateway ${gatewayId}:`, data);
+
+    const occurredAt = data.timestamp ? new Date(data.timestamp * 1000) : new Date();
+
+    await prisma.eventLog.create({
+      data: {
+        gatewayId,
+        eventType: 'command_ack',
+        deviceId,
+        payload: JSON.stringify(data),
+        occurredAt,
+        syncedAt: new Date()
+      }
+    });
+
+    // If command was successful and toggled device state, update last seen
+    await prisma.device.updateMany({
+      where: { gatewayId, deviceId },
+      data: {
+        lastSeen: new Date(),
+        status: 'online'
+      }
+    });
+  } catch (err) {
+    console.error('[MQTT] Failed to process command ACK:', err.message);
+  }
+}
+
+/**
+ * Handle batch telemetry backfill published by gateway (FSD §4.11.3 & §9.1).
+ * Topic: gateway/{id}/telemetry/batch
+ */
+async function handleTelemetryBatch(gatewayId, payload) {
+  try {
+    const parsed = JSON.parse(payload);
+    const records = Array.isArray(parsed) ? parsed : (parsed.batch || parsed.records || []);
+    console.log(`[MQTT] Ingesting batch telemetry for gateway ${gatewayId}: ${records.length} records`);
+
+    let count = 0;
+    for (const rec of records) {
+      if (!rec.device_id && !rec.deviceId) continue;
+      const devId = rec.device_id || rec.deviceId;
+      const val = rec.value !== undefined ? rec.value : 0;
+      const recordedAt = rec.timestamp
+        ? new Date(rec.timestamp * 1000)
+        : (rec.recorded_at ? new Date(rec.recorded_at) : new Date());
+
+      // Deduplication: check if already recorded
+      const existing = await prisma.telemetryLog.findFirst({
+        where: {
+          gatewayId,
+          deviceId: devId,
+          recordedAt
+        }
+      });
+
+      if (!existing) {
+        await prisma.telemetryLog.create({
+          data: {
+            gatewayId,
+            deviceId: devId,
+            value: val,
+            unit: rec.unit || null,
+            recordedAt
+          }
+        });
+        count++;
+      }
+    }
+    console.log(`[MQTT] Batch telemetry stored: ${count} new records ingested (deduplicated)`);
+  } catch (err) {
+    console.error('[MQTT] Failed to process telemetry batch:', err.message);
+  }
+}
+
+/**
+ * Handle real-time event logs published by gateway (FSD §9.1).
+ * Topic: gateway/{id}/events
+ */
+async function handleEvents(gatewayId, payload) {
+  try {
+    const data = JSON.parse(payload);
+    console.log(`[MQTT] Realtime Event for gateway ${gatewayId}:`, data);
+
+    const occurredAt = data.ts ? new Date(data.ts * 1000) : (data.timestamp ? new Date(data.timestamp * 1000) : new Date());
+
+    await prisma.eventLog.create({
+      data: {
+        gatewayId,
+        eventType: data.type || data.eventType || 'unknown',
+        deviceId: data.device_id || data.deviceId || data.target || null,
+        payload: JSON.stringify(data),
+        occurredAt,
+        syncedAt: new Date()
+      }
+    });
+  } catch (err) {
+    console.error('[MQTT] Failed to process realtime event:', err.message);
+  }
+}
+
+/**
  * Handle gateway status updates (from LWT or heartbeat).
  * Topic: gateway/{id}/status
  */
@@ -139,7 +263,7 @@ async function handleGatewayStatus(gatewayId, payload) {
     const status = payload.trim() === 'online' ? 'online' : 'offline';
     const now = new Date();
 
-    await prisma.gateway.update({
+    await prisma.gateway.updateMany({
       where: { id: gatewayId },
       data: {
         status: status,
@@ -154,17 +278,21 @@ async function handleGatewayStatus(gatewayId, payload) {
 }
 
 /**
- * Publish a device command from REST API to the MQTT broker.
- * This is called by the relay module when Web App sends a command via REST.
- *
- * @param {string} gatewayId - Gateway ID
- * @param {string} deviceId - Target device ID
- * @param {string} command - Command string (e.g. "ON", "OFF")
- * @returns {Promise<boolean>} - true if published successfully
+ * Publish a device command from REST API to the MQTT broker (FSD §9.2).
+ * Topic: gateway/{gatewayId}/device/{deviceId}/command
  */
-function publishDeviceCommand(gatewayId, deviceId, command) {
+function publishDeviceCommand({ gatewayId, deviceId, command, commandId, ttlSeconds = 60 }) {
+  const crypto = require('crypto');
+  const cmdId = commandId || crypto.randomUUID();
   const topic = `gateway/${gatewayId}/device/${deviceId}/command`;
-  const payload = JSON.stringify({ command, source: 'web_app' });
+  const payload = JSON.stringify({
+    command_id: cmdId,
+    target_device_id: deviceId,
+    command: command,
+    ttl_seconds: ttlSeconds,
+    source: 'web_app',
+    timestamp: Math.floor(Date.now() / 1000)
+  });
 
   const packet = {
     topic,
@@ -200,20 +328,90 @@ async function isGatewayOnline(gatewayId) {
 }
 
 /**
- * Gracefully shut down the broker.
+ * Push updated schedule and rules config to the Gateway via retained MQTT topic (FSD §4.8.3, §9.1).
+ * Topic: gateway/{gatewayId}/config/schedule (QoS 1, retain: true)
  */
-async function stopBroker() {
-  if (!isRunning) return;
-  if (server) server.close();
-  await aedes.close();
-  isRunning = false;
-  console.log('[MQTT] Broker stopped');
+async function publishScheduleConfig(gatewayId) {
+  try {
+    const schedules = await prisma.schedule.findMany({
+      where: { gatewayId },
+      orderBy: [{ hour: 'asc' }, { minute: 'asc' }]
+    });
+
+    const rules = await prisma.automationRule.findMany({
+      where: { gatewayId },
+      orderBy: { createdAt: 'desc' }
+    });
+
+    const dayMap = { SUN: 0, MON: 1, TUE: 2, WED: 3, THU: 4, FRI: 5, SAT: 6 };
+    const condMap = { gt: 'SENSOR_GT', lt: 'SENSOR_LT', eq: 'SENSOR_EQ' };
+
+    const scheduleJson = schedules.map(s => {
+      let repeatDays = null;
+      if (s.repeatDays) {
+        repeatDays = s.repeatDays.split(',').map(d => dayMap[d.trim()] ?? d);
+      }
+      return {
+        id: s.id,
+        type: s.type.toLowerCase(),
+        hour: s.hour,
+        minute: s.minute,
+        repeat: repeatDays,
+        date: s.oneTimeDate ? s.oneTimeDate.toISOString().split('T')[0] : null,
+        enabled: s.enabled,
+        target_device_id: s.targetDeviceId,
+        action_command: s.actionCommand,
+        title: s.title,
+        buzzer: s.buzzer
+      };
+    });
+
+    const ruleJson = rules.map(r => ({
+      id: r.id,
+      sensor_device_id: r.sensorDeviceId,
+      condition_type: condMap[r.conditionType] || r.conditionType,
+      threshold: r.threshold,
+      target_device_id: r.targetDeviceId,
+      action_command: r.actionCommand,
+      enabled: r.enabled
+    }));
+
+    const topic = `gateway/${gatewayId}/config/schedule`;
+    const payload = JSON.stringify({
+      schedules: scheduleJson,
+      rules: ruleJson,
+      last_updated: new Date().toISOString()
+    });
+
+    const packet = {
+      topic,
+      payload,
+      qos: 1,
+      retain: true
+    };
+
+    return new Promise((resolve) => {
+      aedes.publish(packet, (err) => {
+        if (err) {
+          console.error(`[MQTT] Failed to publish config to ${topic}:`, err.message);
+          resolve(false);
+        } else {
+          console.log(`[MQTT] Published retained config to ${topic} (${schedules.length} schedules, ${rules.length} rules)`);
+          resolve(true);
+        }
+      });
+    });
+  } catch (err) {
+    console.error(`[MQTT] Error preparing schedule config push for gateway ${gatewayId}:`, err.message);
+    return false;
+  }
 }
 
 module.exports = {
   startBroker,
   stopBroker,
   publishDeviceCommand,
+  publishScheduleConfig,
   isGatewayOnline,
   aedes
 };
