@@ -64,13 +64,13 @@ void app_main(void)
     }
     ESP_ERROR_CHECK(ret);
 
-    // 2. Relay Controller: Cấp nguồn an toàn, kéo GPIO 15..18 LOW ngay lập tức (FSD §4.14 Step 2)
-    ESP_LOGI(TAG, "[BOOT 2/16] Initializing Relay Controller (Hardware Fail-Safe GPIO 15..18 LOW)...");
-    relay_controller_init();
-
-    // 3. Event Bus: Khởi tạo Event Queue trung tâm (32 slots) trước khi các module đăng ký (FSD §4.14 Step 3)
-    ESP_LOGI(TAG, "[BOOT 3/16] Initializing Central Event Bus Queue (32 slots)...");
+    // 2. Event Bus: Khởi tạo Event Queue trung tâm (32 slots) trước khi các module đăng ký (FSD §4.14 Step 2)
+    ESP_LOGI(TAG, "[BOOT 2/16] Initializing Central Event Bus Queue (32 slots)...");
     event_bus_init();
+
+    // 3. Relay Controller: Cấp nguồn an toàn, kéo GPIO 15..18 LOW ngay lập tức (FSD §4.14 Step 3)
+    ESP_LOGI(TAG, "[BOOT 3/16] Initializing Relay Controller (Hardware Fail-Safe GPIO 15..18 LOW)...");
+    relay_controller_init();
 
     // 4. Task Supervisor & Watchdog (FSD §4.14 Step 4)
     ESP_LOGI(TAG, "[BOOT 4/16] Initializing Task Supervisor (Active Mask 0x7F, TWDT 15s)...");

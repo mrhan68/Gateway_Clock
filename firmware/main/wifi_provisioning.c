@@ -332,7 +332,7 @@ void wifi_provisioning_init(void)
         ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap_config));
         ESP_ERROR_CHECK(esp_wifi_start());
 
-        xTaskCreate(dns_server_task, "dns_task", 3072, NULL, 5, &s_dns_task_handle);
+        xTaskCreate(dns_server_task, "dns_task", 4096, NULL, 5, &s_dns_task_handle);
 
         event_bus_post(EVT_WIFI_PROVISIONING_STARTED, NULL, 0, false);
         ESP_LOGI(TAG, "[PROVISIONING] SoftAP active. Connect to '%s' (IP: 192.168.4.1)", SOFTAP_SSID);
@@ -371,7 +371,7 @@ void wifi_provisioning_force_reset(void)
     ESP_ERROR_CHECK(esp_wifi_start());
 
     stop_dns_only();
-    xTaskCreate(dns_server_task, "dns_task", 3072, NULL, 5, &s_dns_task_handle);
+    xTaskCreate(dns_server_task, "dns_task", 4096, NULL, 5, &s_dns_task_handle);
     web_server_start();
 
     event_bus_post(EVT_WIFI_PROVISIONING_STARTED, NULL, 0, false);

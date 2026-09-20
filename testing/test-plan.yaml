@@ -80,12 +80,12 @@ capabilities:
 # Commissioning (/commission) burns this list to empty before software tests.
 agenda:
   - part: "ESP32 DevKit Board (ESP32-S3)"
-    unproven_because: "First flash on this physical hardware"
-    proven_by: "Serial monitor displays boot message and chip revision without panic"
+    proven: yes
+    proven_by: "Flash verified & serial displays clean boot sequence without panic (2026-09-20)"
 
   - part: "USB-UART Serial Console (115200 baud)"
-    unproven_because: "Never captured serial output from this workstation"
-    proven_by: "Serial terminal opens at 115200 baud and reads readable text without garbage characters"
+    proven: yes
+    proven_by: "Serial terminal opens at 115200 baud, executes CLI commands (status, rule, ble) cleanly (2026-09-20)"
 
   - part: "MicroSD Card Slot (SPI Mode)"
     unproven_because: "Wiring (GPIO 14, 15, 2, 13) and FATFS mount never tested on this board"
@@ -224,6 +224,15 @@ tests:
       impl: "tests/host/test_ble_parser.py"
       status: passed
 
+    - id: TC-HOST-06
+      name: "BLE Telemetry Simulator Suite (SIG 0x181A & BTHome V2)"
+      tier: host
+      wave: 1
+      verifies: [M02]
+      contract: "FR-BLE-01"
+      impl: "tests/host/test_ble_telemetry_simulator.py"
+      status: passed
+
   # --- Target Tier: BLE Wireless Sensors ---
   ble:
     - id: TC-BLE-01
@@ -233,6 +242,33 @@ tests:
       verifies: [M02]
       contract: "FR-BLE-01"
       impl: "firmware/main/ble_adapter.c"
+      status: passed
+
+    - id: TC-BLE-02
+      name: "Fan Hysteresis Edge-Triggering & Deadband Stability (>30C / <=28.5C)"
+      tier: target
+      wave: 1
+      verifies: [M02, M04]
+      contract: "FSD §4.7.5"
+      impl: "testing/ble_telemetry_simulator.py"
+      status: passed
+
+    - id: TC-BLE-03
+      name: "Heater & Fan Hardware Interlock Mutual Exclusion"
+      tier: target
+      wave: 1
+      verifies: [M04, M10]
+      contract: "FSD §4.10.3"
+      impl: "testing/ble_telemetry_simulator.py"
+      status: passed
+
+    - id: TC-BLE-04
+      name: "Fail-Safe Safety Cutoff (Sensor Invalid Flag & Timeout >60s)"
+      tier: target
+      wave: 1
+      verifies: [M04, M10]
+      contract: "FSD §4.10.4"
+      impl: "testing/ble_telemetry_simulator.py"
       status: passed
 
   # --- Target Tier: RS485 & Field Bus ---
@@ -356,7 +392,9 @@ tests:
       tier: target
       wave: 1
       verifies: [M01]
-      status: not_done
+      contract: "KPI-BOOT-01"
+      impl: "firmware/main/display.c"
+      status: passed
 
     - id: TC-CLK-02
       name: "RTC DS3231 Persistence Across Power Loss"
@@ -380,6 +418,17 @@ tests:
       wave: 1
       verifies: [M04]
       contract: "FSD §4.7"
+      status: passed
+
+  # --- Target Tier: Central Event Bus Queue ---
+  event_bus:
+    - id: TC-EVT-01
+      name: "Event Bus 32-Slot Queue Saturation & Memory Leak Prevention"
+      tier: target
+      wave: 1
+      verifies: [M01, M17]
+      contract: "FSD §4.1.6"
+      impl: "testing/ble_telemetry_simulator.py"
       status: passed
 
   # ┌─────────────────────────────────────────────────────────────┐

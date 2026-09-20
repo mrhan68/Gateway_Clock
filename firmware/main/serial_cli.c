@@ -83,6 +83,7 @@ static void print_help(void)
     printf("  modbus scan [start_id] [end_id]      - Probe RS485 slave devices (mock mode)\n");
     printf("  test freeze rs485                    - Test hook: simulate frozen rs485 task (FR-SUP-02)\n");
     printf("  test freeze event_bus                - Test hook: simulate frozen event_bus task (FR-SUP-02)\n");
+    printf("  test burst [count]                   - Test hook: burst events into event bus queue (FSD §4.1.6)\n");
     printf("  reboot                               - Reboot the ESP32 gateway\n\n");
 }
 
@@ -296,6 +297,10 @@ static void handle_command(char *cmd_line)
     } else if (strcmp(cmd_line, "rule clear") == 0) {
         rule_engine_clear_rules();
         printf("OK: All rules cleared.\n");
+    } else if (strcmp(cmd_line, "rule reset") == 0 || strcmp(cmd_line, "rule reload") == 0) {
+        rule_engine_reload_rules();
+        rule_engine_reset_lockouts();
+        printf("OK: Rules reloaded and lockouts reset.\n");
     } else if (strcmp(cmd_line, "schedule list") == 0) {
         int cnt = scheduler_get_entry_count();
         printf("\n=== ACTIVE SCHEDULES (%d) ===\n", cnt);
@@ -377,6 +382,7 @@ static void handle_command(char *cmd_line)
             printf("Dispatching command '%s' to target device '%s'...\n", command, target);
             rule_action_request_t *req = (rule_action_request_t *)malloc(sizeof(rule_action_request_t));
             if (req != NULL) {
+                memset(req, 0, sizeof(rule_action_request_t));
                 strncpy(req->target_device_id, target, sizeof(req->target_device_id) - 1);
                 req->target_device_id[sizeof(req->target_device_id) - 1] = '\0';
                 strncpy(req->action_command, command, sizeof(req->action_command) - 1);
@@ -426,6 +432,11 @@ static void handle_command(char *cmd_line)
         printf("TEST HOOK: Simulating EVENT_BUS task stall (FSD §4.13.4 FR-SUP-02)...\n");
         printf("Task will stop heartbeat. Supervisor should reboot in 15 seconds!\n");
         event_bus_freeze();
+    } else if (strncmp(cmd_line, "test burst", 10) == 0) {
+        int count = 40;
+        sscanf(cmd_line + 10, "%d", &count);
+        if (count < 1) count = 40;
+        event_bus_test_burst(count);
     } else if (strcmp(cmd_line, "reboot") == 0) {
         printf("Restarting ESP32 Gateway...\n");
         vTaskDelay(pdMS_TO_TICKS(500));

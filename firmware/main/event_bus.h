@@ -194,6 +194,12 @@ void event_bus_start_dispatcher(void);
  */
 void event_bus_freeze(void);
 
+/**
+ * @brief Burst stress test event bus queue (FSD §4.1.6 stress test hook)
+ * @param count Number of events to burst (e.g. 40)
+ */
+void event_bus_test_burst(int count);
+
 #ifdef __cplusplus
 }
 #endif

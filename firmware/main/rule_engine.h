@@ -100,12 +100,12 @@ int rule_engine_get_rule_count(void);
  */
 int rule_engine_get_rules(automation_rule_t *dest, int max_rules);
 
-/**
- * @brief Evaluate telemetry directly against active rules using Hysteresis & Edge-Triggering.
- * @param telem Pointer to sensor telemetry data.
- * @return Number of rules triggered (actions posted).
- */
 int rule_engine_evaluate_telemetry(const sensor_telemetry_t *telem);
+
+/**
+ * @brief Reset all active rule safety lockouts and cooldowns (test harness hook)
+ */
+void rule_engine_reset_lockouts(void);
 
 #ifdef __cplusplus
 }

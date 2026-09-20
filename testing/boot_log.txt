@@ -1,0 +1,252 @@
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0x1 (POWERON),boot:0x8 (SPI_FAST_FLASH_BOOT)
+SPIWP:0xee
+mode:DIO, clock div:2
+load:0x3fce2810,len:0x178c
+load:0x403c8700,len:0x4
+load:0x403c8704,len:0xcb8
+load:0x403cb700,len:0x2db0
+entry 0x403c8914
+[0;32mI (30) boot: ESP-IDF v5.3.1 2nd stage bootloader[0m
+[0;32mI (30) boot: compile time Sep 19 2026 17:03:29[0m
+[0;32mI (30) boot: Multicore bootloader[0m
+[0;32mI (33) boot: chip revision: v0.2[0m
+[0;32mI (37) boot.esp32s3: Boot SPI Speed : 40MHz[0m
+[0;32mI (42) boot.esp32s3: SPI Mode       : DIO[0m
+[0;32mI (46) boot.esp32s3: SPI Flash Size : 16MB[0m
+[0;32mI (51) boot: Enabling RNG early entropy source...[0m
+[0;32mI (57) boot: Partition Table:[0m
+[0;32mI (60) boot: ## Label            Usage          Type ST Offset   Length[0m
+[0;32mI (68) boot:  0 nvs              WiFi data        01 02 00009000 00006000[0m
+[0;32mI (75) boot:  1 otadata          OTA data         01 00 0000f000 00002000[0m
+[0;32mI (82) boot:  2 phy_init         RF data          01 01 00011000 00001000[0m
+[0;32mI (90) boot:  3 factory          factory app      00 00 00020000 00200000[0m
+[0;32mI (97) boot:  4 ota_0            OTA app          00 10 00220000 00200000[0m
+[0;32mI (105) boot:  5 storage          Unknown data     01 82 00420000 00200000[0m
+[0;32mI (112) boot: End of partition table[0m
+[0;32mI (117) boot: Defaulting to factory image[0m
+[0;32mI (121) esp_image: segment 0: paddr=00020020 vaddr=3c0f0020 size=3ec18h (257048) map[0m
+[0;32mI (194) esp_image: segment 1: paddr=0005ec40 vaddr=3fca0e00 size=013d8h (  5080) load[0m
+[0;32mI (195) esp_image: segment 2: paddr=00060020 vaddr=42000020 size=ebdb0h (966064) map[0m
+[0;32mI (439) esp_image: segment 3: paddr=0014bdd8 vaddr=3fca21d8 size=040f0h ( 16624) load[0m
+[0;32mI (444) esp_image: segment 4: paddr=0014fed0 vaddr=40374000 size=1cdd0h (118224) load[0m
+[0;32mI (491) boot: Loaded app from partition at offset 0x20000[0m
+[0;32mI (491) boot: Disabling RNG early entropy source...[0m
+[0;32mI (503) cpu_start: Multicore app[0m
+[0;32mI (513) cpu_start: Pro cpu start user code[0m
+[0;32mI (513) cpu_start: cpu freq: 160000000 Hz[0m
+[0;32mI (513) app_init: Application information:[0m
+[0;32mI (516) app_init: Project name:     smart_clock_gateway[0m
+[0;32mI (522) app_init: App version:      002a2c0[0m
+[0;32mI (527) app_init: Compile time:     Sep 20 2026 04:18:58[0m
+[0;32mI (533) app_init: ELF file SHA256:  ac628ba0a...[0m
+[0;32mI (538) app_init: ESP-IDF:          v5.3.1[0m
+[0;32mI (543) efuse_init: Min chip rev:     v0.0[0m
+[0;32mI (548) efuse_init: Max chip rev:     v0.99 [0m
+[0;32mI (552) efuse_init: Chip rev:         v0.2[0m
+[0;32mI (557) heap_init: Initializing. RAM available for dynamic allocation:[0m
+[0;32mI (565) heap_init: At 3FCAF3C0 len 0003A350 (232 KiB): RAM[0m
+[0;32mI (571) heap_init: At 3FCE9710 len 00005724 (21 KiB): RAM[0m
+[0;32mI (577) heap_init: At 3FCF0000 len 00008000 (32 KiB): DRAM[0m
+[0;32mI (583) heap_init: At 600FE100 len 00001EE8 (7 KiB): RTCRAM[0m
+[0;32mI (591) spi_flash: detected chip: boya[0m
+[0;32mI (594) spi_flash: flash io: dio[0m
+[0;33mW (598) i2c: This driver is an old driver, please migrate your application code to adapt `driver/i2c_master.h`[0m
+[0;32mI (608) sleep: Configure to isolate all GPIO pins in sleep state[0m
+[0;32mI (615) sleep: Enable automatic switching of GPIO sleep configuration[0m
+[0;32mI (622) coexist: coex firmware version: 4482466[0m
+[0;32mI (639) coexist: coexist rom version e7ae62f[0m
+[0;32mI (640) main_task: Started on CPU0[0m
+[0;32mI (642) main_task: Calling app_main()[0m
+[0;32mI (2142) MAIN: ==================================================[0m
+[0;32mI (2142) MAIN: [BOOT] Starting Smart Clock Edge Gateway[0m
+[0;32mI (2143) MAIN: Hardware: ESP32-S3 Bare-board (/dev/ttyACM0 / COM7)[0m
+[0;32mI (2150) MAIN: Firmware: Complete FSD Ecosystem (Relays + Display + Storage + SD)[0m
+[0;32mI (2158) MAIN: ==================================================[0m
+[0;32mI (2165) MAIN: [BOOT 1/16] Initializing NVS Flash...[0m
+[0;32mI (2194) MAIN: [BOOT 2/16] Initializing Relay Controller (Hardware Fail-Safe GPIO 15..18 LOW)...[0m
+[0;32mI (2195) RELAY_CTRL: Initializing Relay Controller (GPIO 15..18, Active HIGH, 10k pull-down)...[0m
+[0;32mI (2203) gpio: GPIO[15]| InputEn: 1| OutputEn: 1| OpenDrain: 0| Pullup: 0| Pulldown: 1| Intr:0 [0m
+[0;32mI (2212) gpio: GPIO[16]| InputEn: 1| OutputEn: 1| OpenDrain: 0| Pullup: 0| Pulldown: 1| Intr:0 [0m
+[0;32mI (2221) gpio: GPIO[17]| InputEn: 1| OutputEn: 1| OpenDrain: 0| Pullup: 0| Pulldown: 1| Intr:0 [0m
+[0;32mI (2231) gpio: GPIO[18]| InputEn: 1| OutputEn: 1| OpenDrain: 0| Pullup: 0| Pulldown: 1| Intr:0 [0m
+[0;32mI (2240) RELAY_CTRL: Relay Controller initialized successfully (Safety Interlock enabled)[0m
+[0;32mI (2249) MAIN: [BOOT 3/16] Initializing Central Event Bus Queue (32 slots)...[0m
+[0;32mI (2257) EVENT_BUS: Event bus queue created (depth=32)[0m
+[0;32mI (2263) MAIN: [BOOT 4/16] Initializing Task Supervisor (Active Mask 0x7F, TWDT 15s)...[0m
+[0;32mI (2271) SUPERVISOR: Supervisor task running on Core 0 (Prio 7)[0m
+[0;32mI (2278) SUPERVISOR: Task supervisor initialized successfully (Active Mask: 0x7F)[0m
+[0;32mI (2286) SUPERVISOR: Active task monitoring mask updated: 0x7F[0m
+[0;32mI (2293) MAIN: [BOOT 5/16] Initializing RTC System Clock (DS3231 I2C0 & TZ ICT-7)...[0m
+[0;32mI (2302) APP_RTC: System Timezone set to 'ICT-7'[0m
+[0;33mW (2308) APP_RTC: [RTC] DS3231 not detected on I2C (bare-board mode), falling back to system SNTP clock.[0m
+[0;32mI (2317) MAIN: [BOOT 6/16] Initializing Display Subsystem (OLED + Buzzer + Buttons)...[0m
+[0;32mI (2325) DISPLAY: Initializing Display Subsystem (SSD1327 OLED + Buzzer + Buttons)...[0m
+[0;32mI (2334) gpio: GPIO[0]| InputEn: 1| OutputEn: 0| OpenDrain: 0| Pullup: 1| Pulldown: 0| Intr:2 [0m
+[0;32mI (2343) gpio: GPIO[4]| InputEn: 1| OutputEn: 0| OpenDrain: 0| Pullup: 1| Pulldown: 0| Intr:2 [0m
+[0;33mW (2353) DISPLAY: OLED SSD1327 not detected at I2C 0x3C (using virtual UI display)[0m
+
+┌───���─────────────────────────────────────────��┐
+│ [MÀN HÌNH 0: ĐỒNG HỒ & MÔI TRƯỜNG]            │
+│ Giờ & Ngày : 07:00:01  (T5, 01/01/1970) │
+│ Nhiệt & Ẩm : --.- °C  |  --.- %RH              │
+│ Mạng       : Wi-Fi: ○ OFF  |  MQTT: ○ OFF       │
+└─��──────────────────────────────────────────���─┘
+[0;32mI (2407) DISPLAY: Display task running on Core 0 (Priority 3, 1 FPS)[0m
+[0;32mI (2414) DISPLAY: Display Subsystem initialized successfully (Direct-to-Task Notification enabled)[0m
+[0;32mI (2424) MAIN: [BOOT 7/16] Mounting SPIFFS storage /spiffs...[0m
+[0;32mI (2430) STORAGE: Mounting SPIFFS partition 'storage' at '/spiffs'...[0m
+[0;32mI (2559) STORAGE: SPIFFS mounted successfully! Total: 1875 KB, Used: 0 KB[0m
+[0;32mI (2560) STORAGE: Storage subsystem initialized successfully[0m
+[0;32mI (2560) STORAGE: Cloud Sync Task started on Core 1[0m
+[0;32mI (2562) MAIN: [BOOT 8/16] Initializing MicroSD Logger & Sync Queue...[0m
+[0;32mI (2575) SD_LOGGER: Initializing MicroSD SPI2_HOST (CS=10, MOSI=11, CLK=12, MISO=13)...[0m
+[0;32mI (2586) gpio: GPIO[10]| InputEn: 0| OutputEn: 1| OpenDrain: 0| Pullup: 0| Pulldown: 0| Intr:0 [0m
+[0;31mE (2617) vfs_fat_sdmmc: sdmmc_card_init failed (0x107).[0m
+[0;32mI (2618) gpio: GPIO[10]| InputEn: 1| OutputEn: 0| OpenDrain: 0| Pullup: 0| Pulldown: 0| Intr:0 [0m
+[0;33mW (2622) SD_LOGGER: MicroSD card not detected at /sdcard (ESP_ERR_TIMEOUT). System running with local SPIFFS fallback.[0m
+[0;32mI (2633) SD_LOGGER: MicroSD Logger Subsystem initialized successfully (Queue depth: 30)[0m
+[0;32mI (2633) SD_LOGGER: SD Card Logger Task running on Core 1 (Prio 4)[0m
+[0;32mI (2642) MAIN: [BOOT 9/16] Initializing Config Manager (loading config.json)...[0m
+[0;32mI (2719) CONFIG_MGR: Configuration loaded successfully from NVS Flash (Timezone: ICT-7)[0m
+[0;32mI (2719) MAIN: [BOOT 10/16] Initializing Wi-Fi & Web Provisioning Server...[0m
+[0;32mI (2727) pp: pp rom version: e7ae62f[0m
+[0;32mI (2729) net80211: net80211 rom version: e7ae62f[0m
+I (2735) wifi:wifi driver task: 3fcbfa54, prio:23, stack:6656, core=0
+I (2742) wifi:wifi firmware version: ccaebfa
+I (2744) wifi:wifi certification version: v7.0
+I (2748) wifi:config NVS flash: disabled
+I (2752) wifi:config nano formating: disabled
+I (2756) wifi:Init data frame dynamic rx buffer num: 32
+I (2761) wifi:Init static rx mgmt buffer num: 5
+I (2765) wifi:Init management short buffer num: 32
+I (2770) wifi:Init dynamic tx buffer num: 32
+I (2774) wifi:Init static tx FG buffer num: 2
+I (2778) wifi:Init static rx buffer size: 1600
+I (2782) wifi:Init static rx buffer num: 10
+I (2786) wifi:Init dynamic rx buffer num: 32
+[0;32mI (2791) wifi_init: rx ba win: 6[0m
+[0;32mI (2794) wifi_init: accept mbox: 6[0m
+[0;32mI (2798) wifi_init: tcpip mbox: 32[0m
+[0;32mI (2802) wifi_init: udp mbox: 6[0m
+[0;32mI (2806) wifi_init: tcp mbox: 6[0m
+[0;32mI (2809) wifi_init: tcp tx win: 5760[0m
+[0;32mI (2814) wifi_init: tcp rx win: 5760[0m
+[0;32mI (2818) wifi_init: tcp mss: 1440[0m
+[0;32mI (2822) wifi_init: WiFi IRAM OP enabled[0m
+[0;32mI (2827) wifi_init: WiFi RX IRAM OP enabled[0m
+[0;32mI (2836) WEB_SERVER: Gateway Web Server & REST API active on port 80 (Always-on)[0m
+[0;32mI (2840) WIFI_PROV: No Wi-Fi credentials (Volatile RAM mode). Starting SoftAP 'SmartClock-Setup'...[0m
+[0;32mI (2851) phy_init: phy_version 680,a6008b2,Jun  4 2024,16:41:10[0m
+I (2902) wifi:mode : sta (28:84:85:50:69:e0) + softAP (28:84:85:50:69:e1)
+I (2903) wifi:enable tsf
+I (2905) wifi:Total power save buffer number: 16
+I (2905) wifi:Init max length of beacon: 752/752
+I (2910) wifi:Init max length of beacon: 752/752
+[0;32mI (2915) WIFI_PROV: [PROVISIONING] SoftAP active. Connect to 'SmartClock-Setup' (IP: 192.168.4.1)[0m
+[0;32mI (2916) WIFI_PROV: Wi-Fi Station idle, waiting for configuration...[0m
+[0;32mI (2917) WIFI_PROV: Captive Portal DNS Server started on port 53[0m
+[0;32mI (2932) esp_netif_lwip: DHCP server started on interface WIFI_AP_DEF with IP: 192.168.4.1[0m
+[0;32mI (2946) MAIN: [BOOT 11/16] Initializing MQTT Adapter & Uplink Telemetry...[0m
+[0;32mI (2955) MQTT_ADAPTER: MQTT Adapter initialized with Broker='mqtt://broker.emqx.io:1883', LWT='gateway/GW_SMARTCLOCK_01/status'[0m
+[0;32mI (2966) MAIN: [BOOT 12/16] Initializing Rule Engine (loading rules.json & Hysteresis)...[0m
+[0;32mI (2966) UPLINK: Uplink telemetry task started on Core 1[0m
+[0;32mI (3037) RULE_ENGINE: Rules file /spiffs/rules.json not found. Using defaults.[0m
+[0;32mI (3038) RULE_ENGINE: Loaded 3 default automation rules[0m
+[0;32mI (3040) RULE_ENGINE: Rule Engine initialized with 3 active rules (Hysteresis & Safety Lockout ready)[0m
+[0;32mI (3050) MAIN: [BOOT 13/16] Initializing Local Scheduler & Alarms...[0m
+[0;32mI (3057) SCHEDULER: Loaded 2 default schedule entries[0m
+[0;32mI (3063) SCHEDULER: Scheduler task started on Core 0[0m
+[0;32mI (3069) SCHEDULER: Scheduler initialized with 2 entries[0m
+[0;32mI (3074) MAIN: [BOOT 14/16] Initializing BLE Adapter & NimBLE Stack...[0m
+[0;32mI (3082) BLE_ADAPTER: Registered new BLE device #1 'sensor_temp_01' (MAC: AA:BB:CC:11:22:33)[0m
+[0;32mI (3091) BLE_ADAPTER: Registered new BLE device #2 'sensor_hum_01' (MAC: AA:BB:CC:44:55:66)[0m
+[0;32mI (3100) BLE_INIT: BT controller compile version [aa16a46][0m
+[0;32mI (3107) BLE_INIT: Bluetooth MAC: 28:84:85:50:69:e2[0m
+[0;32mI (3117) BLE_ADAPTER: NimBLE Host Task Started[0m
+[0;32mI (3123) NimBLE: GAP procedure initiated: stop advertising.
+[0m
+[0;32mI (3125) NimBLE: Failed to restore IRKs from store; status=8
+[0m
+[0;32mI (3129) BLE_ADAPTER: NimBLE host synced. Starting BLE GAP scanner...[0m
+[0;32mI (3137) NimBLE: GAP procedure initiated: discovery; [0m
+[0;32mI (3142) NimBLE: own_addr_type=0 filter_policy=0 passive=1 limited=0 filter_duplicates=0 [0m
+[0;32mI (3151) NimBLE: duration=forever[0m
+[0;32mI (3155) NimBLE: 
+[0m
+[0;32mI (3159) BLE_ADAPTER: GAP passive scanner active (Continuous)[0m
+[0;32mI (3165) BLE_ADAPTER: BLE Scan & Worker Task started on Core 0 (Prio 5)[0m
+[0;32mI (3172) BLE_ADAPTER: BLE Adapter initialized successfully with NimBLE stack[0m
+[0;32mI (3179) MAIN: [BOOT 15/16] Starting Rescue Serial CLI Console...[0m
+
+[0;32mI (3186) MAIN: [BOOT 16/16] Starting Event Bus Dispatcher (Core 0, Priority 6)...[0m
+=====================================================
+   SMART CLOCK & INDUSTRIAL EDGE GATEWAY CONSOLE    [0;32mI (3195) EVENT_BUS: Event dispatcher task started on Core 0[0m
+
+   ESP32 Firmware v1.1.0 - AICLP Manual Mode        [0;32mI (3195) EVENT_BUS: Event dispatcher initialized successfully[0m
+
+
+[SYS] Alive marker 1
+   Type 'help' to view available commands.           
+[SYS] System fully operational with all 7 production tasks active (Mask 0x7F).
+
+=====================================================
+gateway> 
+┌─────────────────────────────────────────���────┐
+│ [MÀN HÌNH 0: ĐỒNG HỒ & MÔI TRƯỜNG]            │
+│ Giờ & Ngày : 07:00:02  (T5, 01/01/1970) │
+│ Nhiệt & Ẩm : --.- °C  |  --.- %RH              │
+│ Mạng       : Wi-Fi: ○ OFF  |  MQTT: ○ OFF       │
+└───────────────────────────────────────��──────┘
+
+┌─────────────────────────────────────────���────┐
+│ [MÀN HÌNH 0: ĐỒNG HỒ & MÔI TRƯỜNG]            │
+│ Giờ & Ngày : 07:00:03  (T5, 01/01/1970) │
+│ Nhiệt & Ẩm : --.- °C  |  --.- %RH              │
+│ Mạng       : Wi-Fi: ○ OFF  |  MQTT: ○ OFF       │
+└───────────────────────────────────────��──────┘
+
+┌─────────────────────────────────────────���────┐
+│ [MÀN HÌNH 0: ĐỒNG HỒ & MÔI TRƯỜNG]            │
+│ Giờ & Ngày : 07:00:04  (T5, 01/01/1970) │
+│ Nhiệt & Ẩm : --.- °C  |  --.- %RH              │
+│ Mạng       : Wi-Fi: ○ OFF  |  MQTT: ○ OFF       │
+└───────────────────────────────────────��──────┘
+[SYS] Alive marker 2 (Time: 1970-01-01 07:00:05, Free Heap: 93728 B)
+status
+
+=== GATEWAY RUNTIME STATUS ===
+Uptime          : 6 seconds (0 min)
+Free Heap       : 93728 bytes
+Task Active Mask: 0x7F
+Task Alive Mask : 0x7F (Health: HEALTHY)
+Wi-Fi Network   : DISCONNECTED (IP: 0.0.0.0)
+MQTT Uplink     : OFFLINE
+Connected Port  : COM7 (/dev/ttyACM0)
+Board Assembly  : Bare-board mode (Sprint 1)
+==============================
+
+gateway> 
+gateway> 
+┌─────────────────────────────────────────���────┐
+│ [MÀN HÌNH 0: ĐỒNG HỒ & MÔI TRƯỜNG]            │
+│ Giờ & Ngày : 07:00:07  (T5, 01/01/1970) │
+│ Nhiệt & Ẩm : --.- °C  |  --.- %RH              │
+│ Mạng       : Wi-Fi: ○ OFF  |  MQTT: ○ OFF       │
+└───────────────────────────────────────��──────┘
+
+┌─────────────────────────────────────────���────┐
+│ [MÀN HÌNH 0: ĐỒNG HỒ & MÔI TRƯỜNG]            │
+│ Giờ & Ngày : 07:00:08  (T5, 01/01/1970) │
+│ Nhiệt & Ẩm : --.- °C  |  --.- %RH              │
+│ Mạng       : Wi-Fi: ○ OFF  |  MQTT: ○ OFF       │
+└───────────────────────────────────────��──────┘
+[SYS] Alive marker 3 (Time: 1970-01-01 07:00:08, Free Heap: 93732 B)
+
+┌─────────────────────────────────────────���────┐
+│ [MÀN HÌNH 0: ĐỒNG HỒ & MÔI TRƯỜNG]            │
+│ Giờ & Ngày : 07:00:09  (T5, 01/01/1970) │
+│ Nhiệt & Ẩm : --.- °C  |  --.- %RH              │
+│ Mạng       : Wi-Fi: ○ OFF  |  MQTT: ○ OFF       │
+└───────────────────────────────────────��──────┘

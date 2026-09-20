@@ -82,7 +82,7 @@ BaseType_t event_bus_post(gateway_event_code_t code, void *data, size_t len, boo
     }
 
     if (result != pdTRUE) {
-        ESP_LOGW(TAG, "Event queue full! Dropped event %d", code);
+        ESP_LOGW(TAG, "Event queue full, payload freed! Dropped event %d", code);
         // FSD §4.1.6: Giai phong bo nho ngay lap tuc neu hang doi day
         if (data) free(data);
     }
@@ -90,12 +90,18 @@ BaseType_t event_bus_post(gateway_event_code_t code, void *data, size_t len, boo
     return result;
 }
 
+static volatile bool s_dispatcher_paused = false;
+
 static void event_dispatcher_task(void *pvParameters)
 {
     ESP_LOGI(TAG, "Event dispatcher task started on Core %d", xPortGetCoreID());
     gateway_event_t evt;
 
     while (1) {
+        while (s_dispatcher_paused) {
+            vTaskDelay(pdMS_TO_TICKS(10));
+        }
+
         if (s_event_bus_frozen) {
             // FSD §4.13.4 FR-SUP-02: Deliberately freeze task to test watchdog stall detection
             vTaskDelay(portMAX_DELAY);
@@ -152,5 +158,40 @@ void event_bus_freeze(void)
 {
     s_event_bus_frozen = true;
     printf("[TEST HOOK] Freezing event_bus task indefinitely (stopping heartbeat)... Watchdog timeout in 15s!\n");
+    fflush(stdout);
+}
+
+void event_bus_test_burst(int count)
+{
+    ESP_LOGI(TAG, "Starting Event Bus Burst Stress Test (%d events, queue depth: %d)...", count, EVENT_BUS_QUEUE_LEN);
+    printf("[EVENT_BUS] Executing burst stress test: %d events into %d-slot queue...\n", count, EVENT_BUS_QUEUE_LEN);
+    fflush(stdout);
+
+    s_dispatcher_paused = true;
+    vTaskDelay(pdMS_TO_TICKS(20)); // Ensure dispatcher task pauses loop
+
+    int dropped = 0;
+    int sent = 0;
+    for (int i = 0; i < count; i++) {
+        ble_telemetry_t *t = (ble_telemetry_t *)malloc(sizeof(ble_telemetry_t));
+        if (t != NULL) {
+            memset(t, 0, sizeof(ble_telemetry_t));
+            snprintf(t->device_id, sizeof(t->device_id), "stress_%d", i);
+            t->temperature = 25.0f + (float)i;
+            t->valid = true;
+            t->timestamp = 12345;
+            BaseType_t res = event_bus_post(EVT_BLE_DEVICE_DATA, t, sizeof(ble_telemetry_t), false);
+            if (res == pdTRUE) {
+                sent++;
+            } else {
+                dropped++;
+            }
+        }
+    }
+
+    s_dispatcher_paused = false;
+    vTaskDelay(pdMS_TO_TICKS(300)); // Allow dispatcher to drain all queued events
+    ESP_LOGI(TAG, "Burst stress test finished: Total=%d, Accepted=%d, Dropped=%d", count, sent, dropped);
+    printf("[EVENT_BUS] Burst Stress Test Result: Total=%d, Accepted=%d, Dropped=%d\n", count, sent, dropped);
     fflush(stdout);
 }

@@ -1,0 +1,80 @@
+{
+  "total": 12,
+  "passed": 12,
+  "failed": 0,
+  "duration_s": 22.05,
+  "tests": {
+    "TC-SCEN1-01": {
+      "title": "Initial Temperature 25.0\u00b0C leaves Fan OFF",
+      "status": "PASSED",
+      "details": "Confirmed Fan remained OFF at 25.0\u00b0C below threshold 30.0\u00b0C.",
+      "timestamp": "2026-09-20 04:45:57"
+    },
+    "TC-SCEN1-02": {
+      "title": "Temperature 30.5\u00b0C triggers Fan ON (GT EDGE-UP)",
+      "status": "PASSED",
+      "details": "Observed Rule #1 trigger with GT EDGE-UP and Fan relay_1 actuation.",
+      "timestamp": "2026-09-20 04:45:58"
+    },
+    "TC-SCEN1-03": {
+      "title": "Deadband Stability at 29.0\u00b0C preserves Fan ON state",
+      "status": "PASSED",
+      "details": "Fan state preserved continuously inside deadband 28.5\u00b0C - 30.0\u00b0C without false cutoff.",
+      "timestamp": "2026-09-20 04:45:59"
+    },
+    "TC-SCEN1-04": {
+      "title": "Temperature 28.0\u00b0C triggers Fan OFF release (GT EDGE-DOWN)",
+      "status": "PASSED",
+      "details": "Observed Rule #1 release with GT EDGE-DOWN and Fan relay_1 cutoff.",
+      "timestamp": "2026-09-20 04:46:00"
+    },
+    "TC-SCEN2-01": {
+      "title": "Heater Interlock forces Fan OFF with 500ms inductive delay",
+      "status": "PASSED",
+      "details": "Verified Fan forced OFF, 500ms delay elapsed for inductive surge suppression, then Heater turned ON.",
+      "timestamp": "2026-09-20 04:46:05"
+    },
+    "TC-SCEN2-02": {
+      "title": "Cooling Safety Override cuts off Heater immediately (0ms delay)",
+      "status": "PASSED",
+      "details": "Verified overtemperature priority: Heater turned OFF immediately with 0ms delay, Fan turned ON.",
+      "timestamp": "2026-09-20 04:46:06"
+    },
+    "TC-SCEN2-03": {
+      "title": "Mutual Exclusion (Mutex) guarantee between Fan and Heater",
+      "status": "PASSED",
+      "details": "Verified Relay Controller hardware protection: Fan and Heater were never simultaneously active.",
+      "timestamp": "2026-09-20 04:46:06"
+    },
+    "TC-SCEN3-01": {
+      "title": "Safe-Default Immediate Shutoff on Sensor Invalid Flag (valid=0)",
+      "status": "PASSED",
+      "details": "Verified sensor valid=0 skips rule evaluation and triggers immediate emergency cutoff of Heater.",
+      "timestamp": "2026-09-20 04:46:11"
+    },
+    "TC-SCEN3-02": {
+      "title": "Heater 30-Minute Maximum Continuous Run Emergency Limit",
+      "status": "PASSED",
+      "details": "Verified Relay 2 runtime guard configured to exactly 1800 seconds (30 minutes).",
+      "timestamp": "2026-09-20 04:46:11"
+    },
+    "TC-SCEN3-03": {
+      "title": "Sensor Loss > 60s Auto-Cutoff Watchdog Architecture",
+      "status": "PASSED",
+      "details": "Verified periodic 1000ms safety timer checks (s_last_valid_sensor_time > 60s) -> SAFETY_CUTOFF.",
+      "timestamp": "2026-09-20 04:46:11"
+    },
+    "TC-SCEN4-01": {
+      "title": "Event Bus 32-Slot Queue Saturation & Safe Drop",
+      "status": "PASSED",
+      "details": "Verified 32-slot saturation: 7 events dropped safely with payload freed log.",
+      "timestamp": "2026-09-20 04:46:16"
+    },
+    "TC-SCEN4-02": {
+      "title": "Heap Memory Leak Prevention & Post-Burst System Stability",
+      "status": "PASSED",
+      "details": "Heap before=92492 B, after=92272 B (delta=220 B). System HEALTHY.",
+      "timestamp": "2026-09-20 04:46:16"
+    }
+  }
+}

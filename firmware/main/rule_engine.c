@@ -560,3 +560,15 @@ void rule_engine_init(void)
 
     ESP_LOGI(TAG, "Rule Engine initialized with %d active rules (Hysteresis & Safety Lockout ready)", s_rule_count);
 }
+
+void rule_engine_reset_lockouts(void)
+{
+    lock_rules();
+    for (int i = 0; i < s_rule_count; i++) {
+        s_rules[i].lockout_until_ts = 0;
+        s_rules[i].last_triggered_ts = 0;
+        s_rules[i].current_state = false;
+    }
+    unlock_rules();
+    ESP_LOGI(TAG, "All rule safety lockouts, cooldowns, and states reset.");
+}
