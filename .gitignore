@@ -49,9 +49,11 @@ CLAUDE.md
 DEV_LOG.md
 PROGRESS.md
 testing/
+graphify-out/
 package.json
 package-lock.json
 tests/host/test_ble_telemetry_simulator.py
 boot_log.txt
 *test_report*.json
+
 

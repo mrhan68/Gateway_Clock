@@ -56,9 +56,6 @@ def main():
 
     assert ("ble status" in out or "gateway>" in out), "CLI prompt failed to respond"
 
-    # Temporarily pause simulated RS485 polling to test BLE channel isolation
-    exec_cli("mock rs485 stop", wait=1.0)
-
     print("\n[STEP 2] Verifying BLE Adapter & Scanner Status...")
     status_out = exec_cli("ble status", wait=1.5)
     assert "BLE ADAPTER STATUS" in status_out, "BLE adapter status header missing"
@@ -94,8 +91,6 @@ def main():
 
     print("\n" + "=" * 64)
     print("ALL BLE TARGET HARDWARE VERIFICATION TESTS PASSED (100%)!")
-    print("=" * 64)
-    exec_cli("mock rs485 start 4000", wait=1.0)
     ser.close()
     return 0
 

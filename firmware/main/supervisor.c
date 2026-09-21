@@ -10,7 +10,7 @@
 
 static const char *TAG = "SUPERVISOR";
 
-#define NUM_TRACKED_TASKS 8
+#define NUM_TRACKED_TASKS 7
 
 RTC_NOINIT_ATTR static rtc_crash_dump_t s_crash_dump;
 
@@ -72,7 +72,6 @@ static const char* get_task_name_by_index(int idx)
         case 4: return "scheduler";
         case 5: return "display";
         case 6: return "serial_cli";
-        case 7: return "mock_periph";
         default: return "unknown";
     }
 }

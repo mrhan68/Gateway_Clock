@@ -47,8 +47,6 @@ typedef enum {
 
 // Deprecated aliases for backwards compatibility
 #define EVT_REMOTE_COMMAND_REQUEST EVT_DEVICE_COMMAND_REQUEST
-#define EVT_RS485_DEVICE_DATA      EVT_NONE
-#define EVT_RS485_COMMAND_REQUEST  EVT_NONE
 
 /* ========================================================================= */
 /* Shared Payload Structs (FSD v1.1 §4.1.5)                                   */
@@ -159,7 +157,7 @@ typedef struct {
 // Kiểu hàm callback xử lý event
 typedef void (*gateway_event_handler_t)(const gateway_event_t *evt);
 
-#define EVENT_BUS_QUEUE_LEN       32
+#define EVENT_BUS_QUEUE_LEN       64
 #define EVENT_BUS_MAX_HANDLERS     4
 #define EVENT_BUS_DISPATCHER_PRIO  6
 #define EVENT_BUS_DISPATCHER_CORE  0

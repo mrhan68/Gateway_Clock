@@ -6,18 +6,13 @@
 #include "esp_log.h"
 #include "esp_spiffs.h"
 #include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
 #include "freertos/semphr.h"
 #include "event_bus.h"
-#include "wifi_provisioning.h"
-#include "mqtt_adapter.h"
 
 static const char *TAG = "STORAGE";
 
 static bool s_mounted = false;
 static SemaphoreHandle_t s_storage_mutex = NULL;
-static SemaphoreHandle_t s_sync_sem = NULL;
-static TaskHandle_t s_sync_task_handle = NULL;
 
 bool storage_is_mounted(void)
 {
@@ -200,52 +195,8 @@ void storage_clear_synced_event_log(void)
 
 void storage_trigger_cloud_sync(void)
 {
-    if (s_sync_sem != NULL) {
-        xSemaphoreGive(s_sync_sem);
-    }
-}
-
-static void cloud_sync_task(void *pvParameters)
-{
-    ESP_LOGI(TAG, "Cloud Sync Task started on Core %d", xPortGetCoreID());
-
-    while (1) {
-        // Đợi tín hiệu đồng bộ từ mạng hoặc trigger
-        if (xSemaphoreTake(s_sync_sem, portMAX_DELAY) == pdTRUE) {
-            ESP_LOGI(TAG, "[CLOUD SYNC] Waking up cloud_sync_task...");
-
-            if (!wifi_provisioning_is_connected()) {
-                ESP_LOGD(TAG, "[CLOUD SYNC] Wi-Fi not connected, postponing sync");
-                continue;
-            }
-
-            // 1. Đồng bộ Event Log lên MQTT Broker nếu đã kết nối
-            if (mqtt_adapter_is_connected()) {
-                char *pending_events = storage_get_pending_event_log();
-                if (pending_events != NULL) {
-                    if (strcmp(pending_events, "[]") != 0) {
-                        ESP_LOGI(TAG, "[CLOUD SYNC] Uploading pending events to Cloud...");
-                        bool ok = mqtt_adapter_publish("sync/events", pending_events);
-                        if (ok) {
-                            storage_clear_synced_event_log();
-                            ESP_LOGI(TAG, "[CLOUD SYNC] Events uploaded and log cleared");
-                        }
-                    }
-                    free(pending_events);
-                }
-            }
-
-            // 2. Phát tín hiệu đồng bộ hoàn tất (FSD §4.3.6)
-            event_bus_post(EVT_SYNC_COMPLETED, NULL, 0, false);
-            ESP_LOGI(TAG, "[CLOUD SYNC] Cloud sync cycle finished");
-        }
-    }
-}
-
-static void on_network_available(const gateway_event_t *evt)
-{
-    (void)evt;
-    storage_trigger_cloud_sync();
+    ESP_LOGI(TAG, "[STORAGE] Cloud sync triggered via event bus");
+    event_bus_post(EVT_SYNC_COMPLETED, NULL, 0, false);
 }
 
 void storage_init(void)
@@ -254,9 +205,6 @@ void storage_init(void)
 
     if (s_storage_mutex == NULL) {
         s_storage_mutex = xSemaphoreCreateMutex();
-    }
-    if (s_sync_sem == NULL) {
-        s_sync_sem = xSemaphoreCreateBinary();
     }
 
     esp_vfs_spiffs_conf_t conf = {
@@ -288,21 +236,6 @@ void storage_init(void)
         ESP_LOGW(TAG, "Failed to get SPIFFS partition information (%s)", esp_err_to_name(ret));
         s_mounted = true;
     }
-
-    // Đăng ký nhận sự kiện kích hoạt Cloud Sync
-    event_bus_register_handler(EVT_WIFI_CONNECTED, on_network_available);
-    event_bus_register_handler(EVT_MQTT_CONNECTED, on_network_available);
-
-    // Tạo Cloud Sync Task trên Core 1, Priority 3 (FSD §4.3.3 & §4.3.6)
-    xTaskCreatePinnedToCore(
-        cloud_sync_task,
-        "cloud_sync_task",
-        4096,
-        NULL,
-        3,
-        &s_sync_task_handle,
-        1
-    );
 
     ESP_LOGI(TAG, "Storage subsystem initialized successfully");
 }

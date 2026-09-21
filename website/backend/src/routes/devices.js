@@ -15,11 +15,11 @@ const validate = (req, res, next) => {
 router.get('/:gateway_id/devices', gatewayIdRules, validate, deviceController.listDevices);
 
 // POST /gateways/{gateway_id}/devices
-router.post('/:gateway_id/devices', [...gatewayIdRules, deviceRules], validate, deviceController.createDevice);
+router.post('/:gateway_id/devices', [...gatewayIdRules, ...deviceRules], validate, deviceController.createDevice);
 
 // PUT /gateways/{gateway_id}/devices/{device_id}
 router.put('/:gateway_id/devices/:device_id',
-  [...gatewayIdRules, ...deviceIdRules, deviceRules], validate, deviceController.updateDevice);
+  [...gatewayIdRules, ...deviceIdRules, ...deviceRules], validate, deviceController.updateDevice);
 
 // DELETE /gateways/{gateway_id}/devices/{device_id}
 router.delete('/:gateway_id/devices/:device_id',
@@ -27,6 +27,6 @@ router.delete('/:gateway_id/devices/:device_id',
 
 // POST /gateways/{gateway_id}/devices/{device_id}/command
 router.post('/:gateway_id/devices/:device_id/command',
-  [...gatewayIdRules, ...deviceIdRules, commandRules], validate, deviceController.sendDeviceCommand);
+  [...gatewayIdRules, ...deviceIdRules, ...commandRules], validate, deviceController.sendDeviceCommand);
 
 module.exports = router;

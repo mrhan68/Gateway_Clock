@@ -192,8 +192,8 @@ static void scheduler_task(void *pvParameters)
         struct tm t;
         localtime_r(&now, &t);
 
-        // Only evaluate if real time has been synchronized (year > 2020)
-        if (t.tm_year >= (2020 - 1900)) {
+        // Only evaluate if real time has been synchronized (FSD §4.2 / FR-RTC-01)
+        if (rtc_is_valid()) {
             int cur_minute = t.tm_hour * 60 + t.tm_min;
 
             if (cur_minute != s_last_triggered_minute) {

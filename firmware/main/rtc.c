@@ -119,3 +119,11 @@ void app_rtc_get_formatted_time(char *buf, size_t max_len)
     localtime_r(&now, &timeinfo);
     strftime(buf, max_len, "%Y-%m-%d %H:%M:%S", &timeinfo);
 }
+
+bool rtc_is_valid(void)
+{
+    time_t now = app_rtc_get_time();
+    struct tm t;
+    localtime_r(&now, &t);
+    return (t.tm_year >= (2020 - 1900));
+}

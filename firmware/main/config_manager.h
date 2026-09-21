@@ -44,13 +44,8 @@ esp_err_t config_manager_set_mqtt(const char *uri, uint16_t interval_s);
 esp_err_t config_manager_set_timezone(const char *tz);
 
 /**
- * @brief (Deprecated) Stub cấu hình RS485 tương thích ngược
- */
-esp_err_t config_manager_set_rs485(uint32_t baudrate, uint16_t timeout_ms);
-
-/**
- * @brief Nạp cấu hình từ tệp JSON trên hệ thống tệp (SPIFFS / SD card)
- * @param filepath Đường dẫn tệp (mặc định "/spiffs/config.json" nếu truyền NULL)
+ * @brief Nạp cấu hình từ tệp JSON trên hệ thống tệp (LittleFS / SD card)
+ * @param filepath Đường dẫn tệp (mặc định "/storage/config.json" nếu truyền NULL)
  */
 esp_err_t config_manager_load_from_file(const char *filepath);
 

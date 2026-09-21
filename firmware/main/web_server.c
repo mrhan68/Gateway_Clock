@@ -14,7 +14,7 @@
 #include "wifi_provisioning.h"
 #include "config_manager.h"
 #include "mqtt_adapter.h"
-#include "mock_peripherals.h"
+#include "relay_controller.h"
 
 static const char *TAG = "WEB_SERVER";
 static httpd_handle_t s_server = NULL;
@@ -86,14 +86,14 @@ static const char DASHBOARD_HTML[] =
 "<div id='tab-dash' class='tab-content active'>"
 "<div class='grid'>"
 "<div class='card'>"
-"<div class='card-title'><span>🌡️ Cảm Biến Nhiệt Độ (0x01)</span><span id='temp-status' class='badge green'>OK</span></div>"
+"<div class='card-title'><span>🌡️ Cảm Biến BLE Nhiệt Độ</span><span id='temp-status' class='badge green'>OK</span></div>"
 "<div><span id='temp-val' class='metric-val'>--</span><span class='metric-unit'>°C</span></div>"
-"<div class='metric-sub'>Modbus Register 0x0000 (FC03)</div>"
+"<div class='metric-sub'>BLE BTHome / Sensor 01</div>"
 "</div>"
 "<div class='card'>"
-"<div class='card-title'><span>💧 Cảm Biến Độ Ẩm (0x01)</span><span id='hum-status' class='badge green'>OK</span></div>"
+"<div class='card-title'><span>💧 Cảm Biến BLE Độ Ẩm</span><span id='hum-status' class='badge green'>OK</span></div>"
 "<div><span id='hum-val' class='metric-val'>--</span><span class='metric-unit'>%RH</span></div>"
-"<div class='metric-sub'>Modbus Register 0x0001 (FC03)</div>"
+"<div class='metric-sub'>BLE BTHome / Sensor 01</div>"
 "</div>"
 "<div class='card'>"
 "<div class='card-title'><span>⏱️ Thời Gian & Hệ Thống</span></div>"
@@ -105,11 +105,11 @@ static const char DASHBOARD_HTML[] =
 "</div>"
 "</div>"
 "<div class='card' style='margin-bottom:16px;'>"
-"<div class='card-title'><span>⚡ Điều Khiển Relay Công Nghiệp (Slave 0x02)</span></div>"
-"<div class='relay-row'><div><strong>Relay 1: Quạt Làm Mát (fan_relay_01)</strong><div style='font-size:12px;color:#8b949e;'>Coil 0x0000</div></div><button id='btn-r1' class='btn btn-secondary' onclick='toggleRelay(\"fan_relay_01\", 0)'>...</button></div>"
-"<div class='relay-row'><div><strong>Relay 2: Máy Sưởi (heater_relay_01)</strong><div style='font-size:12px;color:#8b949e;'>Coil 0x0001</div></div><button id='btn-r2' class='btn btn-secondary' onclick='toggleRelay(\"heater_relay_01\", 1)'>...</button></div>"
-"<div class='relay-row'><div><strong>Relay 3: Máy Hút Ẩm (dehumidifier_01)</strong><div style='font-size:12px;color:#8b949e;'>Coil 0x0002</div></div><button id='btn-r3' class='btn btn-secondary' onclick='toggleRelay(\"dehumidifier_01\", 2)'>...</button></div>"
-"<div class='relay-row'><div><strong>Relay 4: Thiết Bị Phụ (relay_ch4)</strong><div style='font-size:12px;color:#8b949e;'>Coil 0x0003</div></div><button id='btn-r4' class='btn btn-secondary' onclick='toggleRelay(\"relay_ch4\", 3)'>...</button></div>"
+"<div class='card-title'><span>⚡ Điều Khiển 4-Kênh Relay (Active HIGH)</span></div>"
+"<div class='relay-row'><div><strong>Relay 1: Quạt Làm Mát (fan_relay_01)</strong><div style='font-size:12px;color:#8b949e;'>GPIO 15</div></div><button id='btn-r1' class='btn btn-secondary' onclick='toggleRelay(\"fan_relay_01\", 0)'>...</button></div>"
+"<div class='relay-row'><div><strong>Relay 2: Máy Sưởi (heater_relay_01)</strong><div style='font-size:12px;color:#8b949e;'>GPIO 16</div></div><button id='btn-r2' class='btn btn-secondary' onclick='toggleRelay(\"heater_relay_01\", 1)'>...</button></div>"
+"<div class='relay-row'><div><strong>Relay 3: Máy Hút Ẩm (dehumidifier_01)</strong><div style='font-size:12px;color:#8b949e;'>GPIO 17</div></div><button id='btn-r3' class='btn btn-secondary' onclick='toggleRelay(\"dehumidifier_01\", 2)'>...</button></div>"
+"<div class='relay-row'><div><strong>Relay 4: Thiết Bị Phụ (relay_ch4)</strong><div style='font-size:12px;color:#8b949e;'>GPIO 18</div></div><button id='btn-r4' class='btn btn-secondary' onclick='toggleRelay(\"relay_ch4\", 3)'>...</button></div>"
 "</div>"
 "</div>"
 "<div id='tab-rules' class='tab-content'>"
@@ -353,11 +353,12 @@ static esp_err_t get_status_handler(httpd_req_t *req)
 static esp_err_t get_telemetry_handler(httpd_req_t *req)
 {
     float temp = 0.0f, hum = 0.0f;
-    bool valid = true;
-    mock_rs485_get_latest(&temp, &hum, &valid);
+    bool valid = false;
 
     uint8_t coils[4] = {0};
-    mock_rs485_get_relays(coils);
+    for (int i = 0; i < 4; i++) {
+        coils[i] = relay_controller_get_state(i + 1) ? 1 : 0;
+    }
 
     cJSON *root = cJSON_CreateObject();
     cJSON_AddNumberToObject(root, "temp", temp);

@@ -16,11 +16,6 @@ extern "C" {
 #define TASK_HEARTBEAT_SCHEDULER   (1 << 4)
 #define TASK_HEARTBEAT_DISPLAY     (1 << 5)
 #define TASK_HEARTBEAT_CLI         (1 << 6)
-
-// Cờ kiểm thử cho Mock / Test Harness giả lập ngoại vi (Bit 7)
-#define TASK_HEARTBEAT_MOCK        (1 << 7)
-#define TASK_HEARTBEAT_RS485       TASK_HEARTBEAT_MOCK
-
 #define TASK_ACTIVE_MASK_PRODUCTION (0x7F)
 
 #define SUPERVISOR_TIMEOUT_MS      15000  // 15 giây không báo nhịp tim -> Coi như task bị treo

@@ -36,6 +36,13 @@ void app_rtc_set_timezone(const char *tz_string);
  */
 void app_rtc_get_formatted_time(char *buf, size_t max_len);
 
+/**
+ * @brief Kiểm tra tính hợp lệ của thời gian hệ thống (FSD §4.2 / FR-RTC-01)
+ * @return true nếu năm >= 2020 (đã đồng bộ DS3231 hoặc NTP), false nếu chưa đồng bộ
+ */
+bool rtc_is_valid(void);
+
+
 #ifdef __cplusplus
 }
 #endif

@@ -26,14 +26,18 @@ static void set_default_config(void)
 
 esp_err_t config_manager_load_from_file(const char *filepath)
 {
-    if (filepath == NULL) {
-        filepath = "/spiffs/config.json";
+    if (!filepath) {
+        filepath = "/storage/config.json";
     }
 
     struct stat st;
     if (stat(filepath, &st) != 0) {
-        ESP_LOGD(TAG, "Config file '%s' does not exist, skipping", filepath);
-        return ESP_ERR_NOT_FOUND;
+        if (strcmp(filepath, "/storage/config.json") == 0 && stat("/spiffs/config.json", &st) == 0) {
+            filepath = "/spiffs/config.json";
+        } else {
+            ESP_LOGD(TAG, "Config file '%s' does not exist, skipping", filepath);
+            return ESP_ERR_NOT_FOUND;
+        }
     }
 
     FILE *f = fopen(filepath, "r");
@@ -228,12 +232,6 @@ esp_err_t config_manager_set_timezone(const char *tz)
     return config_manager_save();
 }
 
-esp_err_t config_manager_set_rs485(uint32_t baudrate, uint16_t timeout_ms)
-{
-    ESP_LOGW(TAG, "config_manager_set_rs485 is deprecated (RS485 removed in FSD v1.1)");
-    return ESP_OK;
-}
-
 esp_err_t config_manager_save(void)
 {
     nvs_handle_t handle;
@@ -256,10 +254,6 @@ esp_err_t config_manager_save(void)
 
     nvs_set_str(handle, "mqtt_uri", s_active_config.mqtt_broker_uri);
     nvs_set_u16(handle, "mqtt_interval", s_active_config.mqtt_telemetry_interval_s);
-
-    // Clean up old RS485 keys from NVS if present
-    nvs_erase_key(handle, "rs485_baud");
-    nvs_erase_key(handle, "rs485_timeout");
 
     ret = nvs_commit(handle);
     nvs_close(handle);

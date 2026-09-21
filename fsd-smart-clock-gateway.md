@@ -44,7 +44,6 @@
 - [13. Ràng buộc & Giả định](#13-ràng-buộc--giả-định)
 - [14. Tiêu chí nghiệm thu](#14-tiêu-chí-nghiệm-thu)
 - [15. Phụ lục](#15-phụ-lục)
-- [Phụ lục B: Mô phỏng Thiết bị Modbus RS485 (Mock Test Harness)](#phụ-lục-b-mô-phỏng-thiết-bị-modbus-rs485-mock-test-harness)
 
 ---
 
@@ -211,7 +210,7 @@ Smart Clock không phải là một IoT device đơn lẻ, mà là một **Gatew
 | M11 | Web App: CRUD device, schedule, xem trạng thái | Web App |
 | M12 | Personal schedule/alarm: CRUD trên Web, kêu chuông tại Gateway | Gateway + Web App |
 | M13 | Nút tắt/snooze báo thức tại đồng hồ | Gateway |
-| **M14** | *(Đã lược bỏ)* RS485 Polling: Không áp dụng cho phiên bản Smart Home không dây | *(Out of Scope)* |
+| **M14** | **BLE Environmental Sensing & Telemetry Ingestion (BTHome / 0x181A)** | **Gateway** |
 | **M15** | **SD Card Logger: Lưu dữ liệu cục bộ, Store-and-Forward Sync Queue, crash log** | **Gateway** |
 | **M16** | **Config Manager: Lưu cấu hình node/topic; hỗ trợ cấu hình tại chỗ qua SD/CLI** | **Gateway** |
 | **M17** | **Task Supervisor: Task Watchdog (TWDT) giám sát timeout & sức khỏe từng task** | **Gateway** |
@@ -226,6 +225,7 @@ Smart Clock không phải là một IoT device đơn lẻ, mà là một **Gatew
 | S04 | BLE auto-discovery & Passive Beacon Scanning (Mijia/Tuya) | Gateway |
 | S05 | Event logging + xem lịch sử trên Web | Backend + Web App |
 | S06 | Luân phiên nhiều màn hình OLED | Gateway |
+| **S07** | **BLE Sensor Dynamic Registration qua Serial CLI & Web** | **Gateway** |
 | **S08** | **Cảnh báo mất kết nối cảm biến không dây BLE lên màn hình OLED & Buzzer** | **Gateway** |
 
 #### Could Have (có thể có)
@@ -261,16 +261,15 @@ Smart Clock không phải là một IoT device đơn lẻ, mà là một **Gatew
 │                                                                                       │
 │   Core 1 (I/O Mạng Wi-Fi, Lưu trữ SD Card & Cấu hình tại chỗ)                        │
 │   ┌─────────────────────────────────────────────────────────────────────────┐         │
-│   │  uplink_task           (Priority 5) - Quản lý Wi-Fi, MQTT & Reconnect   │         │
+│   │  uplink_task           (Priority 5) - Quản lý Wi-Fi, MQTT, Backfill & LWT│        │
 │   │  sd_log_task           (Priority 4) - Ghi FATFS: Log, Telemetry, Queue  │         │
-│   │  cloud_sync_task       (Priority 3) - Đồng bộ cấu hình & Batch Sync HTTP│         │
 │   │  serial_cli_task       (Priority 2) - Giao diện lệnh cứu hộ UART0       │         │
-│   │  wifi_provisioning     (Priority 2) - SoftAP + Web Captive Portal       │         │
+│   │  wifi_provisioning / web_server (Priority 2) - SoftAP Portal & Dashboard│         │
 │   └─────────────────────────────────────────────────────────────────────────┘         │
 │                                                                                       │
 │   ┌─────────────────────────────────────────────────────────────────────────┐         │
 │   │                    HỆ THỐNG QUEUE ĐỆM & EVENT BUS                       │         │
-│   │  - Event Bus Queue: 32 slots (phân phối sự kiện toàn hệ thống)          │         │
+│   │  - Event Bus Queue: 64 slots (phân phối sự kiện toàn hệ thống)          │         │
 │   │  - BLE Command Queue: 10 slots (hàng đợi lệnh GATT Write / Điều khiển)  │         │
 │   │  - SD Logger Queue: 30 slots (hàng đợi ghi file tránh block I/O)        │         │
 │   │  - Uplink Outbox Queue: 20 slots (hàng đợi gửi MQTT khi online)         │         │
@@ -393,7 +392,7 @@ Xương sống giao tiếp của toàn bộ Gateway. Cung cấp hàng đợi s�
 
 | Tham số | Giá trị | Ghi chú |
 |---|---|---|
-| Queue length | 32 slots | Đủ cho burst event bình thường |
+| Queue length | 64 slots | Mở rộng đệm chống tràn khi có bão quảng bá BLE (BLE storm) |
 | Max handlers/event | 4 | Đủ cho quy mô đồ án |
 | Dispatcher priority | 6 | Cao nhất trong nhóm real-time |
 | Dispatcher core | Core 0 | Nhóm real-time |
@@ -518,7 +517,7 @@ typedef struct {
 2. **Quy tắc giải phóng bộ nhớ (Memory Ownership):**
    - **Cấp phát:** Module phát sự kiện (Producer) chịu trách nhiệm cấp phát động bộ nhớ payload qua `malloc()` nếu có dữ liệu gửi kèm (hoặc truyền `data = NULL` nếu không có payload).
    - **Giải phóng duy nhất:** Dispatcher task sau khi gọi lần lượt tất cả handler đã đăng ký cho event code đó sẽ gọi `free(evt.data)` một lần duy nhất tại điểm kết thúc vòng lặp. Các handler nhận event tuyệt đối **không được gọi free()** trên con trỏ nhận được.
-   - **Xử lý chống tràn & rò rỉ khi Queue đầy:** Nếu hàng đợi Event Bus (32 slots) bị đầy dẫn đến `event_bus_post()` thất bại (trả về `pdFALSE`), chính hàm `event_bus_post()` có nghĩa vụ giải phóng `free(data)` ngay lập tức và ghi log cảnh báo `ESP_LOGW("Event queue full, payload freed")` để loại trừ hoàn toàn nguy cơ rò rỉ bộ nhớ (Memory Leak).
+   - **Xử lý chống tràn & rò rỉ khi Queue đầy:** Nếu hàng đợi Event Bus (64 slots) bị đầy dẫn đến `event_bus_post()` thất bại (trả về `pdFALSE`), chính hàm `event_bus_post()` có nghĩa vụ giải phóng `free(data)` ngay lập tức và ghi log cảnh báo `ESP_LOGW("Event queue full, payload freed")` để loại trừ hoàn toàn nguy cơ rò rỉ bộ nhớ (Memory Leak).
 3. **Cơ chế xử lý nút bấm vật lý (Chống nghẽn Queue):**
    - Để tránh rủi ro mất sự kiện khi hàng đợi Event Bus bị đầy hoặc nghẽn, tín hiệu ngắt nút bấm vật lý (GPIO 0 `BTN_BOOT_ALARM` và GPIO 4 `BTN_SCREEN_NEXT`) sử dụng cơ chế **Direct-to-Task Notification** (`vTaskNotifyGiveFromISR`) gửi thẳng tới `display_task`.
    - `display_task` phản hồi ngay lập tức (Snooze +9m, Tắt chuông hoặc đổi trang màn hình OLED) mà không cần đợi luân chuyển qua Event Queue. Sau đó, `display_task` mới post sự kiện nhật ký lên Event Bus ở ngữ cảnh task thông thường (`from_isr = false`).
@@ -539,6 +538,22 @@ Vòng đời payload:
                         call handler_B(&evt) ──►             đọc data (KHÔNG free)
                         free(evt.data)  ◄── Điểm free DUY NHẤT
 ```
+
+#### 4.1.7 Verification Contract — Event Bus
+
+**Verification Contract — FR-EVT-01: Chống nghẽn hàng đợi & Thu hồi bộ nhớ an toàn**
+- **Tier:** host
+- **Preconditions:** Khởi tạo Event Bus với 64 slots; đăng ký 3 handler cho `EVT_BLE_DEVICE_DATA`.
+- **Stimulus:** Bắn liên tục 128 sự kiện có payload `malloc()` vào Event Bus với tốc độ 1000 events/giây; trong đó 64 sự kiện đầu được nhận, 64 sự kiện sau bị tràn hàng đợi (queue full).
+- **Expected:**
+  1. 64 sự kiện đầu tiên được Dispatcher phân phối đầy đủ đến 3 handler và `free()` an toàn 100%.
+  2. 64 sự kiện sau khi queue đầy bị từ chối (`pdFALSE`), hàm `event_bus_post()` tự động giải phóng payload ngay lập tức.
+  3. Kiểm tra rò rỉ bộ nhớ (Memory Leak Check): Heap free trước và sau bài test chênh lệch 0 bytes.
+- **Timing / tolerance:** Thời gian xử lý trung bình mỗi event của Dispatcher ≤ 0.5ms.
+- **Prohibited:** Handler thực hiện blocking I/O gây kẹt Dispatcher; payload bị rò rỉ khi queue đầy; double-free.
+- **Operator instructions:**
+  1. Chạy test tự động: `pytest tests/host/test_event_bus.py -v`.
+  2. Xác nhận 100% assertions PASS và không có log `Memory leak detected`.
 
 ---
 
@@ -596,9 +611,13 @@ time_t rtc_get_time(void);
 // QUAN TRỌNG: Toàn bộ code PHẢI gọi hàm này, KHÔNG gọi time(NULL) trực tiếp
 
 bool rtc_sync_from_ntp_and_save(void);
-// Hành vi: esp_sntp đồng bộ → ghi giờ mới vào DS3231
+// Hành vi: esp_sntp đồng bộ (chế độ Smooth Slew) → ghi giờ mới vào DS3231
 // Trả về: true nếu đồng bộ thành công
 // Gọi khi: EVT_WIFI_CONNECTED handler
+
+bool rtc_is_valid(void);
+// Hành vi: Kiểm tra năm hiện tại có >= 2020 không (xác nhận giờ đã được set từ DS3231 hoặc NTP).
+// Trả về: true nếu giờ hợp lệ; false nếu đang ở Epoch 1970 (chưa có giờ tin cậy).
 
 void rtc_set_timezone(const char *tz_string);
 // Hành vi: setenv("TZ", tz_string, 1); tzset();
@@ -611,125 +630,124 @@ void rtc_set_timezone(const char *tz_string);
 | Tham số | Giá trị |
 |---|---|
 | Chip | DS3231 |
-| Giao tiếp | I2C |
-| SDA pin | GPIO 8 (mặc định ESP32) |
-| SCL pin | GPIO 9 (mặc định ESP32) |
+| Giao tiếp | I2C0 |
+| SDA pin | GPIO 8 (pull-up 4.7kΩ) |
+| SCL pin | GPIO 9 (pull-up 4.7kΩ) |
 | I2C address | 0x68 |
 | Clock speed | 400 kHz |
 | Pin backup | CR2032 (giữ giờ ~8 năm khi mất điện chính) |
 
-#### 4.2.5 Ràng buộc
+#### 4.2.5 Ràng buộc & Cơ chế Smooth Slew
 
-- **Mọi module** gọi `rtc_get_time()`, không bao giờ gọi `time(NULL)` trực tiếp
-- NTP sync chỉ chạy 1 lần khi vừa có Wi-Fi, không poll liên tục
-- Nếu chưa có NTP và DS3231 cũng chưa được set → giờ sẽ sai, scheduler vẫn chạy nhưng kết quả không đúng mốc thời gian thực
+- **Mọi module** gọi `rtc_get_time()`, không bao giờ gọi `time(NULL)` trực tiếp.
+- **Bảo vệ báo thức khi chưa có giờ:** Scheduler và Rule Engine bắt buộc kiểm tra `rtc_is_valid()`. Nếu `false` $\rightarrow$ tạm dừng kích hoạt các lịch hẹn/báo thức theo giờ để chống reo nhầm chuông lúc boot.
+- **Cơ chế Smooth Slew (`SNTP_SYNC_MODE_SMOOTH`):** Sử dụng hàm `adjtime()` để bù trôi thời gian từ từ (tối đa ±0.5ms mỗi giây), tuyệt đối cấm nhảy lùi thời gian (Time Jump Backwards) gây đảo lộn thứ tự log và kích hoạt lại báo thức cũ.
+- NTP sync chạy 1 lần khi vừa có Wi-Fi, sau đó định kỳ mỗi 6 giờ 1 lần.
+
+#### 4.2.6 Verification Contract — Module RTC
+
+**Verification Contract — FR-RTC-01: Giữ giờ RTC khi mất điện & Smooth NTP Slew**
+- **Tier:** target
+- **Preconditions:** DS3231 đã lắp pin CR2032 (điện áp ≥ 2.8V), đã đồng bộ giờ Internet chính xác (vd: 14:00:00).
+- **Stimulus:**
+  1. Ngắt nguồn điện chính của Gateway trong 30 phút.
+  2. Cấp điện lại khi không có Wi-Fi (offline boot).
+- **Expected:**
+  1. Lúc khởi động, `rtc_init()` đọc I2C từ DS3231 thành công, thời gian hệ thống hiển thị 14:30:xx (sai số trôi giờ ≤ 1 giây).
+  2. `rtc_is_valid()` trả về `true`.
+  3. Khi kết nối Wi-Fi có NTP bù giờ: Đồng hồ không bị giật lùi thời gian; thanh ghi DS3231 được ghi đè giờ chuẩn mới thành công.
+- **Timing / tolerance:** Độ trôi RTC khi mất nguồn ≤ 2 ppm (~0.17 giây/ngày). Thời gian đọc I2C lúc boot ≤ 20ms.
+- **Prohibited:** Bị reset về Epoch 1970 khi mất điện; nhảy lùi thời gian khi NTP bù giờ.
+- **Operator instructions:**
+  1. Nạp firmware, kiểm tra serial log xác nhận `[RTC] Loaded time from DS3231: 2026-xx-xx`.
+  2. Rút cáp nguồn, đợi 5 phút, cắm lại cáp và đối chiếu giờ in ra terminal với đồng hồ điện thoại. Phải khớp từng phút.
 
 ---
 
 ### 4.3 Module: Storage (`storage.h/.c`)
 
 #### 4.3.1 Mô tả
-Quản lý lưu trữ local (LittleFS trên flash) và đồng bộ cloud. Là nơi duy nhất giao tiếp với Backend để pull config và push event log.
+Quản lý lưu trữ tệp cục bộ trên Flash phân vùng `storage` sử dụng hệ thống tệp **LittleFS** an toàn với cơ chế **Ghi Nguyên Tử (Atomic File Replacement)** chống mất điện đột ngột. Đồng bộ cấu hình từ xa thông qua giao thức **MQTT Downlink** (được xử lý tập trung bởi MQTT Adapter), loại bỏ hoàn toàn các tác vụ polling HTTP dư thừa để tiết kiệm bộ nhớ RAM và ngăn chặn xung đột mạng.
 
 #### 4.3.2 Chức năng
 
 | ID | Chức năng | Mô tả |
 |---|---|---|
-| ST-01 | Mount LittleFS | `esp_vfs_littlefs_register()` cho partition "storage" |
-| ST-02 | Lưu/đọc schedule.json | Backend là source of truth, Gateway chỉ đọc |
-| ST-03 | Lưu/đọc device_list.json | Tương tự schedule.json |
-| ST-04 | Append/đọc/xóa event_log.json | Gateway ghi, Backend chỉ đọc |
-| ST-05 | Cloud sync task | Chạy Core 1, pull config → push log → post EVT_CONFIG_UPDATED |
-| ST-06 | Đánh thức sync khi có mạng | Handler EVT_WIFI_CONNECTED/MQTT_CONNECTED → give semaphore |
+| ST-01 | Mount LittleFS An Toàn | `esp_vfs_littlefs_register()` cho partition "storage", tự động format phục hồi nếu partition hỏng |
+| ST-02 | Ghi Tệp Nguyên Tử (Atomic Write) | Ghi dữ liệu ra file tạm `.tmp`, gọi `fflush()`, sau đó dùng POSIX `rename()` tráo đổi tức thời |
+| ST-03 | Quản lý `schedule.json` | Lưu trữ cấu hình lịch biểu, báo thức. Backend cập nhật qua MQTT Downlink |
+| ST-04 | Quản lý `rules.json` | Lưu trữ các quy tắc tự động hóa nội bộ (Rule Engine) |
+| ST-05 | Quản lý `device_list.json` | Lưu trữ danh sách cảm biến BLE và thiết bị ngoại vi đã đăng ký |
+| ST-06 | Ringbuffer Offline Fallback | Lưu trữ 100 bản tin sự kiện gần nhất trong RAM/LittleFS khi không có thẻ nhớ MicroSD |
 
-#### 4.3.3 API
+#### 4.3.3 API & Cơ chế Ghi Nguyên Tử
 
 ```c
 void storage_init(void);
-// Hành vi: Mount LittleFS, tạo semaphore, tạo cloud_sync_task (Core 1, priority 4)
-//          Register handler EVT_WIFI_CONNECTED + EVT_MQTT_CONNECTED
+// Hành vi: Mount LittleFS trên phân vùng "storage" (offset 0x620000, size 2MB).
+//          Nếu lỗi mount -> tự động format lại phân vùng và khởi tạo cấu trúc thư mục sạch.
+
+bool storage_atomic_write_file(const char *path, const char *content);
+// Hành vi: Ghi nguyên tử an toàn tuyệt đối trước sự cố mất nguồn:
+//   1. Mở file tạm: snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", path);
+//   2. fwrite() toàn bộ content vào tmp_path, gọi fflush(f) và fsync(fileno(f)).
+//   3. fclose(f).
+//   4. Gọi POSIX rename(tmp_path, path) để tráo đổi nguyên tử.
+//   -> Nếu mất điện giữa chừng: File cũ vẫn nguyên vẹn 100%, không bao giờ bị 0 bytes.
+
+char *storage_load_file_string(const char *path);
+// Hành vi: Đọc toàn bộ nội dung file text.
+// Trả về: Chuỗi heap malloc (caller PHẢI free), hoặc NULL nếu file không tồn tại.
 
 bool storage_save_schedule_json(const char *json_str);
-// Hành vi: Ghi đè /spiffs/schedule.json
-// Gọi bởi: cloud_sync_task sau khi pull từ Backend
-
 char *storage_load_schedule_json(void);
-// Hành vi: Đọc /spiffs/schedule.json
-// Trả về: Chuỗi JSON (caller PHẢI free), hoặc "[]" nếu file rỗng/không tồn tại
+
+bool storage_save_rules_json(const char *json_str);
+char *storage_load_rules_json(void);
 
 bool storage_save_device_list_json(const char *json_str);
 char *storage_load_device_list_json(void);
-// Tương tự schedule_json
-
-bool storage_append_event_log(const char *event_json_line);
-// Hành vi: Append 1 dòng JSON vào /spiffs/event_log.json
-//          Post EVT_EVENT_LOG_APPENDED
-// Gọi bởi: display.c khi user tắt alarm (ngoại lệ local duy nhất)
-
-char *storage_get_pending_event_log(void);
-// Hành vi: Đọc toàn bộ dòng chưa sync
-// Trả về: Chuỗi JSON array (caller PHẢI free)
-
-void storage_clear_synced_event_log(void);
-// Hành vi: Xóa các dòng đã sync thành công
-
-void storage_trigger_cloud_sync(void);
-// Hành vi: (Chạy trong cloud_sync_task, Core 1, ĐƯỢC PHÉP block)
-//   1. GET /gateway/{id}/schedule → so sánh, nếu khác → ghi đè local
-//   2. GET /gateway/{id}/devices  → tương tự
-//   3. POST /gateway/{id}/events  → upload event_log
-//   4. Nếu có thay đổi config → post EVT_CONFIG_UPDATED_FROM_CLOUD
-//   5. post EVT_SYNC_COMPLETED
 ```
 
-#### 4.3.4 Cấu trúc file trên LittleFS
+#### 4.3.4 Cấu trúc thư mục LittleFS (`/storage/`)
 
 ```
-/spiffs/
-├── schedule.json        ← Backend ghi đè, Gateway chỉ đọc
-├── device_list.json     ← Backend ghi đè, Gateway chỉ đọc
-└── event_log.json       ← Gateway ghi, Backend chỉ đọc rồi xóa entry đã sync
+/storage/
+├── schedule.json        ← Backend gửi qua MQTT Downlink, Gateway lưu và thực thi
+├── rules.json           ← Backend / Web App gửi qua MQTT, Rule Engine nạp thực thi
+├── device_list.json     ← Danh sách cảm biến BLE đã gán nhãn
+└── fallback_events.bin  ← Vùng đệm sự kiện khẩn cấp khi không cắm thẻ nhớ SD
 ```
 
-#### 4.3.5 Quy tắc xung đột đồng bộ
-
-| Loại dữ liệu | Source of Truth | Gateway quyền gì | Backend quyền gì |
-|---|---|---|---|
-| `schedule.json` | **Backend** | Chỉ đọc | Đọc + Ghi |
-| `device_list.json` | **Backend** | Chỉ đọc | Đọc + Ghi |
-| `event_log.json` | **Gateway** | Đọc + Ghi | Chỉ đọc |
-
-#### 4.3.6 Cloud Sync Flow
+#### 4.3.5 Cơ chế Đồng bộ Cấu hình qua MQTT Downlink (Thay thế HTTP Polling)
 
 ```
-                    cloud_sync_task (Core 1)
-                           │
-    ┌──────────────────────┤
-    ▼                      ▼
-xSemaphoreTake()      ← đợi vô hạn ← on_network_available() give()
-    │
-    ▼
-1. GET /gateway/{id}/schedule
-    │── response OK? ──► so sánh với local
-    │                     │── khác? ──► ghi đè schedule.json
-    │                     │── giống? ──► bỏ qua
-    │── request fail? ──► log ERROR, tiếp tục
-    │
-2. GET /gateway/{id}/devices (tương tự)
-    │
-3. POST /gateway/{id}/events (upload event_log tích lũy)
-    │── 200 OK? ──► storage_clear_synced_event_log()
-    │── fail? ──► giữ lại, thử lại lần sync sau
-    │
-4. Nếu bước 1 hoặc 2 có thay đổi:
-    │── malloc(config_updated_t)
-    │── post EVT_CONFIG_UPDATED_FROM_CLOUD
-    │
-5. post EVT_SYNC_COMPLETED
-    │
-    ▼
-quay lại xSemaphoreTake() chờ lần có mạng tiếp
+Cloud / Backend                      Gateway MQTT Adapter                   Storage / Modules
+      │                                       │                                     │
+      │── publish(gateway/{id}/config/rules) ─►│                                     │
+      │   (Payload: rules.json, QoS 1)        │── post EVT_MQTT_MESSAGE_RECEIVED ──►│
+      │                                       │                                     │── storage_save_rules_json(atomic)
+      │                                       │                                     │── rule_engine_reload_rules()
+      │                                       │                                     │── post EVT_CONFIG_UPDATED
+      │◄── publish(gateway/{id}/ack) ─────────│◄── ACK Event Bus ───────────────────│
 ```
+
+#### 4.3.6 Verification Contract — Module Storage
+
+**Verification Contract — FR-ST-01: Ghi đè file JSON nguyên tử chống sụt áp mất nguồn**
+- **Tier:** target
+- **Preconditions:** Gateway đã mount LittleFS thành công, file `/storage/schedule.json` đang chứa dữ liệu hợp lệ (10 mục lịch hẹn).
+- **Stimulus:** Kích hoạt lệnh ghi đè file `schedule.json` mới dung lượng 4KB; đồng thời rút nguồn điện đột ngột (hoặc ngắt chân cấp nguồn VIN) trong vòng 20ms kể từ khi bắt đầu ghi.
+- **Expected:**
+  1. Sau khi cấp điện lại, Gateway mount lại LittleFS thành công không lỗi `DIRTY_FS`.
+  2. File `/storage/schedule.json` phải đọc ra chuỗi JSON nguyên vẹn (nếu việc tráo đổi `rename` chưa hoàn tất thì giữ nguyên 10 mục cũ; nếu đã `rename` thì chứa dữ liệu mới).
+  3. `cJSON_Parse()` phân tích cú pháp thành công 100%, không bị trả về `NULL`.
+- **Timing / tolerance:** Thời gian mount LittleFS lúc boot ≤ 150ms.
+- **Prohibited:** File `schedule.json` bị cụt, rỗng 0 bytes hoặc chuỗi JSON bị đứt đoạn gây panic khi boot.
+- **Operator instructions:**
+  1. Nạp file lịch biểu mẫu vào Gateway, kiểm tra lệnh `storage cat /storage/schedule.json` ra đúng 10 mục.
+  2. Gửi lệnh ghi đè dữ liệu mới lớn, dùng công tắc ngắt nguồn ngay lập tức.
+  3. Bật lại nguồn, mở serial monitor, gõ lệnh `storage verify /storage/schedule.json`. Xác nhận kết quả trả về `[OK] JSON Valid`.
 
 ---
 
@@ -786,7 +804,7 @@ User                    ESP32 SoftAP              NVS        Event Bus
  │                         │── esp_wifi_connect()   │             │
  │                         │── Thành công ────────────────────► EVT_WIFI_CONNECTED
  │                         │                       │             │  → rtc_sync_ntp()
- │                         │                       │             │  → cloud_sync_task()
+ │                         │                       │             │  → mqtt_connect()
 ```
 
 #### 4.4.5 Captive Portal HTML Form
@@ -823,7 +841,7 @@ Chịu trách nhiệm quét thụ động liên tục (Passive BLE Advertisement
 
 | ID | Chức năng | Mô tả |
 |---|---|---|
-| BA-01 | Quản lý danh sách cảm biến BLE | Tra cứu `s_known_devices[]`, nạp từ `/spiffs/device_list.json` lúc boot |
+| BA-01 | Quản lý danh sách cảm biến BLE | Tra cứu `s_known_devices[]`, nạp từ `/storage/device_list.json` lúc boot |
 | BA-02 | Passive Scan Advertisement | `ble_scan_task` (Core 0, priority 5), quét liên tục/phân kỳ (Software Coex) |
 | BA-03 | Post telemetry lên bus | Đẩy `EVT_BLE_DEVICE_DATA` với `ble_telemetry_t*` (nhiệt độ, độ ẩm, pin, rssi) |
 | BA-04 | Phát hiện cảm biến offline | Không nhận beacon sau **60 giây** → post `EVT_DEVICE_OFFLINE_ALERT` |
@@ -833,7 +851,7 @@ Chịu trách nhiệm quét thụ động liên tục (Passive BLE Advertisement
 
 ```c
 void ble_adapter_init(void);
-// Hành vi: Nạp danh sách thiết bị từ /spiffs/device_list.json
+// Hành vi: Nạp danh sách thiết bị từ /storage/device_list.json
 //          Khởi tạo ngăn xếp Apache NimBLE ở chế độ GAP Central / Observer
 //          Tạo ble_scan_task (Core 0, Priority 5, Stack 4096)
 
@@ -864,11 +882,42 @@ ble_scan_task (vòng lặp chu kỳ 1000ms)
     │           event_bus_post(EVT_BLE_DEVICE_DATA, telem, len, false)
     │
     └── 3. Quét kiểm tra timeout thiết bị trong bảng:
-          Với mỗi device: (now - last_seen > 60s)?
+          uint32_t timeout_thresh = s_wifi_reconnecting ? 180 : 60; // Ngưỡng thích ứng
+          Với mỗi device: (now - last_seen > timeout_thresh)?
             ──► is_online = false, post EVT_DEVICE_OFFLINE_ALERT
 ```
 
-> **Ghi chú vô tuyến Software Coexistence:** ESP32-S3 dùng chung 1 khối RF 2.4GHz. Khi Wi-Fi truyền tải nặng, ngăn xếp Software Coexistence tự động điều phối khe thời gian (TDM). BLE Adapter không block task; các gói beacon bị lỡ do xung đột sẽ tự động được nhận ở chu kỳ phát tiếp theo của cảm biến (chu kỳ phát thông thường 5–10s).
+#### 4.5.5 Cơ chế Vô tuyến Software Coexistence & Chống Bão BLE (BLE Storm Defense)
+
+1. **Software Coexistence Native:**
+   - ESP32-S3 sử dụng chung 1 bộ thu phát RF 2.4GHz. Kích hoạt `CONFIG_SW_COEXIST_ENABLE=y` của ESP-IDF.
+   - Cấu hình NimBLE Passive Scanner ở tỷ lệ **50% Duty Cycle**: `scan_interval = 60ms`, `scan_window = 30ms`. Giải phóng 50% thời gian vô tuyến cho Wi-Fi truyền tải gói tin MQTT, bảo đảm không gây lag kết nối mạng.
+2. **Chống Bão BLE (BLE Storm Defense):**
+   - Bật lọc trùng ở tầng Link-layer: `disc_params.filter_duplicates = 1`.
+   - Kiểm tra Whitelist MAC Address (`is_known_mac()`) trực tiếp trong callback ngắt NimBLE trước khi phân tích payload. Các thiết bị lạ xung quanh (AirTag, tai nghe, TV) bị vứt bỏ ngay tại chỗ với chi phí 0 bytes RAM, bảo vệ Event Bus không bao giờ bị nghẽn.
+3. **Ngưỡng Offline Thích Ứng (Adaptive Offline Timeout):**
+   - Khi Wi-Fi đang kết nối bình thường: Timeout là **60 giây**.
+   - Khi Wi-Fi đang quét kênh hoặc reconnect (`s_wifi_reconnecting == true`): Timeout tự động nâng lên **180 giây** để tránh hiện tượng RF Starvation kích hoạt báo động giả lúc nửa đêm.
+
+#### 4.5.6 Verification Contract — BLE Telemetry Adapter
+
+**Verification Contract — FR-BLE-01: Quét và giải mã gói tin BLE & Chống bão bản tin**
+- **Tier:** target
+- **Preconditions:** Gateway đã đăng ký cảm biến `sensor_temp_01` (MAC `A4:C1:38:11:22:33`), NimBLE scanner đang chạy ở 50% duty cycle.
+- **Stimulus:**
+  1. Cảm biến phát gói tin quảng bá BLE (Service Data `0x181A`, nhiệt độ 28.5°C, độ ẩm 65.0%).
+  2. Đồng thời phát 30 thiết bị BLE lạ xung quanh liên tục 100 packets/s để tạo tải bão tín hiệu.
+- **Expected:**
+  1. Gateway bóc tách chính xác nhiệt độ 28.5°C, độ ẩm 65.0%, đưa vào Event Bus thành công trong < 500ms.
+  2. Toàn bộ gói tin của 30 thiết bị lạ bị lọc bỏ tại tầng link-layer, không chiếm slot của Event Bus (Queue slot sử dụng ≤ 5/64).
+- **Timing / tolerance:** Độ trễ nhận và bóc tách gói tin ≤ 500ms; sai số giải mã nhiệt độ = 0.0°C.
+- **Prohibited:** Bị rớt gói tin của cảm biến chính do bão tín hiệu; Event Bus bị đầy; cấp phát heap cho thiết bị lạ.
+- **Operator instructions:**
+  1. Mở Serial Terminal, gõ `ble scan`.
+  2. Kích hoạt cảm biến phát tin, quan sát terminal hiển thị: `[BLE] Telemetry from sensor_temp_01: 28.5C, 65.0%`.
+  3. Bật điện thoại phát BLE advertisement liên tục, kiểm tra số lượng slot Event Bus qua lệnh `status` vẫn ở mức an toàn.
+
+---
 
 ### 4.6 Module: MQTT Adapter (`mqtt_adapter.h/.c`)
 
@@ -906,12 +955,13 @@ bool mqtt_adapter_publish(const char *topic_suffix, const char *payload_json);
 #### 4.6.4 MQTT Topics
 
 | Topic | Direction | QoS | Mô tả |
-|---|---|---|---|
+|---|---|:---:|---|
 | `gateway/{id}/status` | Publish | 0 | "online"/"offline" (retained, LWT) |
-| `gateway/{id}/device/{did}/telemetry` | Publish | 0 | Telemetry từ device |
-| `gateway/{id}/device/{did}/command` | Subscribe | 1 | Lệnh cho device từ Backend |
-| `gateway/{id}/config/schedule` | Subscribe | 1 | Backend đẩy schedule mới |
-| `gateway/{id}/sync/event_log` | Publish | 1 | Upload event log |
+| `gateway/{id}/device/{did}/telemetry` | Publish | 0 | Telemetry thời gian thực từ cảm biến |
+| `gateway/{id}/device/{did}/command` | Subscribe | 1 | Lệnh cho device từ Backend / Web App |
+| `gateway/{id}/config/#` | Subscribe | 1 | Backend đẩy cấu hình mới (schedule, rules, devices) |
+| `gateway/{id}/sync/event_log` | Publish | 1 | Upload nhật ký sự kiện |
+| `gateway/{id}/sync/telemetry` | Publish | 1 | Đồng bộ bù (Backfill) dữ liệu đo từ thẻ nhớ SD khi online |
 
 #### 4.6.5 LWT (Last Will and Testament)
 
@@ -969,6 +1019,38 @@ typedef struct {
 } mqtt_telemetry_t;
 ```
 
+#### 4.6.8 Cơ chế Tái Kết Nối Thông Minh (Exponential Backoff) & Giới Hạn Hàng Đợi (Outbox Throttling)
+
+1. **Exponential Backoff với Jitter:**
+   - Khi mất kết nối MQTT Broker (hoặc Wi-Fi rớt), Gateway không được phép reconnect dồn dập làm cạn kiệt tài nguyên CPU và nghẽn vô tuyến RF.
+   - Chu kỳ thử lại bắt đầu từ **1 giây**, nhân đôi sau mỗi lần thất bại: $1\text{s} \rightarrow 2\text{s} \rightarrow 4\text{s} \rightarrow 8\text{s} \rightarrow 16\text{s} \rightarrow 32\text{s} \rightarrow 60\text{s}$ (trần tối đa 60 giây).
+   - Thêm nhiễu ngẫu nhiên (Jitter) $\pm 20\%$ thời gian chờ để triệt tiêu hiện tượng sấm sét đồng loạt (Thundering Herd) khi nhiều Gateway cùng kết nối lại broker sau sự cố điện/mạng diện rộng.
+2. **Kiểm soát hàng đợi Outbox (Outbox Buffer Overflow Protection):**
+   - Khi broker mất kết nối, các bản tin telemetry thời gian thực (QoS 0) **bị hủy bỏ ngay lập tức** (không đọng lại trong RAM).
+   - Dữ liệu lịch sử quan trọng được chuyển tuyến sang thẻ nhớ MicroSD (`sd_logger`) qua cơ chế Store-and-Forward (`sync_queue.bin`), dung lượng RAM dành cho `esp-mqtt` outbox luôn duy trì cố định $\le 10\text{KB}$.
+
+#### 4.6.9 Verification Contract — MQTT Adapter
+
+**Verification Contract — FR-MQTT-01: Tái kết nối Exponential Backoff & Phục hồi phiên LWT**
+- **Tier:** target
+- **Preconditions:** Gateway đã kết nối Wi-Fi và MQTT Broker thành công; topic `gateway/{id}/status` đang có giá trị retained `"online"`.
+- **Stimulus:**
+  1. Tắt dịch vụ MQTT Broker trên máy chủ trong 45 giây (giữ nguyên Wi-Fi AP).
+  2. Khởi động lại dịch vụ MQTT Broker.
+- **Expected:**
+  1. Khi Broker sập: Gateway phát hiện sự cố qua keepalive ping, post `EVT_MQTT_DISCONNECTED`. Broker publish LWT `"offline"`.
+  2. Gateway kích hoạt thuật toán Exponential Backoff: Khoảng cách giữa các lần thử kết nối lại giãn cách đúng quy luật (1s, 2s, 4s, 8s, 16s...); không gây tràn RAM (Heap free dao động $\le 1\text{KB}$); không làm treo Task Supervisor.
+  3. Khi Broker hoạt động trở lại: Gateway tự động kết nối lại thành công, subscribe lại đầy đủ các topic và publish lại trạng thái `"online"` (retained).
+- **Timing / tolerance:** Thời gian phát hiện mất kết nối $\le 10\text{s}$; thời gian tái kết nối thành công $\le 5\text{s}$ sau khi broker sẵn sàng.
+- **Prohibited:** Thử kết nối lại liên tục với chu kỳ ngắn (< 500ms); rò rỉ bộ nhớ (memory leak); task bị kẹt gây Task Supervisor panic reboot.
+- **Operator instructions:**
+  1. Chạy broker Mosquitto trên máy tính thử nghiệm: `mosquitto -v`.
+  2. Nạp firmware Gateway, quan sát terminal: `[MQTT] Connected to broker: mqtt://...`.
+  3. Nhấn `Ctrl+C` tắt Mosquitto: Terminal Gateway hiển thị `[MQTT] Lost connection, retry in 1s`, sau đó `retry in 2s`, `retry in 4s`...
+  4. Chạy lại Mosquitto: Terminal Gateway in `[MQTT] Reconnected! Subscribed to config and command topics`.
+
+---
+
 
 ### 4.7 Module: Rule Engine (`rule_engine.h/.c`)
 
@@ -979,7 +1061,7 @@ typedef struct {
 
 | ID | Chức năng | Mô tả |
 |---|---|---|
-| RE-01 | Nạp rule từ storage | Đọc và phân tích cú pháp tệp `/spiffs/rules.json` |
+| RE-01 | Nạp rule từ storage | Đọc và phân tích cú pháp tệp `/storage/rules.json` |
 | RE-02 | Đánh giá telemetry BLE | Handler `EVT_BLE_DEVICE_DATA`: so khớp rule |
 | RE-03 | Đánh giá telemetry MQTT | Handler `EVT_MQTT_MESSAGE_RECEIVED`: tương tự |
 | RE-04 | Thực thi automation theo giờ | Handler `EVT_SCHEDULE_AUTOMATION_TRIGGERED` |
@@ -1059,7 +1141,7 @@ on_ble_telemetry(evt)
     │     │         return (KHÔNG đánh giá rule)
     │     └── NO → tiếp tục
     │
-    ├── Duyệt từng rule trong /spiffs/rules.json:
+    ├── Duyệt từng rule trong /storage/rules.json:
     │     ├── rule.device_id != telem->device_id ──► Bỏ qua
     │     ├── now < rule.lockout_until_ts ──────────► Bỏ qua (Đang trong 5m lockout an toàn)
     │     │
@@ -1073,22 +1155,48 @@ on_ble_telemetry(evt)
     │     │     └── Nằm trong Deadband ─────────────► Giữ nguyên, không làm gì
 ```
 
+#### 4.7.7 Verification Contract — Rule Engine
+
+**Verification Contract — FR-RULE-01: Đánh giá Hysteresis Deadband, Kích hoạt cạnh & Khóa an toàn Lockout**
+- **Tier:** host
+- **Preconditions:** Khởi tạo Rule Engine với 2 luật tự động:
+  1. Luật làm mát: Cảm biến `temp_01` vượt ngưỡng `gt 30.0°C`, biên trễ `hysteresis = 1.5°C`, cooldown 60s, đích `relay_1` ("ON").
+  2. Luật sưởi ấm: Cảm biến `temp_01` dưới ngưỡng `lt 22.0°C`, biên trễ `hysteresis = 1.5°C`, cooldown 60s, đích `relay_2` ("ON").
+- **Stimulus:**
+  1. Bơm chuỗi dữ liệu nhiệt độ: 29.5°C → 30.2°C → 30.1°C → 29.8°C → 28.4°C.
+  2. Bơm chuỗi nhiệt độ: 23.0°C → 21.8°C → 22.1°C → 23.6°C.
+  3. Phát sự kiện `EVT_RELAY_STATE_CHANGED` (`relay_2`, `reason = "SAFETY_CUTOFF"`), sau đó bơm tiếp 20.0°C trong vòng < 300 giây.
+- **Expected:**
+  1. Tại 30.2°C: Rule 1 kích hoạt, phát sinh `EVT_RULE_ACTION_REQUEST` ("ON", `target: relay_1`).
+  2. Tại 30.1°C và 29.8°C (vùng Deadband): Rule Engine không phát sinh thêm bất kỳ sự kiện nào (chống chattering).
+  3. Tại 28.4°C ($\le 30.0 - 1.5$): Rule 1 kích hoạt TẮT, phát sinh `EVT_RULE_ACTION_REQUEST` ("OFF", bypass cooldown).
+  4. Tại 21.8°C: Rule 2 kích hoạt BẬT, phát sinh lệnh "ON" (`target: relay_2`).
+  5. Tại 23.6°C ($\ge 22.0 + 1.5$): Rule 2 kích hoạt TẮT ("OFF").
+  6. Sau khi bị Safety Cutoff: `lockout_until_ts` được thiết lập 300s; khi nhiệt độ là 20.0°C, Rule 2 KHÔNG được phép kích hoạt lại cho tới khi hết 300s.
+- **Timing / tolerance:** Thời gian đánh giá mỗi bản tin telemetry $\le 1\text{ms}$.
+- **Prohibited:** Relay chattering (phát lệnh liên tục khi giá trị dao động quanh ngưỡng); vi phạm khóa lockout 300s; thực thi luật khi `valid == false`.
+- **Operator instructions:**
+  1. Chạy test tự động: `pytest tests/host/test_rule_engine.py -v`.
+  2. Xác nhận 100% assertions kiểm tra Hysteresis, Deadband và Safety Lockout đều PASS.
+
 ---
 
 ### 4.8 Module: Scheduler (`scheduler.h/.c`)
 
 #### 4.8.1 Mô tả
-Quét `schedule.json` mỗi phút, đối chiếu với giờ RTC. Xử lý CẢ HAI loại: automation (→ rule engine) và alarm (→ display). Chạy hoàn toàn offline.
+Quét `/storage/schedule.json` mỗi phút, đối chiếu với giờ RTC. Xử lý CẢ HAI loại: automation (→ rule engine) và alarm (→ display). Chạy hoàn toàn offline.
 
 #### 4.8.2 Chức năng
 
 | ID | Chức năng | Mô tả |
 |---|---|---|
 | SC-01 | Poll mỗi 5s, detect đổi phút | Không dùng `vTaskDelay(60000)` — tránh drift |
-| SC-02 | Chống bắn trùng | `s_last_triggered_minute` — mỗi phút chỉ trigger 1 lần |
+| SC-02 | Chống bắn trùng (Rollover Guard) | `s_last_triggered_minute` — mỗi phút chỉ trigger 1 lần |
 | SC-03 | Trigger automation | type="automation" → post `EVT_SCHEDULE_AUTOMATION_TRIGGERED` |
 | SC-04 | Trigger alarm | type="alarm"/"personal_event" → post `EVT_SCHEDULE_ALARM_TRIGGERED` |
-| SC-05 | Reload schedule | Handler `EVT_CONFIG_UPDATED_FROM_CLOUD` → reset `last_triggered = -1` |
+| SC-05 | Reload schedule | Handler `EVT_CONFIG_UPDATED_FROM_CLOUD` → nạp lại an toàn |
+| SC-06 | Khóa giờ không hợp lệ (RTC Guard) | Kiểm tra `rtc_is_valid()`, tạm dừng kích hoạt khi chưa có giờ tin cậy |
+| SC-07 | Bù lịch khi Time Jump | Quét bù (Catch-up Scan) tối đa 15 phút khi NTP nhảy thời gian về phía trước |
 
 #### 4.8.3 API
 
@@ -1098,7 +1206,7 @@ void scheduler_init(void);
 //          Tạo scheduler_task (Core 0, priority 4, stack 4096)
 
 void scheduler_reload(void);
-// Hành vi: Đọc lại schedule.json và nạp cấu hình mới vào RAM.
+// Hành vi: Đọc lại /storage/schedule.json và nạp cấu hình mới vào RAM.
 //          Minute Rollover Guard: Giữ nguyên trạng thái đã kích hoạt trong phút hiện tại,
 //          tránh tình trạng bắn trùng (double-trigger) các tác vụ vừa chạy xong khi
 //          Cloud đồng bộ file cấu hình mới vào giữa phút.
@@ -1132,14 +1240,23 @@ typedef struct {
 > - Nếu `one_time_date` rỗng: scheduler so khớp **thứ trong tuần** qua `repeat_days[]` như cũ.
 > - Hai kiểu này **không cùng tồn tại** trong 1 entry — nếu có `one_time_date` thì `repeat_days` bị bỏ qua.
 
-#### 4.8.5 Scheduler Task Flow
+#### 4.8.5 Scheduler Task Flow & Các cơ chế bảo vệ
 
 ```
 scheduler_task (vòng lặp vô hạn)
     │
     loop:
     │
-    ├── now = rtc_get_time()
+    ├── 1. Kiểm tra rtc_is_valid():
+    │     ├── false? ──► Log warning "[SCHED] RTC invalid, skipping trigger", vTaskDelay(5000ms), goto loop
+    │     └── true  ──► Tiếp tục
+    │
+    ├── 2. Phát hiện bước nhảy thời gian (Time Jump Detection):
+    │     ├── Nếu now > last_checked_ts + 65s (NTP nhảy giờ tới trước):
+    │     │     └── Thực hiện Catch-up Scan (quét ngược tối đa 15 phút bỏ lỡ, chỉ trigger 1 lần gần nhất)
+    │     └── last_checked_ts = now
+    │
+    ├── 3. now = rtc_get_time()
     ├── localtime_r(&now, &t)
     ├── cur_min = t.tm_hour * 60 + t.tm_min
     │
@@ -1153,29 +1270,33 @@ scheduler_task (vòng lặp vô hạn)
     │                 │     ├── entry.enabled == false? ──► skip
     │                 │     ├── entry.hour != t.tm_hour || entry.minute != t.tm_min? ──► skip
     │                 │     │
-    │                 │     ├── Khớp ngày/thứ:
-    │                 │     │     ├── strlen(entry.one_time_date) > 0? (sự kiện một lần)
-    │                 │     │     │     │── date == "YYYY-MM-DD" hiện tại? ──► MATCH
-    │                 │     │     │     └── khác ngày? ──────────────────────► skip
-    │                 │     │     │
-    │                 │     │     └── one_time_date rỗng (lịch lặp theo tuần):
-    │                 │     │           │── entry.repeat_days[t.tm_wday] == true? ──► MATCH
-    │                 │     │           └── false? ─────────────────────────────────► skip
-    │                 │     │
-    │                 │     ├── KHI MATCH:
-    │                 │     │     ├── type == "automation"?
-    │                 │     │     │     → malloc(automation_rule_t)
-    │                 │     │     │     → post EVT_SCHEDULE_AUTOMATION_TRIGGERED
-    │                 │     │     │
-    │                 │     │     └── type == "alarm" / "personal_event"?
-    │                 │     │           → malloc(alarm_entry_t)
-    │                 │     │           → post EVT_SCHEDULE_ALARM_TRIGGERED
-    │                 │     │
-    │                 │     └── tiếp entry sau
+    │                 ├── Khớp ngày/thứ (one-time vs repeat):
+    │                 │     ├── Khớp! ──► Phát EVT_SCHEDULE_AUTOMATION_TRIGGERED hoặc EVT_SCHEDULE_ALARM_TRIGGERED
+    │                 │     └── Không khớp ──► skip
+    │                 └── tiếp entry sau
     │
     ├── vTaskDelay(5000ms)  ← poll ngắn, không drift
     └── goto loop
 ```
+
+#### 4.8.6 Verification Contract — Scheduler
+
+**Verification Contract — FR-SCHED-01: Kiểm tra lịch biểu, Chống bắn trùng & Bảo vệ RTC không hợp lệ**
+- **Tier:** host
+- **Preconditions:** Nạp lịch biểu gồm 1 automation lúc 07:00 (Bật đèn phòng) và 1 báo thức lúc 06:30 (Dậy đi học).
+- **Stimulus:**
+  1. Giả lập `rtc_is_valid() == false` (hệ thống ở Epoch 1970 lúc boot): Cho đồng hồ giả lập chạy qua 06:30 và 07:00.
+  2. Bật `rtc_is_valid() == true`: Đồng hồ chạy từ 06:29:50 đến 06:30:10 (vượt qua mốc 06:30).
+  3. Kích hoạt bước nhảy thời gian NTP (Time Jump) từ 06:55:00 nhảy vọt lên 07:02:00 (+7 phút).
+- **Expected:**
+  1. Khi RTC chưa hợp lệ: Tuyệt đối không có bất kỳ sự kiện `EVT_SCHEDULE_*` nào được phát ra; không phát còi báo thức nhầm.
+  2. Khi RTC hợp lệ: Đúng mốc 06:30, phát sinh đúng 1 sự kiện `EVT_SCHEDULE_ALARM_TRIGGERED`. Trong suốt 60 giây của phút 06:30, không phát sinh thêm sự kiện lặp lại (Rollover Guard hoạt động).
+  3. Khi Time Jump qua 07:00: Catch-up Scan phát hiện sự kiện 07:00 bị lỡ, phát sinh 1 sự kiện `EVT_SCHEDULE_AUTOMATION_TRIGGERED`, không bị bỏ sót và không gây crash.
+- **Timing / tolerance:** Sai số kích hoạt trong vòng $\le 5\text{s}$ so với đầu phút (do chu kỳ poll 5s).
+- **Prohibited:** Báo thức reo khi RTC chưa có giờ hợp lệ; bắn trùng nhiều lần trong cùng một phút; crash khi có bước nhảy thời gian.
+- **Operator instructions:**
+  1. Chạy test tự động: `pytest tests/host/test_scheduler.py -v`.
+  2. Xác nhận 100% assertions về RTC Guard, Minute Rollover Guard và Catch-up Scan đều PASS.
 
 ---
 
@@ -1252,6 +1373,24 @@ static void on_button_alarm_stop(gateway_event_t *evt) {
 | Buzzer | Passive buzzer | GPIO PWM (LEDC) | Cho báo thức |
 | Nút bấm | Mechanical switch | GPIO + ngắt cạnh xuống | Có debounce phần cứng hoặc software |
 
+#### 4.9.7 Verification Contract — Display & Buttons
+
+**Verification Contract — FR-DISP-01: Phản hồi nút bấm ngắt còi báo thức < 500ms (Direct-to-Task ISR)**
+- **Tier:** target
+- **Preconditions:** Gateway đang trong trạng thái kích hoạt báo thức (`s_alarm_active == true`, còi buzzer kêu ngắt quãng 2.7kHz, màn hình OLED SSD1327 hiển thị overlay `ALARM`).
+- **Stimulus:**
+  1. Nhấn Nút 1 (`BTN_BOOT` / GPIO 0) nhanh < 2 giây.
+  2. Kích hoạt báo thức lại, sau đó nhấn Nút 2 (`BTN_SCREEN_NEXT` / GPIO 4) nhanh < 500ms.
+- **Expected:**
+  1. Khi nhấn Nút 1 (GPIO 0): Còi buzzer ngừng kêu ngay lập tức; màn hình OLED hiển thị `SNOOZE 9m`; Scheduler tự động dời chuông sau 9 phút. Cấu hình Wi-Fi NVS không bị xóa.
+  2. Khi nhấn Nút 2 (GPIO 4): Direct-to-Task Notification (`vTaskNotifyGiveFromISR`) gửi thẳng đến `display_task`, còi buzzer tắt hoàn toàn trong thời gian $\le 500\text{ms}$; OLED trở về màn hình chính; ghi bản tin nhật ký `alarm_stopped`.
+- **Timing / tolerance:** Thời gian trễ từ thời điểm nhấn Nút 2 đến khi còi câm $\le 500\text{ms}$ (đáp ứng nghiệm thu M13 và UC-04).
+- **Prohibited:** Nút bấm bị lag/đơ do Event Bus bị đầy; người dùng bấm tắt chuông nhưng vô tình xóa Wi-Fi; còi tiếp tục kêu sau khi bấm nút.
+- **Operator instructions:**
+  1. Dùng lệnh CLI đặt báo thức thử: `schedule add 99 alarm 12:00`.
+  2. Đặt giờ giả lập hoặc đợi chuông reo: xác nhận còi kêu và OLED hiển thị overlay ALARM.
+  3. Bấm Nút 2 (GPIO 4): Xác nhận còi tắt tức thì, màn hình hiển thị bình thường.
+
 ---
 
 ### 4.10 Module: Bộ Điều Khiển Relay & Cơ Cấu Chấp Hành (`relay_controller.h/.c`)
@@ -1268,7 +1407,7 @@ Quản lý trực tiếp 4 kênh Relay vật lý trên bo mạch (GPIO 15, 16, 1
 | **RELAY_3** | **GPIO 17** | `relay_3` | `dehum_01`, `dehumidifier_01` | Máy hút ẩm (Dehum) | 60 phút | TẮT (OFF) |
 | **RELAY_4** | **GPIO 18** | `relay_4` | `aux_01`, `light_01` | Đèn / Thiết bị phụ trợ | Không giới hạn | Giữ nguyên trạng thái cuối |
 
-#### 4.10.3 Khóa liên động an toàn (Interlocking) & Ưu tiên giải nhiệt
+#### 4.10.3 Khóa liên động an toàn (Interlocking), Ưu tiên giải nhiệt & Khóa chu kỳ ngắn (Anti-Short-Cycle)
 Để loại trừ triệt để nguy cơ cháy nổ do xung đột lệnh từ các nguồn khác nhau (Rule Engine, Scheduler, Web App, MQTT Cloud hay Serial CLI):
 1. **Khóa liên động độc quyền:** Quạt làm mát (`relay_1`) và Máy sưởi nhiệt (`relay_2`) **tuyệt đối không bao giờ được phép BẬT đồng thời**.
 2. **Quy tắc thực thi trong `relay_controller_set_state()`:**
@@ -1276,6 +1415,8 @@ Quản lý trực tiếp 4 kênh Relay vật lý trên bo mạch (GPIO 15, 16, 1
    - Khi có lệnh BẬT Quạt (`relay_1 = ON`): **Ưu tiên chống quá nhiệt (Cooling Safety Override)** luôn thắng! Bộ điều khiển ngắt ngay lập tức Máy sưởi (`relay_2 = OFF`), sau đó đóng rơ-le Quạt.
 3. **Bỏ qua Cooldown khi TẮT (Immediate Shutoff):**
    - Mọi lệnh hoặc điều kiện bảo vệ yêu cầu TẮT rơ-le (đặc biệt là Máy sưởi `relay_2`) **bắt buộc thực thi ngay lập tức (0ms trễ, bypass toàn bộ cooldown)**. Cooldown chỉ áp dụng cho chiều BẬT để chống rung tiếp điểm cơ.
+4. **Khóa chu kỳ ngắn bảo vệ tải cảm ứng (Anti-Short-Cycle Dwell Time = 180s):**
+   - Đối với tải động cơ máy nén, quạt công suất lớn (`relay_1`, `relay_2`, `relay_3`), khi rơ-le vừa ngắt về OFF, bộ điều khiển kích hoạt timer khóa tối thiểu **180 giây** trước khi cho phép đóng lại cùng kênh đó. Lệnh tự động trong khoảng thời gian này bị từ chối với mã lỗi `ERR_RELAY_DWELL_LOCKED` để chống cháy cuộn dây hoặc kẹt áp suất máy nén.
 
 #### 4.10.4 Đồng bộ trạng thái Rule Engine & Thời gian khóa an toàn (Lockout)
 - Khi một kênh Relay bị cưỡng chế TẮT do vượt quá thời gian tối đa (vd: Máy sưởi quá 30 phút) hoặc do cảm biến mất tín hiệu (>60s):
@@ -1292,7 +1433,7 @@ void relay_controller_init(void);
 
 esp_err_t relay_controller_set_state(const char *target_id, bool state, const char *cmd_id, const char *source);
 // Hành vi: Tra cứu alias (fan_01 -> relay_1, heater_01 -> relay_2)
-//          Kiểm tra Interlock (Heater vs Fan)
+//          Kiểm tra Interlock (Heater vs Fan) và Dwell Time 180s
 //          Ghi GPIO vật lý, khởi tạo timer đếm thời gian bật liên tục
 //          Phát EVT_COMMAND_RESPONSE gửi ACK về Cloud/MQTT
 
@@ -1302,6 +1443,27 @@ bool relay_controller_get_state(int relay_id);
 void relay_controller_emergency_shutdown_all(void);
 // Hành vi: Ngắt khẩn cấp toàn bộ 4 rơ-le về mức LOW (dùng trong panic/shutdown)
 ```
+
+#### 4.10.6 Verification Contract — Relay Controller
+
+**Verification Contract — FR-RELAY-01: Khóa liên động phần cứng, Khóa chu kỳ ngắn & Ngắt khẩn cấp an toàn**
+- **Tier:** host
+- **Preconditions:** Khởi tạo `relay_controller`, toàn bộ 4 kênh GPIO 15..18 ở mức LOW.
+- **Stimulus:**
+  1. Gửi lệnh BẬT `heater_01` (`relay_2 = ON`), sau đó gửi lệnh BẬT `fan_01` (`relay_1 = ON`).
+  2. Giả lập duy trì `relay_2` BẬT liên tục trong 31 phút.
+  3. Bơm sự kiện `EVT_SENSOR_VALUE_INVALID` khi `relay_2` đang BẬT.
+  4. Tắt `relay_1`, ngay sau đó (sau 5 giây) gửi lệnh BẬT lại `relay_1`.
+- **Expected:**
+  1. Interlock Test: Khi `relay_1` bật, `relay_2` bị cưỡng chế tắt về LOW ngay lập tức ($\le 50\text{ms}$), hai rơ-le không bao giờ đồng thời ở mức HIGH.
+  2. Emergency Cutoff: Sau đúng 30 phút, `relay_2` tự động ngắt về LOW, phát sinh `EVT_RELAY_STATE_CHANGED` (`reason = "SAFETY_CUTOFF"`).
+  3. Fail-Safe Offline: Khi cảm biến lỗi, `relay_2` ngắt về LOW ngay tức thì (0ms trễ).
+  4. Anti-Short-Cycle: Lệnh BẬT lại `relay_1` sau 5s bị từ chối do chưa đủ 180s dwell time, bảo vệ động cơ tải cảm ứng.
+- **Timing / tolerance:** Thời gian phản hồi ngắt an toàn $\le 50\text{ms}$; sai số timer $\le 1\text{s}$.
+- **Prohibited:** Relay 1 và Relay 2 cùng ON tại bất kỳ thời điểm nào; Relay 2 tiếp tục đóng khi mất cảm biến; rơ-le đóng ngắt chu kỳ ngắn $< 180\text{s}$.
+- **Operator instructions:**
+  1. Chạy test tự động: `pytest tests/host/test_relay_controller.py -v`.
+  2. Xác nhận 100% assertions về Interlock, Safety Cutoff và Anti-Short-Cycle Dwell Time đều PASS.
 
 ---
 
@@ -1323,7 +1485,7 @@ Chịu trách nhiệm toàn bộ thao tác I/O với thẻ nhớ MicroSD qua chu
     └── crash.log               # Dump nhật ký sự cố, task treo, panic stacktrace
 ```
 
-#### 4.11.3 Cơ chế Store-and-Forward Sync Queue (`sync_queue.bin`)
+#### 4.11.3 Cơ chế Store-and-Forward Sync Queue (`sync_queue.bin`) & Circular Ring Buffer
 - **Định dạng file:** File nhị phân có header cố định 24 bytes (chuẩn `<IIIIII` khớp `test_sync_queue.py`):
   ```c
   typedef struct {
@@ -1346,12 +1508,14 @@ Chịu trách nhiệm toàn bộ thao tác I/O với thẻ nhớ MicroSD qua chu
       uint32_t crc32;          // 4 bytes: Checksum bảo vệ toàn vẹn bản ghi
   } sync_queue_record_t;       // Kích thước chuẩn cố định: đúng 32 bytes
   ```
-- **Hành vi khi Offline:** Khi `uplink_task` mất mạng (Wi-Fi hoặc MQTT ngắt), mọi telemetry và event thay vì gửi mạng sẽ được gửi sang `s_sd_log_queue` để append vào cuối file `sync_queue.bin`.
-- **Hành vi khi Online trở lại (Backfill):**
+- **Hành vi khi Offline & Giới hạn trần dung lượng (Circular FIFO):**
+  - Khi `uplink_task` mất mạng (Wi-Fi hoặc MQTT ngắt), mọi telemetry và event thay vì gửi mạng sẽ được gửi sang `s_sd_log_queue` để append vào cuối file `sync_queue.bin`.
+  - **Giới hạn trần Circular FIFO Buffer:** Quy định `SYNC_QUEUE_MAX_RECORDS = 100000` bản ghi (~3.2MB dữ liệu). Nếu mất mạng dài ngày khiến queue chạm trần, con trỏ `read_offset` tự động tịnh tiến để ghi đè bản ghi cũ nhất, bảo đảm thẻ nhớ SD không bao giờ bị cạn kiệt dung lượng và không gây lỗi phân mảnh hệ thống tệp.
+- **Hành vi khi Online trở lại & Điều tiết tốc độ bù (Backfill Rate Limiter):**
   1. `uplink_task` kết nối thành công tới MQTT Broker.
   2. Gửi tín hiệu kích hoạt tiến trình đồng bộ bù.
-  3. `sd_log_task` đọc một lô (Batch) gồm **20 đến 50 bản ghi** từ vị trí `read_offset`.
-  4. `uplink_task` gộp nhiều bản ghi vào một payload gửi về Backend hoặc publish tuần tự với tốc độ đồng bộ bù tối đa đạt **100 records/giây**, Backend thực hiện deduplicate dựa trên `(device_id, timestamp)`.
+  3. `sd_log_task` đọc một lô (Batch) gồm **20 bản ghi** từ vị trí `read_offset`.
+  4. **Điều tiết tốc độ (Rate Limiter):** Publish batch lên topic `gateway/{id}/sync/telemetry` với giãn cách tối thiểu **100ms giữa các batch** (tốc độ tối đa duy trì từ **20 đến 50 records/giây**). Tốc độ này giúp không làm nghẽn băng thông Wi-Fi, không gây trễ các gói tin điều khiển tức thời của người dùng, và giữ cho bộ đệm outbox RAM của MQTT client luôn an toàn.
   5. Sau khi nhận đủ `PUBACK` cho cả batch, `sd_log_task` cập nhật `read_offset` mới và gọi `f_sync()` để lưu trạng thái.
   6. Lặp lại cho tới khi `read_offset == write_offset` (hàng đợi rỗng).
 
@@ -1383,7 +1547,7 @@ Chịu trách nhiệm toàn bộ thao tác I/O với thẻ nhớ MicroSD qua chu
   2. Khi có mạng lại: Gateway tự reconnect Wi-Fi và MQTT. Xuất hiện log `[UPLINK] Backfilling offline queue...`.
   3. Toàn bộ các gói tin phát sinh trong 3 phút ngắt mạng được publish bù lên Server, timestamp giữ nguyên thời điểm đo thực tế.
   4. Sau khi gửi hết, `unacked_count` trở về 0.
-- **Prohibited:** Dữ liệu trong thời gian mất mạng bị ghi đè hoặc biến mất; Gateway bị tràn RAM (Out of Memory) trong lúc offline.
+- **Prohibited:** Dữ liệu trong thời gian mất mạng bị ghi đè khi chưa chạm trần 100k bản ghi; Gateway bị tràn RAM (Out of Memory) trong lúc offline; tốc độ backfill vượt quá 50 records/s gây nghẽn vô tuyến RF.
 - **Operator instructions:**
   1. Chạy Backend và Web App, mở trang Events & Telemetry.
   2. Rút cáp mạng router Wi-Fi 3 phút.
@@ -1396,7 +1560,7 @@ Chịu trách nhiệm toàn bộ thao tác I/O với thẻ nhớ MicroSD qua chu
 #### 4.12.1 Mô tả
 Chịu trách nhiệm lưu trữ, quản lý và cập nhật toàn bộ tham số hoạt động của Gateway bao gồm: cấu hình mạng Wi-Fi, địa chỉ Server/Broker, múi giờ (POSIX ICT-7), danh sách ánh xạ cảm biến không dây BLE và thiết bị chấp hành, cùng các ngưỡng cảnh báo. Cung cấp cơ chế **cấu hình tại chỗ không phụ thuộc Cloud** thông qua 3 kênh: nạp tệp `config.json` từ thẻ nhớ Flash/SD, giao diện Dark Mode **Web Dashboard** (Port 80) và console **Serial CLI** tương tác qua cổng USB UART0 (115200 baud).
 
-#### 4.12.2 Định dạng tệp `/spiffs/config.json`
+#### 4.12.2 Định dạng tệp `/storage/config.json`
 ```json
 {
   "gateway_id": "gw_smartclock_01",
@@ -1451,7 +1615,7 @@ Chịu trách nhiệm lưu trữ, quản lý và cập nhật toàn bộ tham s�
 - **Stimulus:** Khởi động lại Gateway.
 - **Expected:** Gateway phát hiện `config.json`, nạp thành công vào NVS, cập nhật bảng ánh xạ cảm biến BLE. Log serial xuất hiện `[CFG] Loaded configuration successfully`.
 - **Operator instructions:**
-  1. Tạo file `config.json` và lưu vào thư mục lưu trữ `/spiffs/config.json`.
+  1. Tạo file `config.json` và lưu vào thư mục lưu trữ `/storage/config.json`.
   2. Khởi động lại Gateway qua lệnh `reboot`.
   3. Gõ `config show` và `ble status` xác nhận danh sách cảm biến khớp hoàn toàn với cấu hình.
 
@@ -1484,57 +1648,71 @@ Module đóng vai trò "người giám sát độc lập" (Watchdog Supervisor) 
 | **4** | `scheduler_task` | `TASK_HEARTBEAT_SCHEDULER` (`1 << 4`) | 1000ms | 1000ms | **15 giây** |
 | **5** | `display_task` | `TASK_HEARTBEAT_DISPLAY` (`1 << 5`) | 1000ms (1 FPS) | 1000ms | **15 giây** |
 | **6** | `serial_cli_task` | `TASK_HEARTBEAT_CLI` (`1 << 6`) | UART read timeout 1s | 1000ms | **15 giây** |
-| *(7)*| *(mock_harness)* | *(Chỉ bật trong môi trường test)* | *1000ms* | *1000ms* | *15 giây* |
 
-- **Mặt nạ giám sát chuẩn Production (Active Mask):** `#define TASK_ACTIVE_MASK_PRODUCTION (0x7F)` (bật đủ 7 bit 0..6: `(1<<0)|...|(1<<6) = 127 = 0x7F`).
-- **Ghi chẩn đoán sự cố vào RTC Slow Memory (Không phụ thuộc SD Card):**
-  - Khi phát hiện bất kỳ task nào không báo nhịp tim quá **15 giây**:
-  - `supervisor_task` đóng gói chẩn đoán vào vùng nhớ **RTC Slow SRAM (`RTC_NOINIT_ATTR`)** vốn được duy trì qua reset phần mềm:
+- **Mặt nạ giám sát chuẩn Production (Active Mask):** `#define TASK_ACTIVE_MASK_PRODUCTION (0x7F)` (chính xác 7 task sản xuất, bits 0..6: `(1<<0)|...|(1<<6) = 127 = 0x7F`).
+- **Cơ chế Mặt nạ Ngoại vi Động (Dynamic Peripheral Masking):**
+  - Trong giai đoạn khởi động (`app_main`), hệ thống tự động kiểm tra phần cứng ngoại vi:
+    - Nếu thẻ nhớ MicroSD không có hoặc mount thất bại $\rightarrow$ tự động bỏ cờ `TASK_HEARTBEAT_SD_LOGGER` (bit 3).
+    - Nếu màn hình OLED I2C không phản hồi ACK $\rightarrow$ tự động bỏ cờ `TASK_HEARTBEAT_DISPLAY` (bit 5).
+  - Hàm `supervisor_set_active_mask(mask)` cho phép hệ thống hoạt động tin cậy trên bo mạch trần (Bare-board bringup) mà không bị Task Watchdog reset nhầm. Khi ngoại vi được cắm lại, bit tương ứng tự động được bật lại.
+- **Cơ chế Ngắt Vòng lặp Khởi động (Boot Loop Circuit Breaker):**
+  - Lưu trữ chẩn đoán sự cố và đếm số lần crash liên tiếp trong vùng nhớ **RTC Slow SRAM (`RTC_NOINIT_ATTR`)**:
     ```c
     typedef struct {
-        uint32_t magic;           // 0xDEADBEEF
-        uint8_t  failed_task_bit; // Bit task bị treo (0..6)
-        char     task_name[16];   // Tên task (vd: "display_task")
-        uint32_t free_heap;       // Dung lượng heap tại thời điểm treo
-        uint32_t uptime_s;        // Thời gian hoạt động trước khi chết
-        uint32_t timestamp;       // UNIX epoch
+        uint32_t magic;                // 0xDEADBEEF
+        uint8_t  failed_task_bit;      // Bit task bị treo (0..6)
+        char     task_name[16];        // Tên task (vd: "event_dispatcher")
+        uint32_t free_heap;            // Dung lượng heap tại thời điểm treo
+        uint32_t uptime_s;             // Thời gian hoạt động trước khi chết
+        uint32_t consecutive_crashes; // Số lần crash liên tiếp
+        uint32_t timestamp;            // UNIX epoch
     } rtc_crash_dump_t;
     ```
+  - **Quy tắc Safe Mode:** Nếu `consecutive_crashes >= 3` trong vòng < 60s, hệ thống kích hoạt chế độ Cứu Hộ An Toàn:
+    1. Bỏ qua việc nạp file cấu hình `config.json` và `rules.json` từ Flash (phòng trường hợp file hỏng gây crash).
+    2. Nạp cấu hình mặc định (Hardcoded Safe-Defaults).
+    3. Mở SoftAP cứu hộ `SmartClock-Recovery` và phát cảnh báo nhấp nháy LED trạng thái.
+- **Ghi chẩn đoán sự cố vào RTC Slow Memory:**
+  - Khi phát hiện bất kỳ task nào không báo nhịp tim quá **15 giây**:
   - In cảnh báo khẩn cấp ra cổng Serial Console UART0: `[SUP] CRITICAL: Task '%s' STALLED! Dumping to RTC Memory & restarting...`.
   - Gọi hàm khởi động lại an toàn: `esp_restart()`.
-  - Khi boot lại: Hệ thống kiểm tra magic `0xDEADBEEF` trong RTC Memory, in báo cáo chẩn đoán sự cố ra terminal, post sự kiện ghi log và xóa cờ magic.
+  - Khi boot lại: Kiểm tra magic `0xDEADBEEF`, in báo cáo chẩn đoán sự cố ra terminal, đồng bộ append vào `/sdcard/logs/crash.log` và xóa cờ magic.
 
 #### 4.13.3 Chu trình giám sát & Xử lý sự cố
 1. `supervisor_task` chạy ở mức ưu tiên cao nhất (**Priority 7**, Core 0), thức dậy mỗi **1000ms**. Định kỳ gọi `esp_task_wdt_reset()` để nuôi phần cứng TWDT của chip ESP32-S3.
 2. Tất cả 7 task định kỳ báo danh qua hàm `supervisor_report_heartbeat(task_mask)`.
 3. `serial_cli_task` sử dụng hàm đọc `uart_read_bytes` kèm timeout `pdMS_TO_TICKS(1000)` để đảm bảo vòng lặp không bị kẹt vô hạn khi không có người gõ phím.
-4. `ble_scan_task` sử dụng khoảng delay 1 giây và định kỳ báo nhịp tim, loại bỏ hoàn toàn hiện tượng delay 10 giây gây reset nhầm.
+4. `ble_scan_task` sử dụng khoảng delay 1 giây và định kỳ báo nhịp tim, loại bỏ hoàn toàn hiện tượng delay kéo dài gây reset nhầm.
 
 #### 4.13.4 Verification Contracts — Task Supervisor
 
-**Verification Contract — FR-SUP-01: Báo danh Heartbeat bình thường**
+**Verification Contract — FR-SUP-01: Báo danh Heartbeat & Giám sát 7 Task Production**
 - **Tier:** target
 - **Preconditions:** Gateway nạp firmware đang hoạt động đầy đủ 7 task production (mask 0x7F).
-- **Stimulus:** Giám sát thiết bị chạy liên tục trong 10 phút dưới tải bình thường.
+- **Stimulus:** Giám sát thiết bị chạy liên tục trong 10 phút dưới tải thu nhận BLE và phát Wi-Fi.
 - **Expected:** Supervisor task định kỳ kiểm tra và reset watchdog phần cứng. Không có thông báo lỗi hay reset bất thường; cờ của cả 7 task được set đều đặn mỗi chu kỳ ≤ 5s.
-- **Prohibited:** Reset ngẫu nhiên khi hệ thống hoạt động bình thường.
+- **Timing / tolerance:** Kiểm tra nhịp tim mỗi 1000ms ± 50ms; timeout tối đa 15s.
+- **Prohibited:** Reset ngẫu nhiên khi hệ thống đang xử lý tải bình thường; bỏ sót task không giám sát.
 - **Operator instructions:**
-  1. Khởi động thiết bị, mở serial monitor.
+  1. Khởi động thiết bị, mở serial monitor ở baudrate 115200.
   2. Quan sát log định kỳ: `[SUP] System healthy. Heap free: XXX KB, All tasks alive (mask=0x7F)`.
+  3. Xác nhận sau 10 phút không có sự cố reboot.
 
 **Verification Contract — FR-SUP-02: Bắt lỗi Task bị treo & Tự khôi phục an toàn**
 - **Tier:** target
 - **Preconditions:** Nạp firmware kích hoạt chế độ test chẩn đoán (Test Hook: lệnh `test freeze event_bus`).
 - **Stimulus:** Gửi lệnh qua Serial CLI: `test freeze event_bus` (khiến `event_dispatcher_task` rơi vào vòng lặp vô hạn mà không báo heartbeat).
 - **Expected:**
-  1. Đúng 15 giây sau khi task bị đóng băng, `supervisor_task` phát hiện thiếu cờ `TASK_HEARTBEAT_EVENT_BUS`.
-  2. Ghi cảnh báo ra log Serial: `[SUP] CRITICAL: Task 'event_bus' stalled > 15s! Flushing crash log...`.
+  1. Sau đúng 15 giây (± 1s), `supervisor_task` phát hiện thiếu cờ `TASK_HEARTBEAT_EVENT_BUS`.
+  2. Ghi cảnh báo ra log Serial: `[SUP] CRITICAL: Task 'event_dispatcher' stalled > 15s! Flushing crash log...`.
   3. Chẩn đoán sự cố được lưu thành công vào RTC Slow Memory với mã lỗi `TASK_STALL_EVENT_BUS` (và đồng bộ append vào `/sdcard/logs/crash.log` sau khi reboot).
   4. Gateway thực hiện `esp_restart()` và khởi động lại hoàn tất trong < 3 giây.
+- **Timing / tolerance:** Thời gian phát hiện treo: 15s ± 1s; thời gian reboot: 2.5s ± 0.5s.
+- **Prohibited:** Hệ thống treo im lặng không tự reset; rơi vào vòng lặp crash bootloop vô hạn; mất dữ liệu NVS khi reboot.
 - **Operator instructions:**
   1. Mở Serial terminal, gõ `test freeze event_bus`.
   2. Bấm đồng hồ đếm: Đúng 15 giây sau, xác nhận thấy log crash và gateway tự reboot.
-  3. Sau khi reboot, kiểm tra file `/sdcard/logs/crash.log` ghi lại sự kiện đóng băng chính xác.
+  3. Sau khi reboot, kiểm tra terminal xác nhận dòng log: `[BOOT] Last reset caused by Task Supervisor Watchdog! Failed task: event_dispatcher`.
 
 ---
 
@@ -1545,7 +1723,7 @@ app_main()
     │
     ├── 1. nvs_flash_init()                          ← Khởi tạo NVS Flash lưu tham số Wi-Fi, System, Timezone
     ├── 2. relay_init()                              ← CẤP NGUỒN AN TOÀN: Kéo GPIO 15..18 LOW ngay lập tức (10kΩ pull-down)
-    ├── 3. event_bus_init()                          ← Khởi tạo Event Queue trung tâm (32 slots) trước khi các module đăng ký
+    ├── 3. event_bus_init()                          ← Khởi tạo Event Queue trung tâm (64 slots) trước khi các module đăng ký
     ├── 4. supervisor_init()                         ← Khởi tạo Task Supervisor (Core 0, Priority 7, Mask 0x7F, Timeout 15s)
     │       ├── Khởi tạo phần cứng TWDT 15s
     │       ├── Kiểm tra & in chẩn đoán từ RTC Slow Memory (nếu có sau sự cố trước đó)
@@ -1555,13 +1733,13 @@ app_main()
     ├── 6. display_init()                            ← Khởi tạo OLED SSD1327 (I2C0 0x3C), nút bấm (GPIO 0/4), buzzer (GPIO 1)
     │       └── VẼ MÀN HÌNH ĐỒNG HỒ NGAY LẬP TỨC! (Đạt KPI-BOOT-01 < 1.5s độc lập hoàn toàn với mạng & SD card)
     │
-    ├── 7. storage_init()                            ← Gắn kết (Mount) phân vùng SPIFFS /spiffs (chứa config, schedule, rules)
-    ├── 8. sd_logger_init()                          ← Khởi tạo SPI2 host & khe MicroSD (nếu chưa cắm thẻ -> fallback /spiffs)
-    ├── 9. config_manager_init()                     ← Nạp cấu hình từ /spiffs/config.json
+    ├── 7. storage_init()                            ← Gắn kết (Mount) phân vùng LittleFS /storage (chứa config, schedule, rules)
+    ├── 8. sd_logger_init()                          ← Khởi tạo SPI2 host & khe MicroSD (nếu chưa cắm thẻ -> fallback /storage)
+    ├── 9. config_manager_init()                     ← Nạp cấu hình từ /storage/config.json
     ├── 10. wifi_provisioning_init() & web_server()  ← Khởi tạo Wi-Fi SoftAP Portal & Web Dashboard (Port 80)
     ├── 11. mqtt_adapter_init() & uplink_init()      ← Khởi tạo MQTT Client kết nối Broker (Core 1, QoS 1)
-    ├── 12. rule_engine_init()                       ← Nạp /spiffs/rules.json, sẵn sàng đánh giá Hysteresis
-    ├── 13. scheduler_init()                         ← Nạp /spiffs/schedule.json, tạo scheduler_task (Core 0, Priority 4)
+    ├── 12. rule_engine_init()                       ← Nạp /storage/rules.json, sẵn sàng đánh giá Hysteresis
+    ├── 13. scheduler_init()                         ← Nạp /storage/schedule.json, tạo scheduler_task (Core 0, Priority 4)
     ├── 14. ble_adapter_init()                       ← Khởi tạo ngăn xếp NimBLE, bắt đầu passive scan cảm biến (Core 0, Prio 5)
     ├── 15. serial_cli_init()                        ← Giao diện dòng lệnh cứu hộ UART0 (Core 1, Priority 2, timeout 1s)
     │
@@ -1766,6 +1944,7 @@ Giao diện duy nhất để user quản lý hệ thống (không có mobile app
 | sensor_device_id | VARCHAR(32) | FK → Device.device_id | Sensor trigger |
 | condition_type | ENUM | 'gt','lt','eq' | Greater than, less than, equal |
 | threshold | FLOAT | NOT NULL | Ngưỡng so sánh |
+| hysteresis | FLOAT | DEFAULT 1.5 | Biên trễ chống dao động tiếp điểm rơ-le (mặc định 1.5) |
 | target_device_id | VARCHAR(32) | FK → Device.device_id | Actuator đích |
 | action_command | VARCHAR(32) | NOT NULL | "ON","OFF","SET:75" |
 | enabled | BOOLEAN | DEFAULT true | |
@@ -1793,7 +1972,7 @@ Giao diện duy nhất để user quản lý hệ thống (không có mobile app
 | unit | VARCHAR(16) | | VD: "°C", "%", "lux" |
 | recorded_at | TIMESTAMP | NOT NULL | |
 
-### 7.3 JSON Schema — schedule.json (trên Gateway Flash /spiffs)
+### 7.3 JSON Schema — schedule.json (trên Gateway Flash /storage)
 
 ```json
 [
@@ -1839,7 +2018,7 @@ Giao diện duy nhất để user quản lý hệ thống (không có mobile app
 > - Entry có `date` sẽ được Backend tự set `enabled=false` sau khi Gateway đã trigger và báo lại qua event log.
 > - **Mapping tên field:** Backend lưu DB là `one_time_date` (§7.2.4), khi serialize ra file JSON local cho Gateway thì rút gọn thành `date` để tiết kiệm kích thước file trên flash ESP32. Firmware parse JSON dùng key `date`, map vào C struct field `one_time_date`. Đây là quyết định thiết kế có chủ đích, không phải lỗi đặt tên.
 
-### 7.3.2 JSON Schema — rules.json (trên Gateway Flash /spiffs)
+### 7.3.2 JSON Schema — rules.json (trên Gateway Flash /storage)
 
 Tệp lưu trữ danh sách các quy tắc tự động hóa IF-THEN cục bộ trên chip:
 
@@ -1868,7 +2047,7 @@ Tệp lưu trữ danh sách các quy tắc tự động hóa IF-THEN cục bộ 
 ]
 ```
 
-### 7.4 JSON Schema — device_list.json (trên Gateway Flash /spiffs)
+### 7.4 JSON Schema — device_list.json (trên Gateway Flash /storage)
 
 ```json
 [
@@ -1890,7 +2069,7 @@ Tệp lưu trữ danh sách các quy tắc tự động hóa IF-THEN cục bộ 
 ]
 ```
 
-### 7.5 JSON Schema — event_log.json (trên Gateway Flash /spiffs)
+### 7.5 JSON Schema — event_log.json (trên Gateway Flash /storage)
 
 ```json
 [
@@ -2175,6 +2354,7 @@ Lấy danh sách rule.
     "sensor_device_id": "sensor_01",
     "condition_type": "gt",
     "threshold": 30.0,
+    "hysteresis": 1.5,
     "target_device_id": "fan_01",
     "action_command": "ON",
     "enabled": true
@@ -2192,6 +2372,7 @@ Tạo rule mới.
   "sensor_device_id": "sensor_01",
   "condition_type": "gt",
   "threshold": 30.0,
+  "hysteresis": 1.5,
   "target_device_id": "fan_01",
   "action_command": "ON"
 }
@@ -2504,31 +2685,31 @@ hoặc LWT:
 | **Actor** | Hệ thống (tự động) |
 | **Precondition** | Gateway đang online, có schedule + rule đã sync |
 | **Trigger** | Mất Internet |
-| **Main Flow** | 1. Wi-Fi Provisioning post EVT_WIFI_LOST |
-| | 2. cloud_sync_task chờ ở xSemaphoreTake() (không chiếm CPU) |
+| **Main Flow** | 1. Wi-Fi Provisioning post EVT_WIFI_LOST, MQTT Adapter post EVT_MQTT_DISCONNECTED |
+| | 2. uplink_task chuyển sang cơ chế Store-and-Forward sang thẻ nhớ SD |
 | | 3. RTC giữ giờ chính xác (DS3231 pin backup) |
 | | 4. Scheduler vẫn chạy: poll 5s, trigger automation/alarm đúng giờ |
 | | 5. Rule Engine vẫn đánh giá telemetry BLE (BLE không cần Internet) |
-| | 6. Event log ghi vào LittleFS |
-| **Postcondition** | Gateway hoạt động bình thường, log chờ sync |
+| | 6. Dữ liệu sự kiện và telemetry ghi đệm vào thẻ nhớ SD (`sync_queue.bin`) |
+| **Postcondition** | Gateway hoạt động bình thường, log chờ backfill khi có mạng |
 
 ### UC-06: Internet trở lại — đồng bộ
 
 | | |
 |---|---|
 | **Actor** | Hệ thống (tự động) |
-| **Precondition** | Gateway offline, có event log chưa sync |
+| **Precondition** | Gateway offline, có event log và telemetry trong `sync_queue.bin` |
 | **Trigger** | Wi-Fi kết nối lại |
 | **Main Flow** | 1. wifi_provisioning post EVT_WIFI_CONNECTED |
-| | 2. rtc: sync NTP → ghi lại DS3231 |
-| | 3. storage: on_network_available → give semaphore |
-| | 4. cloud_sync_task đánh thức: |
-| | &nbsp;&nbsp;&nbsp;&nbsp;a. GET /sync/schedule → so sánh → ghi đè nếu khác |
-| | &nbsp;&nbsp;&nbsp;&nbsp;b. GET /sync/devices → tương tự |
-| | &nbsp;&nbsp;&nbsp;&nbsp;c. POST /sync/events → upload log tích lũy |
-| | &nbsp;&nbsp;&nbsp;&nbsp;d. post EVT_CONFIG_UPDATED_FROM_CLOUD (nếu có thay đổi) |
-| | 5. rule_engine + scheduler tự reload |
-| **Postcondition** | Config đồng bộ, event log đã upload, hệ thống up-to-date |
+| | 2. rtc: sync NTP (Smooth Slew) → ghi lại DS3231 |
+| | 3. mqtt_adapter kết nối lại Broker (Exponential Backoff), post EVT_MQTT_CONNECTED |
+| | 4. Tiến trình đồng bộ bù (Backfill): |
+| | &nbsp;&nbsp;&nbsp;&nbsp;a. Backend publish cấu hình mới qua MQTT Downlink (`gateway/{id}/config/#`) |
+| | &nbsp;&nbsp;&nbsp;&nbsp;b. Gateway nạp cấu hình mới qua storage LittleFS (Atomic Write) |
+| | &nbsp;&nbsp;&nbsp;&nbsp;c. uplink_task đọc `sync_queue.bin` publish bù telemetry/events theo batch (tối đa 50 rec/s) |
+| | &nbsp;&nbsp;&nbsp;&nbsp;d. Nhận PUBACK từ Broker → cập nhật read_offset |
+| | 5. rule_engine + scheduler tự reload khi có config mới |
+| **Postcondition** | Config đồng bộ, queue offline đã gửi bù sạch, hệ thống up-to-date |
 
 ### UC-07: Force reset Wi-Fi
 
@@ -2553,14 +2734,14 @@ hoặc LWT:
 | Lỗi | Phát hiện bởi | Xử lý | Hậu quả |
 |---|---|---|---|
 | BLE sensor mất kết nối / đọc timeout | `ble_scan_task` | Post event với `valid=false` | Rule engine giữ safe-default |
-| MQTT broker mất kết nối | esp-mqtt stack | Post `EVT_MQTT_DISCONNECTED` | MQTT device không điều khiển được, BLE device vẫn OK |
-| Wi-Fi mất | esp_wifi stack | Post `EVT_WIFI_LOST` | Chuyển sang offline mode |
-| Event queue đầy | `event_bus_post()` | Log WARN, trả pdFALSE, event bị mất | Cần kiểm tra handler nào block dispatcher |
+| MQTT broker mất kết nối | esp-mqtt stack | Post `EVT_MQTT_DISCONNECTED`, Exponential Backoff | MQTT device không điều khiển được, BLE device vẫn OK |
+| Wi-Fi mất | esp_wifi stack | Post `EVT_WIFI_LOST` | Chuyển sang offline mode, telemetry vào SD queue |
+| Event queue đầy | `event_bus_post()` | Log WARN, trả pdFALSE, tự do giải phóng payload | Không rò rỉ RAM; cần rà soát non-blocking handler |
 | malloc thất bại | Mỗi module tự kiểm tra | Log ERROR, skip lần này | Có thể mất 1 chu kỳ xử lý |
-| LittleFS mount fail | `storage_init()` | Log ERROR, hệ thống chạy không có persistent data | Schedule/rule rỗng, chờ sync |
-| DS3231 I2C fail | `rtc_init()` | Log ERROR, dùng epoch 0 | Giờ sai cho tới khi có NTP |
-| NTP sync fail | `rtc_sync_from_ntp_and_save()` | Log WARN, giữ giờ DS3231 cũ | Giờ có thể lệch vài giây/phút |
-| Backend không phản hồi | `cloud_sync_task` | Log ERROR, giữ config local, thử lại lần sau | Gateway chạy bình thường với data cũ |
+| LittleFS mount fail | `storage_init()` | Log ERROR, tự format phục hồi partition | Schedule/rule nạp mặc định safe-default |
+| DS3231 I2C fail | `rtc_init()` | Log ERROR, rtc_is_valid() = false | Tạm dừng scheduler theo giờ tới khi có NTP |
+| NTP sync fail | `rtc_sync_from_ntp_and_save()` | Log WARN, giữ giờ DS3231 cũ | Giờ có thể lệch vài giây |
+| Broker / Backend không phản hồi | `uplink_task` | Chuyển dữ liệu vào Store-and-Forward queue trên SD | Gateway chạy bình thường, không mất dữ liệu |
 
 ### 11.2 Safe-default Pattern & Ma Trận Ngắt An Toàn Cơ Cấu Chấp Hành
 
@@ -2810,10 +2991,12 @@ Bảng tiêu chí nghiệm thu dưới đây map từng tính năng Must-have (M
 
 ### 14.4 Quy trình nghiệm thu
 
-1. **Chuẩn bị:** Gateway đã flash firmware, Backend đang chạy, Web App truy cập được, có ≥ 1 BLE sensor + 1 MQTT actuator sẵn sàng
-2. **Thực hiện:** Chạy tuần tự theo kịch bản demo (§15.2), đánh dấu pass/fail từng mục M01–M13
-3. **Ghi nhận:** Screenshot Web App, chụp OLED, log serial Gateway cho mỗi test case
-4. **Kết quả:** Tất cả M01–M13 pass = **Đạt yêu cầu tối thiểu**. Thêm S01–S06 pass = điểm cộng
+1. **Chuẩn bị:** Gateway đã flash firmware, Backend đang chạy, Web App truy cập được, có ≥ 1 BLE sensor (0x181A / BTHome) + 4 kênh Relay sẵn sàng.
+2. **Thực hiện:** Chạy tuần tự theo ma trận kiểm thử tại `testing/test-plan.yaml` và kịch bản demo (§15.2), đánh dấu pass/fail từng mục **M01–M17** và **S01–S08**.
+3. **Ghi nhận:** Screenshot Web App, log serial console Gateway UART0 (115200 baud), trạng thái màn hình OLED và trạng thái relay vật lý cho mỗi test case.
+4. **Kết quả:**
+   - Tất cả **M01–M17** pass = **Đạt chuẩn sản phẩm cốt lõi (Must-have Acceptance Gate)**.
+   - Thêm **S01–S08** pass = **Đạt chuẩn sản phẩm thương mại hoàn chỉnh (Should-have Full Feature)**.
 
 ---
 
@@ -2858,24 +3041,5 @@ Khớp chuẩn xác với file cấu hình [`partitions.csv`]([partitions.csv](f
 | ESP-IDF Programming Guide | API reference cho NVS, Wi-Fi, MQTT, NimBLE, LittleFS |
 | u8g2 library | OLED driver cho SSD1327 |
 
----
-
 *— Hết tài liệu FSD —*
 
-
----
-
-## Phụ lục B: Mô phỏng Thiết bị Modbus RS485 (Mock Test Harness)
-
-> **Ghi chú phạm vi:** Chuẩn truyền thông vật lý RS485 đã được **lược bỏ hoàn toàn** khỏi sản phẩm thương mại để chuyển sang cảm biến không dây BLE. Phụ lục này lưu trữ tài liệu kỹ thuật của module giả lập [`mock_peripherals.c`]([mock_peripherals.c](firmware/main/mock_peripherals.c)), được sử dụng độc quyền trong môi trường kiểm thử tự động nội bộ để xác minh tính năng ngắt mạch (Circuit Breaker) và kịch bản đóng băng tác vụ (`test freeze rs485`) nhằm kích hoạt Task Supervisor.
-
-1. **Khung truyền giả lập:** Hỗ trợ Modbus RTU Function Code 03 (Read Holding Registers) và Function Code 06/16 (Write Registers).
-2. **Mặt nạ giám sát trong chế độ kiểm thử:**
-   - Trong quá trình chạy kịch bản kiểm thử `test freeze rs485`, bộ test harness tự động gọi `supervisor_set_active_tasks(TASK_ACTIVE_MASK_PRODUCTION | TASK_HEARTBEAT_MOCK)` (tức mask `0xFF` = `0x7F | 0x80`), kích hoạt cờ giám sát bit 7 cho mock task.
-   - Trong môi trường sản xuất thương mại (Production), mock task bị tắt hoàn toàn và mặt nạ giám sát chỉ duy trì 7 task chuẩn (`mask = 0x7F`), bảo đảm hệ thống không bao giờ bị reset vô cớ.
-
-3. **Kịch bản kiểm thử Fault Injection qua Serial CLI:**
-   - `mock rs485 start [interval_ms]`: Bật luồng giả lập cảm biến.
-   - `mock rs485 stop`: Dừng luồng giả lập.
-   - `mock rs485 fault <none|timeout|invalid>`: Tiêm lỗi đường truyền hoặc timeout.
-   - `test freeze rs485`: Cố tình đóng băng vòng lặp để kích hoạt cơ chế phát hiện của Task Supervisor sau đúng 15 giây.

@@ -15,9 +15,9 @@
 #include "rtc.h"
 #include "rule_engine.h"
 #include "scheduler.h"
-#include "mock_peripherals.h"
 #include "event_bus.h"
 #include "ble_adapter.h"
+#include "relay_controller.h"
 
 static const char *TAG __attribute__((unused)) = "CLI";
 
@@ -34,7 +34,7 @@ static void print_banner(void)
 {
     printf("\n");
     printf("=====================================================\n");
-    printf("   SMART CLOCK & INDUSTRIAL EDGE GATEWAY CONSOLE    \n");
+    printf("   SMART CLOCK EDGE IOT GATEWAY CONSOLE             \n");
     printf("   ESP32 Firmware v1.1.0 - AICLP Manual Mode        \n");
     printf("   Type 'help' to view available commands.           \n");
     printf("=====================================================\n");
@@ -63,7 +63,6 @@ static void print_help(void)
     printf("  config show                          - Print active configuration\n");
     printf("  config set wifi <ssid> <pass>        - Save Wi-Fi SSID and password to NVS\n");
     printf("  config set mqtt <uri> [interval_s]   - Save MQTT Broker URI and publish interval\n");
-    printf("  config set rs485 <baud> [timeout_ms] - Save RS485 baudrate and response timeout\n");
     printf("  rule list                            - List active automation rules\n");
     printf("  rule add <id> <sensor> <GT|LT> <thr> <target> <cmd> - Add or update rule\n");
     printf("  rule test <sensor_id> <val> [valid]  - Test telemetry against rules (valid=1/0)\n");
@@ -73,15 +72,11 @@ static void print_help(void)
     printf("  schedule add [id] <alarm|auto> <HH:MM> <title_or_target> [cmd] - Add schedule\n");
     printf("  schedule test [title]                - Manually trigger an alarm notification\n");
     printf("  schedule clear                       - Clear all schedule entries\n");
+    printf("  relay status                         - Show state of all 4 relays (GPIO 15..18)\n");
+    printf("  relay on <target_id>                 - Turn on relay (fan, heater, dehum, aux)\n");
+    printf("  relay off <target_id>                - Turn off relay\n");
+    printf("  relay emergency                      - Emergency shutdown all relays (Active LOW)\n");
     printf("  cmd send <target_id> <command>       - Dispatch command to device\n");
-    printf("  mock status                          - Show mock peripherals status\n");
-    printf("  mock rs485 start [interval_ms]       - Start simulated RS485 polling\n");
-    printf("  mock rs485 stop                      - Stop simulated RS485 polling\n");
-    printf("  mock rs485 set <temp> <hum>          - Set simulated sensor values\n");
-    printf("  mock rs485 fault <none|timeout|invalid> - Inject simulated bus faults\n");
-    printf("  mock storage test                    - Write sample telemetry to virtual storage\n");
-    printf("  modbus scan [start_id] [end_id]      - Probe RS485 slave devices (mock mode)\n");
-    printf("  test freeze rs485                    - Test hook: simulate frozen rs485 task (FR-SUP-02)\n");
     printf("  test freeze event_bus                - Test hook: simulate frozen event_bus task (FR-SUP-02)\n");
     printf("  test burst [count]                   - Test hook: burst events into event bus queue (FSD §4.1.6)\n");
     printf("  reboot                               - Reboot the ESP32 gateway\n\n");
@@ -203,16 +198,6 @@ static void handle_command(char *cmd_line)
             printf("OK: MQTT updated: URI='%s', interval=%u s\n", uri, interval);
         } else {
             printf("Error: Usage: config set mqtt <uri> [interval_s]\n");
-        }
-    } else if (strncmp(cmd_line, "config set rs485", 16) == 0) {
-        uint32_t baud = 0;
-        uint16_t timeout = 0;
-        int parsed = sscanf(cmd_line + 16, "%lu %hu", (unsigned long*)&baud, &timeout);
-        if (parsed >= 1) {
-            config_manager_set_rs485(baud, timeout);
-            printf("OK: RS485 updated: Baud=%lu, Timeout=%u ms\n", (unsigned long)baud, timeout);
-        } else {
-            printf("Error: Usage: config set rs485 <baud> [timeout_ms]\n");
         }
     } else if (strcmp(cmd_line, "status") == 0) {
         uint32_t active, alive, heap;
@@ -393,41 +378,35 @@ static void handle_command(char *cmd_line)
         } else {
             printf("Usage: cmd send <target_device_id> <command>\n");
         }
-    } else if (strcmp(cmd_line, "mock status") == 0) {
-        mock_peripherals_print_status();
-    } else if (strncmp(cmd_line, "mock rs485 start", 16) == 0) {
-        uint32_t interval = 3000;
-        sscanf(cmd_line + 16, "%lu", (unsigned long*)&interval);
-        mock_rs485_start(interval);
-    } else if (strcmp(cmd_line, "mock rs485 stop") == 0) {
-        mock_rs485_stop();
-    } else if (strncmp(cmd_line, "mock rs485 set", 14) == 0) {
-        float temp = 0.0f, hum = 0.0f;
-        int valid = 1;
-        int parsed = sscanf(cmd_line + 14, "%f %f %d", &temp, &hum, &valid);
-        if (parsed >= 2) {
-            mock_rs485_set_values(temp, hum, valid != 0);
-        } else {
-            printf("Usage: mock rs485 set <temperature> <humidity> [valid: 1/0]\n");
+    } else if (strcmp(cmd_line, "relay status") == 0) {
+        printf("\n=== 4-CHANNEL RELAY STATUS (FSD §4.10) ===\n");
+        for (int i = 1; i <= 4; i++) {
+            bool st = relay_controller_get_state(i);
+            uint32_t dur = relay_controller_get_on_duration(i);
+            printf("  Relay %d [GPIO %d]: %s (ON for %lu s)\n",
+                   i, (i == 1) ? 15 : (i == 2) ? 16 : (i == 3) ? 17 : 18,
+                   st ? "ON" : "OFF", (unsigned long)dur);
         }
-    } else if (strncmp(cmd_line, "mock rs485 fault", 16) == 0) {
-        char fault[16] = "none";
-        sscanf(cmd_line + 16, "%15s", fault);
-        mock_rs485_inject_fault(fault);
-    } else if (strcmp(cmd_line, "mock storage test") == 0) {
-        mock_storage_write_sample_csv();
-    } else if (strncmp(cmd_line, "modbus scan", 11) == 0) {
-        int start = 1, end = 16;
-        sscanf(cmd_line + 11, "%d %d", &start, &end);
-        printf("Scanning RS485 Modbus addresses %d to %d...\n", start, end);
-        printf("[MOCK SCAN] Note: Physical bus unpopulated. Simulating probe...\n");
-        printf("  - Slave ID 0x01: Simulated T&H Sensor (Present)\n");
-        printf("  - Slave ID 0x02: Simulated 4-Ch Relay Board (Present)\n");
-        printf("Scan complete. 2 nodes found in configuration table.\n");
-    } else if (strcmp(cmd_line, "test freeze rs485") == 0) {
-        printf("TEST HOOK: Simulating RS485 task stall (FSD §4.13.4 FR-SUP-02)...\n");
-        printf("Task will stop heartbeat. Supervisor should reboot in 15 seconds!\n");
-        mock_rs485_freeze();
+        printf("==========================================\n\n");
+    } else if (strncmp(cmd_line, "relay on", 8) == 0) {
+        char target[32] = {0};
+        if (sscanf(cmd_line + 8, "%31s", target) >= 1) {
+            esp_err_t err = relay_controller_set_state(target, true, "CLI_CMD", "MANUAL_CLI");
+            printf("Relay ON '%s': %s\n", target, (err == ESP_OK) ? "SUCCESS" : "REJECTED (Interlock/Lockout)");
+        } else {
+            printf("Usage: relay on <fan|heater|dehum|aux|relay_1..4>\n");
+        }
+    } else if (strncmp(cmd_line, "relay off", 9) == 0) {
+        char target[32] = {0};
+        if (sscanf(cmd_line + 9, "%31s", target) >= 1) {
+            esp_err_t err = relay_controller_set_state(target, false, "CLI_CMD", "MANUAL_CLI");
+            printf("Relay OFF '%s': %s\n", target, (err == ESP_OK) ? "SUCCESS" : "FAILED");
+        } else {
+            printf("Usage: relay off <fan|heater|dehum|aux|relay_1..4>\n");
+        }
+    } else if (strcmp(cmd_line, "relay emergency") == 0) {
+        relay_controller_emergency_shutdown_all();
+        printf("EMERGENCY SHUTDOWN: All 4 relays forced LOW.\n");
     } else if (strcmp(cmd_line, "test freeze event_bus") == 0) {
         printf("TEST HOOK: Simulating EVENT_BUS task stall (FSD §4.13.4 FR-SUP-02)...\n");
         printf("Task will stop heartbeat. Supervisor should reboot in 15 seconds!\n");
