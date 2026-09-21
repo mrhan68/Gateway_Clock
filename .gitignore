@@ -40,3 +40,19 @@ firmware/sdkconfig.old
 # ─── Database ──
 *.db
 *.sqlite
+
+# ─── Local Workspace Only (Untracked from Git) ──
+.agents/
+.claude/
+AGENTS.md
+CLAUDE.md
+DEV_LOG.md
+PROGRESS.md
+fsd-smart-clock-gateway.md
+testing/
+package.json
+package-lock.json
+tests/host/test_ble_telemetry_simulator.py
+boot_log.txt
+*test_report*.json
+
