@@ -15,7 +15,7 @@ Verification Contract — FR-RELAY-01:
      Turning OFF a compressor/heater enforces a cooldown period before it can turn ON again.
 """
 
-from typing import Dict, List, Optional
+from typing import List
 
 
 class RelayControllerHostSimulator:

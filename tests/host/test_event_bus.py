@@ -13,7 +13,7 @@ Verification Contract — FR-EVT-01:
 """
 
 import time
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List
 
 
 class EventBusHostSimulator:

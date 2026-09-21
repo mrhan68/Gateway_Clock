@@ -78,7 +78,7 @@ def run_suite():
     print("\n-------------------------------------------------------------")
     print("TEST 2: Relay Controller Hardware Actuation (TC-RELAY-01 / FR-RELAY-01)")
     print("-------------------------------------------------------------")
-    out_on = exec_cli("relay on fan_relay_01", wait=1.5)
+    exec_cli("relay on fan_relay_01", wait=1.5)
     out_stat = exec_cli("relay status", wait=1.5)
     fan_active = "Relay 1" in out_stat and "ON" in out_stat
     exec_cli("relay off fan_relay_01", wait=1.5)
