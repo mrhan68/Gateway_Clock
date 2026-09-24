@@ -3,6 +3,7 @@ import React from 'react'
 /**
  * TelemetryChart component renders an SVG time-series line chart for sensor telemetry.
  * Supports Temperature (°C) and Humidity (%) with min, max, and current value badges.
+ * Formatted for Linear-style dark aesthetic.
  *
  * @param {Array} data - Array of telemetry records [{ value, unit, recorded_at }]
  * @param {string} title - Chart title (e.g. 'Temperature Trend')
@@ -14,9 +15,9 @@ export default function TelemetryChart({
   data = [],
   title = 'Sensor Telemetry',
   unit = '°C',
-  color = 'blue',
+  color = 'emerald',
   loading = false,
-  height = 180,
+  height = 190,
 }) {
   // Sort data ascending by recorded_at for chronological plotting
   const sorted = [...data]
@@ -25,10 +26,10 @@ export default function TelemetryChart({
 
   if (loading) {
     return (
-      <div className="bg-white rounded-lg border border-gray-100 p-4 shadow-sm">
-        <div className="animate-pulse space-y-3">
-          <div className="h-4 bg-gray-200 rounded w-1/3"></div>
-          <div className="h-32 bg-gray-100 rounded"></div>
+      <div className="bg-dark-900 rounded-xl border border-zinc-800 p-5 shadow-sm">
+        <div className="animate-pulse space-y-4">
+          <div className="h-4 bg-zinc-800 rounded w-1/3"></div>
+          <div className="h-32 bg-zinc-950/60 rounded"></div>
         </div>
       </div>
     )
@@ -36,9 +37,9 @@ export default function TelemetryChart({
 
   if (sorted.length === 0) {
     return (
-      <div className="bg-white rounded-lg border border-gray-100 p-6 shadow-sm text-center">
-        <h4 className="text-sm font-semibold text-gray-700">{title}</h4>
-        <p className="text-xs text-gray-400 mt-2">No telemetry points recorded yet.</p>
+      <div className="bg-dark-900 rounded-xl border border-zinc-800 p-6 shadow-sm text-center">
+        <h4 className="text-sm font-semibold text-zinc-300">{title}</h4>
+        <p className="text-xs text-zinc-500 mt-2 font-mono">No telemetry points recorded yet.</p>
       </div>
     )
   }
@@ -79,32 +80,36 @@ export default function TelemetryChart({
         )},${padY + plotHeight} Z`
       : ''
 
-  // Color schemes
+  // Color schemes (Linear dark theme)
   const colorMap = {
     blue: {
-      stroke: '#3b82f6',
-      fill: 'rgba(59, 130, 246, 0.12)',
-      badge: 'bg-blue-50 text-blue-700 border-blue-200',
+      stroke: '#38bdf8',
+      fill: 'rgba(56, 189, 248, 0.15)',
+      badge: 'bg-sky-500/10 text-sky-400 border-sky-500/20',
+      dot: '#38bdf8',
     },
     purple: {
-      stroke: '#8b5cf6',
-      fill: 'rgba(139, 92, 246, 0.12)',
-      badge: 'bg-purple-50 text-purple-700 border-purple-200',
+      stroke: '#a855f7',
+      fill: 'rgba(168, 85, 247, 0.15)',
+      badge: 'bg-purple-500/10 text-purple-400 border-purple-500/20',
+      dot: '#a855f7',
     },
     emerald: {
-      stroke: '#10b981',
-      fill: 'rgba(16, 185, 129, 0.12)',
-      badge: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+      stroke: '#34d399',
+      fill: 'rgba(52, 211, 153, 0.15)',
+      badge: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20',
+      dot: '#34d399',
     },
     amber: {
-      stroke: '#f59e0b',
-      fill: 'rgba(245, 158, 11, 0.12)',
-      badge: 'bg-amber-50 text-amber-700 border-amber-200',
+      stroke: '#fbbf24',
+      fill: 'rgba(251, 191, 36, 0.15)',
+      badge: 'bg-amber-500/10 text-amber-400 border-amber-500/20',
+      dot: '#fbbf24',
     },
   }
-  const theme = colorMap[color] || colorMap.blue
+  const theme = colorMap[color] || colorMap.emerald
 
-  // Timestamps for labels (first, middle, last)
+  // Timestamps for labels
   const firstTime = new Date(sorted[0].recorded_at).toLocaleTimeString([], {
     hour: '2-digit',
     minute: '2-digit',
@@ -115,89 +120,94 @@ export default function TelemetryChart({
   })
 
   return (
-    <div className="bg-white rounded-lg border border-gray-100 p-4 shadow-sm hover:shadow-md transition-shadow">
+    <div className="bg-dark-900 rounded-xl border border-zinc-800 p-5 shadow-sm hover:border-zinc-700 transition-colors">
       {/* Header with Title & Stats */}
       <div className="flex items-center justify-between mb-3">
         <div>
-          <h4 className="text-sm font-semibold text-gray-800">{title}</h4>
-          <span className="text-xs text-gray-400">
-            {sorted.length} reading{sorted.length > 1 ? 's' : ''} recorded
+          <h4 className="text-sm font-semibold text-zinc-100">{title}</h4>
+          <span className="text-[11px] text-zinc-500 font-mono">
+            {sorted.length} reading{sorted.length > 1 ? 's' : ''} captured
           </span>
         </div>
         <div className="flex items-center gap-2">
           <span
-            className={`px-2 py-0.5 rounded border text-xs font-semibold ${theme.badge}`}
+            className={`px-2.5 py-0.5 rounded-full border text-xs font-semibold tabular-nums ${theme.badge}`}
           >
-            Current: {currentVal} {unit}
+            {currentVal} {unit}
           </span>
         </div>
       </div>
 
       {/* Mini KPI Bar */}
-      <div className="grid grid-cols-3 gap-2 text-center text-xs py-1 px-2 mb-2 bg-gray-50 rounded">
+      <div className="grid grid-cols-3 gap-2 text-center text-xs py-2 px-3 mb-3 bg-zinc-950/70 border border-zinc-800/80 rounded-lg">
         <div>
-          <span className="text-gray-400 block">Min</span>
-          <span className="font-semibold text-gray-700">
+          <span className="text-[11px] text-zinc-500 block uppercase font-mono tracking-wider">Min</span>
+          <span className="font-semibold text-zinc-200 tabular-nums">
             {minVal} {unit}
           </span>
         </div>
         <div>
-          <span className="text-gray-400 block">Avg</span>
-          <span className="font-semibold text-gray-700">
+          <span className="text-[11px] text-zinc-500 block uppercase font-mono tracking-wider">Avg</span>
+          <span className="font-semibold text-zinc-200 tabular-nums">
             {(values.reduce((a, b) => a + b, 0) / values.length).toFixed(1)} {unit}
           </span>
         </div>
         <div>
-          <span className="text-gray-400 block">Max</span>
-          <span className="font-semibold text-gray-700">
+          <span className="text-[11px] text-zinc-500 block uppercase font-mono tracking-wider">Max</span>
+          <span className="font-semibold text-zinc-200 tabular-nums">
             {maxVal} {unit}
           </span>
         </div>
       </div>
 
-      {/* SVG Chart */}
-      <div className="w-full overflow-hidden">
+      {/* SVG Time-Series Chart */}
+      <div className="relative">
         <svg
           viewBox={`0 0 ${svgWidth} ${svgHeight}`}
-          className="w-full h-auto select-none"
+          className="w-full h-auto overflow-visible select-none"
         >
-          {/* Horizontal Grid lines */}
+          {/* Subtle Grid Lines */}
           <line
             x1={padX}
             y1={padY}
             x2={svgWidth - padX}
             y2={padY}
-            stroke="#f3f4f6"
-            strokeDasharray="4 4"
+            stroke="#27272a"
+            strokeDasharray="3 3"
+            strokeWidth="1"
           />
           <line
             x1={padX}
             y1={padY + plotHeight / 2}
             x2={svgWidth - padX}
             y2={padY + plotHeight / 2}
-            stroke="#f3f4f6"
-            strokeDasharray="4 4"
+            stroke="#27272a"
+            strokeDasharray="3 3"
+            strokeWidth="1"
           />
           <line
             x1={padX}
             y1={padY + plotHeight}
             x2={svgWidth - padX}
             y2={padY + plotHeight}
-            stroke="#e5e7eb"
+            stroke="#27272a"
+            strokeWidth="1"
           />
 
           {/* Area Fill */}
-          <path d={areaD} fill={theme.fill} />
+          {areaD && <path d={areaD} fill={theme.fill} />}
 
-          {/* Line Path */}
-          <path
-            d={pathD}
-            fill="none"
-            stroke={theme.stroke}
-            strokeWidth="2.5"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
+          {/* Value Line */}
+          {pathD && (
+            <path
+              d={pathD}
+              fill="none"
+              stroke={theme.stroke}
+              strokeWidth="2.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          )}
 
           {/* Data Points */}
           {sorted.map((d, i) => (
@@ -205,51 +215,53 @@ export default function TelemetryChart({
               key={i}
               cx={getX(i)}
               cy={getY(d.value)}
-              r="3.5"
-              fill="#ffffff"
-              stroke={theme.stroke}
-              strokeWidth="2"
-            >
-              <title>{`${d.value} ${unit} at ${new Date(d.recorded_at).toLocaleTimeString()}`}</title>
-            </circle>
+              r={i === sorted.length - 1 ? '4' : '2'}
+              fill={theme.dot}
+              stroke="#09090b"
+              strokeWidth="1.5"
+            />
           ))}
 
-          {/* Y Axis min / max labels */}
+          {/* Y-Axis Value Labels */}
           <text
             x={padX - 8}
             y={padY + 4}
             textAnchor="end"
             fontSize="10"
-            fill="#9ca3af"
+            fill="#71717a"
+            fontFamily="monospace"
           >
             {maxVal}
           </text>
           <text
             x={padX - 8}
-            y={padY + plotHeight + 3}
+            y={padY + plotHeight}
             textAnchor="end"
             fontSize="10"
-            fill="#9ca3af"
+            fill="#71717a"
+            fontFamily="monospace"
           >
             {minVal}
           </text>
 
-          {/* X Axis time labels */}
+          {/* X-Axis Time Labels */}
           <text
             x={padX}
-            y={svgHeight - 6}
+            y={svgHeight - 4}
             textAnchor="start"
             fontSize="10"
-            fill="#9ca3af"
+            fill="#71717a"
+            fontFamily="monospace"
           >
             {firstTime}
           </text>
           <text
             x={svgWidth - padX}
-            y={svgHeight - 6}
+            y={svgHeight - 4}
             textAnchor="end"
             fontSize="10"
-            fill="#9ca3af"
+            fill="#71717a"
+            fontFamily="monospace"
           >
             {lastTime}
           </text>
