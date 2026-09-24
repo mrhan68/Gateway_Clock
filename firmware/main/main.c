@@ -64,65 +64,69 @@ void app_main(void)
     }
     ESP_ERROR_CHECK(ret);
 
-    // 2. Event Bus: Khởi tạo Event Queue trung tâm (32 slots) trước khi các module đăng ký (FSD §4.14 Step 2)
-    ESP_LOGI(TAG, "[BOOT 2/16] Initializing Central Event Bus Queue (32 slots)...");
+    // 2. Hardware Safety GPIO Fail-Safe: Kéo GPIO 15..18 LOW an toàn trước khi Event Bus chạy (FSD §4.14 Step 2)
+    ESP_LOGI(TAG, "[BOOT 2/16] Hardware Safety Fail-Safe (GPIO 15..18 LOW, 10k pulldown)...");
+    relay_gpio_init();
+
+    // 3. Event Bus: Khởi tạo Event Queue trung tâm (32 slots) (FSD §4.14 Step 3)
+    ESP_LOGI(TAG, "[BOOT 3/16] Initializing Central Event Bus Queue (32 slots)...");
     event_bus_init();
 
-    // 3. Relay Controller: Cấp nguồn an toàn, kéo GPIO 15..18 LOW ngay lập tức (FSD §4.14 Step 3)
-    ESP_LOGI(TAG, "[BOOT 3/16] Initializing Relay Controller (Hardware Fail-Safe GPIO 15..18 LOW)...");
+    // 4. Relay Controller: Đăng ký Event Handlers và Khởi tạo Safety Timer (FSD §4.14 Step 4)
+    ESP_LOGI(TAG, "[BOOT 4/16] Initializing Relay Controller (Event Handlers & Interlock)...");
     relay_controller_init();
 
-    // 4. Task Supervisor & Watchdog (FSD §4.14 Step 4)
-    ESP_LOGI(TAG, "[BOOT 4/16] Initializing Task Supervisor (Active Mask 0x7F, TWDT 15s)...");
+    // 5. Task Supervisor & Watchdog (FSD §4.14 Step 5)
+    ESP_LOGI(TAG, "[BOOT 5/16] Initializing Task Supervisor (Active Mask 0x7F, TWDT 15s)...");
     supervisor_init();
     supervisor_set_active_tasks(TASK_ACTIVE_MASK_PRODUCTION);
 
-    // 5. RTC & SNTP Clock (FSD §4.14 Step 5)
-    ESP_LOGI(TAG, "[BOOT 5/16] Initializing RTC System Clock (DS3231 I2C0 & TZ ICT-7)...");
+    // 6. RTC & SNTP Clock (FSD §4.14 Step 6)
+    ESP_LOGI(TAG, "[BOOT 6/16] Initializing RTC System Clock (DS3231 I2C0 & TZ ICT-7)...");
     app_rtc_init();
 
-    // 6. OLED Display, Buzzer & Buttons: Đạt KPI-BOOT-01 < 1.5s (FSD §4.14 Step 6)
-    ESP_LOGI(TAG, "[BOOT 6/16] Initializing Display Subsystem (OLED + Buzzer + Buttons)...");
+    // 7. OLED Display, Buzzer & Buttons: Đạt KPI-BOOT-01 < 1.5s (FSD §4.14 Step 7)
+    ESP_LOGI(TAG, "[BOOT 7/16] Initializing Display Subsystem (OLED + Buzzer + Buttons)...");
     display_init();
 
-    // 7. Storage: Gắn kết phân vùng SPIFFS /spiffs (FSD §4.14 Step 7)
-    ESP_LOGI(TAG, "[BOOT 7/16] Mounting SPIFFS storage /spiffs...");
+    // 8. Storage: Gắn kết phân vùng SPIFFS /spiffs (FSD §4.14 Step 8)
+    ESP_LOGI(TAG, "[BOOT 8/17] Mounting SPIFFS storage /spiffs...");
     storage_init();
 
-    // 8. MicroSD Logger & Store-and-Forward Sync Queue (FSD §4.14 Step 8)
-    ESP_LOGI(TAG, "[BOOT 8/16] Initializing MicroSD Logger & Sync Queue...");
+    // 9. MicroSD Logger & Store-and-Forward Sync Queue (FSD §4.14 Step 9)
+    ESP_LOGI(TAG, "[BOOT 9/17] Initializing MicroSD Logger & Sync Queue...");
     sd_logger_init();
 
-    // 9. Configuration Manager: Nạp /spiffs/config.json (FSD §4.14 Step 9)
-    ESP_LOGI(TAG, "[BOOT 9/16] Initializing Config Manager (loading config.json)...");
+    // 10. Configuration Manager: Nạp /spiffs/config.json (FSD §4.14 Step 10)
+    ESP_LOGI(TAG, "[BOOT 10/17] Initializing Config Manager (loading config.json)...");
     config_manager_init();
 
-    // 10. Wi-Fi Provisioning & Connection (FSD §4.14 Step 10)
-    ESP_LOGI(TAG, "[BOOT 10/16] Initializing Wi-Fi & Web Provisioning Server...");
+    // 11. Wi-Fi Provisioning & Connection (FSD §4.14 Step 11)
+    ESP_LOGI(TAG, "[BOOT 11/17] Initializing Wi-Fi & Web Provisioning Server...");
     wifi_provisioning_init();
 
-    // 11. Uplink Telemetry & MQTT Adapter (FSD §4.14 Step 11)
-    ESP_LOGI(TAG, "[BOOT 11/16] Initializing MQTT Adapter & Uplink Telemetry...");
+    // 12. Uplink Telemetry & MQTT Adapter (FSD §4.14 Step 12)
+    ESP_LOGI(TAG, "[BOOT 12/17] Initializing MQTT Adapter & Uplink Telemetry...");
     uplink_init();
 
-    // 12. Rule Engine Condition Evaluator (FSD §4.14 Step 12)
-    ESP_LOGI(TAG, "[BOOT 12/16] Initializing Rule Engine (loading rules.json & Hysteresis)...");
+    // 13. Rule Engine Condition Evaluator (FSD §4.14 Step 13)
+    ESP_LOGI(TAG, "[BOOT 13/17] Initializing Rule Engine (loading rules.json & Hysteresis)...");
     rule_engine_init();
 
-    // 13. Local Scheduler & Real-Time Alarm (FSD §4.14 Step 13)
-    ESP_LOGI(TAG, "[BOOT 13/16] Initializing Local Scheduler & Alarms...");
+    // 14. Local Scheduler & Real-Time Alarm (FSD §4.14 Step 14)
+    ESP_LOGI(TAG, "[BOOT 14/17] Initializing Local Scheduler & Alarms...");
     scheduler_init();
 
-    // 14. BLE Wireless Telemetry Adapter (FSD §4.14 Step 14)
-    ESP_LOGI(TAG, "[BOOT 14/16] Initializing BLE Adapter & NimBLE Stack...");
+    // 15. BLE Wireless Telemetry Adapter (FSD §4.14 Step 15)
+    ESP_LOGI(TAG, "[BOOT 15/17] Initializing BLE Adapter & NimBLE Stack...");
     ble_adapter_init();
 
-    // 15. Serial CLI Console (FSD §4.14 Step 15)
-    ESP_LOGI(TAG, "[BOOT 15/16] Starting Rescue Serial CLI Console...");
+    // 16. Serial CLI Console (FSD §4.14 Step 16)
+    ESP_LOGI(TAG, "[BOOT 16/17] Starting Rescue Serial CLI Console...");
     serial_cli_init();
 
-    // 16. Bắt đầu Dispatcher sau cùng khi tất cả module đã đăng ký handler (FSD §4.14 Step 16)
-    ESP_LOGI(TAG, "[BOOT 16/16] Starting Event Bus Dispatcher (Core 0, Priority 6)...");
+    // 17. Bắt đầu Dispatcher sau cùng khi tất cả module đã đăng ký handler (FSD §4.14 Step 17)
+    ESP_LOGI(TAG, "[BOOT 17/17] Starting Event Bus Dispatcher (Core 0, Priority 6)...");
     event_bus_start_dispatcher();
 
     // Phát tín hiệu sống Journey Test JRN-01

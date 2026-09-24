@@ -36,7 +36,6 @@ static ble_device_entry_t s_devices[BLE_MAX_DEVICES];
 static int s_device_count = 0;
 static SemaphoreHandle_t s_device_mutex = NULL;
 
-static QueueHandle_t s_ble_cmd_queue = NULL;
 static TaskHandle_t s_ble_scan_task_handle = NULL;
 static bool s_scan_active = false;
 static bool s_scanning_enabled = true;
@@ -60,20 +59,6 @@ static void unlock_devices(void)
     if (s_device_mutex != NULL) {
         xSemaphoreGive(s_device_mutex);
     }
-}
-
-static bool is_my_device(const char *target_id)
-{
-    if (target_id == NULL) return false;
-    lock_devices();
-    for (int i = 0; i < s_device_count; i++) {
-        if (strcmp(s_devices[i].device_id, target_id) == 0) {
-            unlock_devices();
-            return true;
-        }
-    }
-    unlock_devices();
-    return (strncmp(target_id, "ble_", 4) == 0);
 }
 
 void ble_adapter_register_device(const char *device_id, const char *mac_address)
@@ -157,29 +142,6 @@ static ble_device_entry_t* find_or_add_device(const char *mac, const char *name)
 }
 
 // Handler executed in Event Bus Dispatcher context - MUST NEVER BLOCK
-static void on_rule_action_request(const gateway_event_t *evt)
-{
-    if (evt != NULL && evt->data != NULL && evt->len >= sizeof(rule_action_request_t)) {
-        const rule_action_request_t *req = (const rule_action_request_t *)evt->data;
-        if (!is_my_device(req->target_device_id)) {
-            return;
-        }
-
-        ble_cmd_t cmd;
-        strncpy(cmd.device_id, req->target_device_id, sizeof(cmd.device_id) - 1);
-        cmd.device_id[sizeof(cmd.device_id) - 1] = '\0';
-        strncpy(cmd.command, req->action_command, sizeof(cmd.command) - 1);
-        cmd.command[sizeof(cmd.command) - 1] = '\0';
-
-        if (s_ble_cmd_queue != NULL) {
-            if (xQueueSend(s_ble_cmd_queue, &cmd, 0) != pdTRUE) {
-                ESP_LOGW(TAG, "BLE command queue full, dropped command '%s' for '%s'",
-                         cmd.command, cmd.device_id);
-            }
-        }
-    }
-}
-
 static void ble_scan_task(void *pvParameters)
 {
     ESP_LOGI(TAG, "BLE Scan & Worker Task started on Core %d (Prio %d)",
@@ -189,15 +151,7 @@ static void ble_scan_task(void *pvParameters)
         // 1. Report heartbeat to Supervisor to prevent watchdog timeout
         supervisor_report_heartbeat(TASK_HEARTBEAT_BLE);
 
-        // 2. Process pending commands from s_ble_cmd_queue (allowed to block/execute here)
-        ble_cmd_t cmd;
-        while (s_ble_cmd_queue != NULL && xQueueReceive(s_ble_cmd_queue, &cmd, 0) == pdTRUE) {
-            ESP_LOGI(TAG, "[BLE_CMD] Executing action '%s' on BLE node '%s'", cmd.command, cmd.device_id);
-            printf("[BLE] Command executed on node '%s': CMD='%s'\n", cmd.device_id, cmd.command);
-            fflush(stdout);
-        }
-
-        // 3. Keep GAP discovery procedure running
+        // 2. Keep GAP discovery procedure running
         if (s_scanning_enabled && !s_scan_active) {
             ble_gap_start_disc();
         }
@@ -414,17 +368,9 @@ void ble_adapter_init(void)
         s_device_mutex = xSemaphoreCreateMutex();
     }
 
-    if (s_ble_cmd_queue == NULL) {
-        s_ble_cmd_queue = xQueueCreate(BLE_CMD_QUEUE_DEPTH, sizeof(ble_cmd_t));
-    }
-
     // Default known sensor mapping
     ble_adapter_register_device("sensor_temp_01", "AA:BB:CC:11:22:33");
     ble_adapter_register_device("sensor_hum_01",  "AA:BB:CC:44:55:66");
-
-    // Register Event Bus handlers
-    event_bus_register_handler(EVT_RULE_ACTION_REQUEST, on_rule_action_request);
-    event_bus_register_handler(EVT_REMOTE_COMMAND_REQUEST, on_rule_action_request);
 
     // Initialize NimBLE host stack
     esp_err_t ret = nimble_port_init();

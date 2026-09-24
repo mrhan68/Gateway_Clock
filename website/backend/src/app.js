@@ -22,7 +22,6 @@ const gatewayRoutes = require('./routes/gateways');
 const deviceRoutes = require('./routes/devices');
 const scheduleRoutes = require('./routes/schedules');
 const ruleRoutes = require('./routes/rules');
-const syncRoutes = require('./routes/sync');
 const eventRoutes = require('./routes/events');
 const telemetryRoutes = require('./routes/telemetry');
 
@@ -54,9 +53,6 @@ app.use('/api/v1/gateways', scheduleRoutes);
 app.use('/api/v1/gateways', ruleRoutes);
 app.use('/api/v1/gateways', eventRoutes);
 app.use('/api/v1/gateways', telemetryRoutes);
-
-// Sync routes (Gateway-facing, public with X-Gateway-Key in production)
-app.use('/api/v1/gateways', syncRoutes);
 
 // ─── Error handler (must be last) ───
 app.use(errorHandler);

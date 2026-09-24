@@ -48,8 +48,10 @@ typedef struct {
     };
     // Quản lý trạng thái nội bộ (Runtime State)
     bool current_state;              // true: đang trong vùng kích hoạt (Active Zone)
-    uint32_t last_triggered_ts;      // Epoch thời điểm kích hoạt gần nhất để tính cooldown
-    uint32_t lockout_until_ts;       // Epoch thời hạn khóa an toàn sau khi bị ngắt khẩn cấp
+    int64_t last_triggered_mono_us;  // Monotonic microsecond timestamp
+    int64_t lockout_until_mono_us;   // Monotonic microsecond timestamp
+    uint32_t last_triggered_ts;      // Epoch thời điểm kích hoạt gần nhất (tương thích ngược)
+    uint32_t lockout_until_ts;       // Epoch thời hạn khóa an toàn (tương thích ngược)
 } automation_rule_t;
 
 /**

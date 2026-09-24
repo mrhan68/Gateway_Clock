@@ -32,10 +32,18 @@ extern "C" {
  */
 #define RELAY_INTERLOCK_DELAY_MS  500
 
+#define ERR_RELAY_INTERLOCK_CONFLICT  3
+#define ERR_RELAY_DWELL_LOCKED        4
+
 /**
- * @brief Khởi tạo module điều khiển rơ-le và cấu hình an toàn phần cứng (FSD §4.10.5)
- * Cấu hình GPIO 15..18 output LOW, logic Active HIGH, trở kéo xuống 10kΩ.
- * Đăng ký nhận EVT_DEVICE_COMMAND_REQUEST, EVT_RULE_ACTION_REQUEST, EVT_SENSOR_VALUE_INVALID, EVT_BLE_DEVICE_DATA.
+ * @brief Cấu hình an toàn mức GPIO vật lý (Boot Step 2, trước Event Bus)
+ * Kéo GPIO 15..18 xuất mức LOW an toàn với trở kéo xuống 10kΩ.
+ */
+void relay_gpio_init(void);
+
+/**
+ * @brief Khởi tạo module điều khiển rơ-le và cấu hình an toàn phần cứng (FSD §4.10.5, Boot Step 5)
+ * Đăng ký nhận EVT_DEVICE_COMMAND_REQUEST, EVT_RULE_ACTION_REQUEST, EVT_SENSOR_VALUE_INVALID, EVT_BLE_DEVICE_DATA, EVT_DEVICE_OFFLINE_ALERT.
  */
 void relay_controller_init(void);
 

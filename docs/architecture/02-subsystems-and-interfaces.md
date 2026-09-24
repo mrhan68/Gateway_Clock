@@ -111,10 +111,11 @@ flowchart TD
     end
 
     subgraph BLE_DOMAIN["BLE Central Observer (Core 0, Prio 5)"]
-        NIMBLE["NimBLE Stack - Passive Scanning"]
-        DUTY["50% Duty Cycle (Window 50ms, Interval 100ms)"]
-        FILTER["Whitelist & UUID Filter (0x181A / BTHome V2)"]
-        DEBOUNCE["BLE Storm Defense (Rate Limiter 1 pkt/5s)"]
+        NIMBLE["NimBLE Stack - Passive Scanning (filter_duplicates = 0)"]
+        DUTY["50% Duty Cycle (Window 30ms, Interval 60ms)"]
+        PARSERS["Đa Chuẩn Parser (sig_0x181a, bthome_v2, mijia_v2 + bindkey)"]
+        DEDUPE["Software Dedupe Window (Lọc trùng 5s, Định kỳ 10s)"]
+        OFFLINE["Strict 60s Timeout (Khóa Sưởi Cố Định 60s)"]
     end
 
     subgraph WIFI_DOMAIN["Wi-Fi & MQTT Uplink (Core 1, Prio 5)"]
@@ -125,20 +126,32 @@ flowchart TD
 
     COEX_ENGINE <--> BLE_DOMAIN
     COEX_ENGINE <--> WIFI_DOMAIN
-    NIMBLE --> DUTY --> FILTER --> DEBOUNCE
-    DEBOUNCE -->|EVT_BLE_DEVICE_DATA| EVENT_BUS[(Event Bus)]
+    NIMBLE --> DUTY --> PARSERS --> DEDUPE --> OFFLINE
+    DEDUPE -->|EVT_BLE_DEVICE_DATA| EVENT_BUS[(Event Bus)]
+    OFFLINE -->|EVT_DEVICE_OFFLINE_ALERT| EVENT_BUS
     EVENT_BUS --> MQTT_CLI
 ```
 
-### 3.1 Vô Tuyến Đồng Thời (RF Coexistence) và Chống Bão BLE (BLE Storm Defense)
+### 3.1 Vô Tuyến Đồng Thời (RF Coexistence) và Bộ Lọc Trùng BLE (Software Dedupe Window)
 - **Cơ chế Software Coexistence:** ESP32-S3 sử dụng chung 1 bộ vô tuyến RF 2.4 GHz vật lý. Bật cờ `CONFIG_SW_COEXIST_ENABLE=y` cho phép phần mềm thực hiện phân chia thời gian (TDM - Time Division Multiplexing).
-- **Cấu hình NimBLE Passive Scanner:**
-  - **Duty cycle 50%:** Scan Window = 50ms, Scan Interval = 100ms. Cấu hình này giải phóng 50% thời gian cho khối Wi-Fi truyền tải gói tin MQTT mà không làm nghẽn sóng.
-  - **Passive Scanning (Quét thụ động):** Gateway chỉ lắng nghe bản tin Advertisement mà không bao giờ gửi `SCAN_REQ` hay yêu cầu ghép đôi GATT (Pairing/Bonding). Điều này giúp cảm biến BLE ngoại vi (như Xiaomi Mijia LYWSD03MMC chạy Custom Firmware ATC/pvvx) tiết kiệm pin tối đa (pin CR2032 hoạt động > 1 năm).
-- **Bộ lọc Whitelist và Chống Bão Bản Tin (BLE Storm Defense):**
-  - Gói tin thu nhận được kiểm tra Service UUID: Chấp nhận chuẩn môi trường **`0x181A`** hoặc BTHome V2 UUID **`0xFCD2`**.
-  - Kiểm tra địa chỉ MAC của thiết bị với bảng đăng ký NVS `device_list.json`.
-  - **Rate Limiting (Giới hạn tần suất):** Mỗi cảm biến chỉ được phép đẩy tối đa **1 bản tin telemetry mỗi 5 giây** vào Event Bus. Nếu thiết bị phát beacon liên tục ở tần số cao, các bản tin trùng lặp trong cửa sổ 5s bị loại bỏ trực tiếp tại driver BLE, ngăn ngừa cạn kiệt hàng đợi sự kiện.
+- **Cấu hình NimBLE Passive Scanner & Tắt Lọc Trùng Phần Cứng:**
+  - **Tắt lọc trùng phần cứng của Controller:** `disc_params.filter_duplicates = 0`.
+    - *Lý do kỹ thuật bắt buộc:* Nếu bật `filter_duplicates = 1`, phần cứng BLE controller sẽ âm thầm vứt bỏ toàn bộ các gói tin phát lại định kỳ của cảm biến sau lần nhận đầu tiên, khiến hệ thống hiểu nhầm cảm biến bị chết sau 60 giây. Bắt buộc cấu hình `filter_duplicates = 0` để nhận các beacon lặp lại.
+  - **Duty cycle 50%:** Scan Window = 30ms, Scan Interval = 60ms (khớp FSD §4.5.5). Cấu hình này giải phóng 50% thời gian cho khối Wi-Fi truyền tải gói tin MQTT mà không làm nghẽn sóng RF.
+  - **Passive Scanning (Quét thụ động):** Gateway chỉ lắng nghe bản tin Advertisement mà không bao giờ gửi `SCAN_REQ` hay yêu cầu ghép đôi GATT (Pairing/Bonding), giúp cảm biến tiết kiệm pin tối đa (> 1 năm).
+- **Hỗ trợ Đa Chuẩn Parser & Mã Hóa Bindkey:**
+  - `sig_0x181a`: Chuẩn Bluetooth SIG Environmental Sensing Service (UUID `0x181A`).
+  - `bthome_v2`: Chuẩn BTHome V2 mở (UUID `0xFCD2`), hỗ trợ cả plaintext và AES-128 CCM với `bindkey`.
+  - `mijia_v2`: Chuẩn Xiaomi MiBeacon V2/V3 (giải mã AES-128 với bindkey 16 bytes).
+- **Bộ Lọc Trùng Phần Mềm (Software Dedupe Window):**
+  - Quản lý `last_payload_hash` (hoặc packet counter) và `last_processed_mono_us` cho từng MAC trong whitelist.
+  - Nếu gói tin trùng lặp 100% trong vòng **5 giây** $\rightarrow$ bỏ qua trực tiếp tại driver (0 byte heap, chống bão Event Bus).
+  - Chấp nhận gói tin và post `EVT_BLE_DEVICE_DATA` khi:
+    1. Giá trị đo thay đổi (nhiệt độ lệch $\ge 0.1^\circ\text{C}$ hoặc độ ẩm lệch $\ge 1\%$), HOẶC
+    2. Đã trôi qua chu kỳ định kỳ tối đa **10 giây** (Heartbeat refresh).
+- **Cơ chế Timeout An Toàn Tuyệt Đối (Strict 60s Sensor Timeout):**
+  - Đối với cảm biến nhiệt độ gắn với quy tắc điều khiển máy sưởi (`relay_2`), thời gian phát hiện mất tín hiệu **bắt buộc cố định 60 giây**, tuyệt đối cấm nới lên 180s kể cả khi Wi-Fi đang reconnect. Nếu sau 60s không có beacon mới, Gateway post `EVT_DEVICE_OFFLINE_ALERT` để ngắt ngay máy sưởi (0ms trễ) và kích hoạt Lockout 300s.
+  - Đối với các cảm biến thông thường khác: Áp dụng cơ chế thích ứng 60s (Wi-Fi ổn định) hoặc 180s (Wi-Fi đang reconnect).
 
 ### 3.2 Giao Thức MQTT, Exponential Backoff và LWT
 - **Chính sách phân luồng Topic chuẩn:**
@@ -146,6 +159,7 @@ flowchart TD
   - Downlink Command: `gateway/{gateway_id}/device/{device_id}/command` (QoS 1).
   - Command ACK: `gateway/{gateway_id}/device/{device_id}/command/ack` (QoS 1).
   - Batch Backfill: `gateway/{gateway_id}/telemetry/batch` (QoS 1).
+  - Downlink Config: `gateway/{gateway_id}/config/{type}` (QoS 1, Retained, type $\in$ `{"schedule", "rules", "devices"}`).
   - Trạng thái LWT: `gateway/{gateway_id}/status` (QoS 1, Retained).
 - **Thuật toán Tái kết nối Lũy thừa có Biến thiên (Exponential Backoff with Jitter):**
   - Khi mất kết nối tới MQTT Broker, task `uplink_task` không thực hiện thử lại liên tục mà áp dụng công thức:
@@ -154,7 +168,7 @@ flowchart TD
 - **Last Will and Testament (LWT):**
   - Ngay khi kết nối, Gateway gửi bản tin LWT đăng ký với Broker: Topic `gateway/{id}/status`, Payload `"offline"`, QoS 1, `retain = true`.
   - Sau khi bắt tay thành công, Gateway publish chuỗi `"online"` (retained) vào chính topic này.
-- `/* ponytail: Loại bỏ hoàn toàn lớp trừu tượng GATT Connection/Bonding. NimBLE chỉ làm Passive Observer quét gói tin thô 31-byte và giải mã trực tiếp qua UUID 0x181A/0xFCD2; giảm 60% kích thước binary của Bluetooth stack và tiết kiệm pin tối đa cho cảm biến. */`
+- `/* ponytail: Loại bỏ hoàn toàn lớp trừu tượng GATT Connection/Bonding. NimBLE chỉ làm Passive Observer quét gói tin thô 31-byte và giải mã trực tiếp qua parser_type (0x181A, BTHome V2, Mijia V2); filter_duplicates=0 bảo đảm không mất beacon, lọc trùng 5s/10s phần mềm chống bão Event Bus. */`
 
 ---
 
@@ -178,32 +192,52 @@ sequenceDiagram
     participant HW as Hardware GPIO 15..18 (Relays)
     participant Bus as Event Bus
 
-    Engine->>Controller: relay_controller_set_state("heater_01", true, cmd_id, "RULE")
-    Note over Controller: 1. Kiểm tra Anti-Short-Cycle (Dwell Time >= 180s)
-    Note over Controller: 2. Kiểm tra KHÓA LIÊN ĐỘNG: Quạt (Relay 1) đang BẬT chưa?
-    alt Quạt đang TẮT (Fan is OFF)
-        Controller->>HW: BẬT Relay 1 (GPIO 15 HIGH)
-        Controller->>Controller: Trì hoãn liên động 500ms (RELAY_INTERLOCK_DELAY_MS)
-        Controller->>HW: BẬT Relay 2 (GPIO 16 HIGH)
-        Note over Controller: Kích hoạt Timer ngắt khẩn cấp 30m (RELAY_2_MAX_ON_SEC)
-    else Quạt đã BẬT sẵn
-        Controller->>HW: BẬT Relay 2 (GPIO 16 HIGH)
-        Note over Controller: Kích hoạt Timer ngắt khẩn cấp 30m
+    alt Trường hợp 1: Lệnh BẬT Sưởi khi Quạt đang ON
+        Engine->>Controller: relay_controller_set_state("heater_01", true, cmd_id, source)
+        Note over Controller: Kiểm tra Interlock: relay_1 (Fan) đang ON!
+        Note over Controller: QUY TẮC BẤT ĐỐI XỨNG: TỪ CHỐI LỆNH! Không tắt quạt!
+        Controller->>Bus: EVT_COMMAND_RESPONSE (success=false, err=3, "ERR_RELAY_INTERLOCK_CONFLICT")
+    else Trường hợp 2: Lệnh BẬT Quạt khi Sưởi đang ON
+        Engine->>Controller: relay_controller_set_state("fan_01", true, cmd_id, source)
+        Note over Controller: Kiểm tra Interlock: relay_2 (Heater) đang ON!
+        Note over Controller: ƯU TIÊN GIẢI NHIỆT (Cooling Safety Override): Ngắt Sưởi ngay 0ms!
+        Controller->>HW: relay_2 = OFF (GPIO 16 LOW)
+        Controller->>Bus: EVT_RELAY_STATE_CHANGED (heater_01 = OFF, reason="COOLING_OVERRIDE")
+        Controller->>HW: relay_1 = ON (GPIO 15 HIGH)
+        Controller->>Bus: EVT_RELAY_STATE_CHANGED (fan_01 = ON)
+        Controller->>Bus: EVT_COMMAND_RESPONSE (success=true)
+    else Trường hợp 3: Lệnh BẬT Máy nén (Relay 3)
+        Engine->>Controller: relay_controller_set_state("dehum_01", true, cmd_id, source)
+        Note over Controller: Kiểm tra Anti-Short-Cycle: now_mono - last_off_mono < 180s?
+        alt Chưa đủ 180s Dwell Time
+            Controller->>Bus: EVT_COMMAND_RESPONSE (success=false, err=4, "ERR_RELAY_DWELL_LOCKED")
+        else Đã qua >= 180s Monotonic
+            Controller->>HW: relay_3 = ON (GPIO 17 HIGH)
+            Controller->>Bus: EVT_COMMAND_RESPONSE (success=true)
+        end
     end
-    Controller->>Bus: event_bus_post(EVT_RELAY_STATE_CHANGED)
-    Controller->>Bus: event_bus_post(EVT_COMMAND_RESPONSE) [Gửi ACK về Cloud]
 ```
 
-### 4.1 Khóa Liên Động An Toàn (Interlocking), Dwell Time và Giới Hạn Cưỡng Chế
-1. **Khóa liên động Quạt vs Máy sưởi (Fan-Heater Interlock):**
-   - Không cho phép bật Máy sưởi (`relay_2`) nếu Quạt làm mát (`relay_1`) đang tắt nhằm tránh hiện tượng tích nhiệt gây cháy.
-   - Khi có lệnh BẬT Máy sưởi: Hệ thống tự động kích hoạt Quạt trước, chờ **500ms** để luồng gió ổn định, sau đó mới đóng rơ-le Máy sưởi.
-   - Khi có lệnh TẮT Quạt trong lúc Máy sưởi đang chạy: Hệ thống **ngắt Máy sưởi ngay lập tức**, duy trì Quạt chạy thêm thời gian tản nhiệt nếu cần.
-2. **Khóa chu kỳ ngắn (Anti-Short-Cycle Protection):**
-   - Áp dụng thời gian trễ tối thiểu **180 giây (Dwell Time)** giữa hai lần chuyển trạng thái ON $\leftrightarrow$ OFF liên tiếp của cùng một kênh rơ-le, triệt tiêu hiện tượng đóng cắt liên tục (Chattering) làm hỏng tiếp điểm rơ-le và cháy động cơ máy nén.
-3. **Bộ đếm thời gian ngắt khẩn cấp (Emergency Cutoff Timer):**
-   - Kênh Máy sưởi (`relay_2`) được gán bộ giám sát độc lập `RELAY_2_MAX_ON_SEC = 1800` giây (30 phút). Nếu sau 30 phút mà không nhận được lệnh tắt hợp lệ từ Cloud hay Rule Engine (do treo logic hoặc rớt mạng), bộ điều khiển rơ-le tự động cắt điện cưỡng bức và phát sự kiện `EVT_RELAY_STATE_CHANGED` với lý do `"SAFETY_CUTOFF"`.
-- `/* ponytail: Thiết kế bảng cấu hình rơ-le tĩnh s_relays[4] thay vì HAL Device Tree hướng đối tượng phức tạp. 4 kênh phần cứng cố định được điều khiển trực tiếp qua gpio_set_level(). Khóa liên động và Dwell Time kiểm tra bằng phép so sánh thời gian epoch đơn giản O(1), không tốn timer FreeRTOS phụ. */`
+### 4.1 Khóa Liên Động Bất Đối Xứng, Selective Dwell Time và Monotonic Timing
+1. **Phân định hai giai đoạn khởi tạo trong Boot Sequence:**
+   - **Boot Step 2 (Trước Event Bus):** `relay_gpio_init()` thiết lập ngay lập tức GPIO 15..18 thành ngõ ra mức `LOW` với điện trở kéo xuống phần cứng $10\,\text{k}\Omega$. Triệt tiêu 100% hiện tượng xung áp trôi nổi (floating voltage) kích đóng nhầm rơ-le khi vi điều khiển vừa cấp nguồn.
+   - **Boot Step 5 (Sau Event Bus):** `relay_controller_init()` chỉ được gọi sau khi Event Bus queue đã sẵn sàng, đăng ký các handler (`EVT_DEVICE_COMMAND_REQUEST`, `EVT_RULE_ACTION_REQUEST`, `EVT_SENSOR_VALUE_INVALID`, `EVT_DEVICE_OFFLINE_ALERT`) và khởi tạo các mốc Monotonic Clock.
+2. **Quy tắc Khóa liên động Bất đối xứng (Asymmetric Fan-Heater Interlock):**
+   - Quạt làm mát (`relay_1`) và Máy sưởi nhiệt (`relay_2`) **tuyệt đối không bao giờ được phép BẬT đồng thời**.
+   - **Lệnh BẬT Sưởi khi Quạt đang ON $\rightarrow$ TỪ CHỐI (REJECT):**
+     Nếu `relay_1` đang BẬT: Từ chối thực thi lệnh bật `relay_2`. Command ACK lỗi: `success = false`, `error_code = 3` (`ERR_RELAY_INTERLOCK_CONFLICT`), `message = "Cannot turn ON Heater while Fan is running"`. Giữ nguyên trạng thái Quạt, tuyệt đối **không tự ý tắt quạt** của người dùng.
+   - **Lệnh BẬT Quạt khi Sưởi đang ON $\rightarrow$ ƯU TIÊN GIẢI NHIỆT (Cooling Safety Override):**
+     Làm mát và chống quá nhiệt là ưu tiên an toàn cao nhất trong nhà. Cưỡng chế ngắt ngay lập tức `relay_2 = OFF` (0ms trễ, lý do `"COOLING_OVERRIDE"`), phát `EVT_RELAY_STATE_CHANGED`, sau đó đóng rơ-le Quạt `relay_1 = ON`.
+3. **Phân định Dwell Time 180s có chọn lọc (Selective Anti-Short-Cycle Dwell Time):**
+   - **CHỈ áp dụng Dwell Time 180s cho Relay 3 (Máy hút ẩm / Máy nén lạnh - Compressor):** Khi Relay 3 vừa ngắt về OFF, bộ điều khiển kích hoạt timer monotonic khóa tối thiểu **180 giây** trước khi cho phép đóng lại kênh đó. Lệnh kích hoạt trong thời gian này bị từ chối với mã lỗi `ERR_RELAY_DWELL_LOCKED` (code 4) nhằm chống kẹt áp suất khí gas máy nén.
+   - **Relay 1 (Quạt) & Relay 4 (Aux):** Bỏ Dwell Time 180s; chỉ áp dụng thời gian chống rung cơ học (Mechanical Debounce $\le 1\text{s}$).
+   - **Relay 2 (Sưởi điện trở):** Bỏ Dwell Time 180s chu kỳ thường; chỉ kích hoạt **Safety Lockout 300 giây (5 phút)** khi có sự cố ngắt khẩn cấp (`SAFETY_CUTOFF`, `SENSOR_OFFLINE`, chạy quá 30 phút).
+4. **Monotonic Clock (`esp_timer_get_time()`) & Lockout 300s:**
+   - Toàn bộ thời gian bảo vệ (cooldown, lockout 300s, thời gian bật tối đa 30m/4h/60m, dwell 180s máy nén) được tính toán bằng Monotonic Clock (`esp_timer_get_time()`), loại trừ 100% rủi ro do điều chỉnh múi giờ hoặc bước nhảy NTP.
+   - Khi `relay_2` bị ngắt khẩn cấp do quá 30 phút hoặc cảm biến offline > 60s: Rule Engine gán `current_state = false` và thiết lập `lockout_until_mono_us = esp_timer_get_time() + 300000000ULL` (300s). Không cho phép bất kỳ quy tắc tự động nào bật lại sưởi trong 5 phút để buồng nhiệt nguội hẳn.
+5. **Bỏ qua Cooldown khi TẮT (Immediate Shutoff):**
+   - Mọi lệnh hoặc điều kiện bảo vệ yêu cầu TẮT rơ-le (đặc biệt là Máy sưởi `relay_2`) **bắt buộc thực thi ngay lập tức (0ms trễ, bypass toàn bộ cooldown)**.
+- `/* ponytail: Quản lý 4 kênh rơ-le bằng bảng tĩnh s_relays[4] O(1). Khóa liên động bất đối xứng, Selective Dwell 180s và Lockout 300s so sánh Monotonic Clock (esp_timer_get_time()) trực tiếp; không tạo FreeRTOS timer thread chạy ngầm. */`
 
 ---
 
@@ -273,27 +307,48 @@ flowchart TD
 ```mermaid
 sequenceDiagram
     autonumber
-    participant Cloud as Cloud Config Downlink
-    participant Storage as storage.c (LittleFS /storage)
-    participant Flash as SPI Flash Physical Sectors
+    participant Broker as MQTT Broker
+    participant Mqtt as MQTT Adapter (Core 1)
+    participant Worker as Storage Worker Task (Core 1, Prio 3)
+    participant Flash as LittleFS Flash Physical Sectors
     participant Bus as Event Bus
+    participant Modules as rule_engine / scheduler / ble_adapter
 
-    Cloud->>Storage: storage_save_schedule_json(new_json)
-    Note over Storage: Bước 1: Mở file tạm /storage/schedule.json.tmp
-    Storage->>Flash: fwrite(new_json)
-    Storage->>Flash: fflush() & fsync()
-    Note over Storage: Bước 2: THAY THẾ NGUYÊN TỬ (Atomic Replacement)
-    Storage->>Flash: rename("/storage/schedule.json.tmp", "/storage/schedule.json")
-    Note over Storage: Dù mất nguồn tại bất kỳ mili-giây nào, file gốc vẫn nguyên vẹn!
-    Storage->>Bus: event_bus_post(EVT_CONFIG_UPDATED_FROM_CLOUD)
+    Broker->>Mqtt: publish(gateway/{id}/config/{type}) [QoS 1, Retained]
+    Note over Mqtt: Không thực hiện I/O trên luồng mạng!
+    Mqtt->>Worker: Enqueue job vào s_config_worker_queue (10 slots, non-blocking)
+    Note over Worker: Bước 1: Check Hash / CRC so với file hiện hành trên Flash
+    alt Nội dung trùng 100% (Retained message lúc reconnect)
+        Note over Worker: Bỏ qua ghi Flash (Skip Write) -> Bảo vệ tuổi thọ ô nhớ LittleFS!
+    else Nội dung thay đổi
+        Note over Worker: Bước 2: Ghi file tạm /storage/{type}.json.tmp
+        Worker->>Flash: fwrite(payload) + fflush() + fsync()
+        Note over Worker: Bước 3: Xác thực cú pháp (cJSON_Parse)
+        alt JSON không hợp lệ / Corrupted
+            Note over Worker: Hủy file .tmp, ghi log cảnh báo, giữ nguyên file cũ
+        else JSON hợp lệ
+            Note over Worker: Bước 4: Hoán đổi nguyên tử (Atomic Rename)
+            Worker->>Flash: rename("/storage/{type}.json.tmp", "/storage/{type}.json")
+            Note over Worker: Bước 5: Phát sự kiện IoC kèm cờ loại cấu hình
+            Worker->>Bus: event_bus_post(EVT_CONFIG_UPDATED_FROM_CLOUD, flags)
+            Bus->>Modules: Dispatch tới các module đăng ký lắng nghe
+            Note over Modules: CONFIG_TYPE_RULES -> rule_engine nạp lại rules<br/>CONFIG_TYPE_SCHEDULE -> scheduler nạp lại lịch<br/>CONFIG_TYPE_DEVICES -> ble_adapter cập nhật WHITELIST tức thì (không reboot)!
+        end
+    end
 ```
 
-### 6.1 Cơ Chế Ghi Đè File Nguyên Tử (Atomic File Replacement)
-Để chống lại việc file JSON cấu hình (`config.json`, `rules.json`, `schedule.json`) bị rỗng hoặc hỏng cấu trúc khi mất điện bất ngờ trong lúc đang ghi:
-1. File mới luôn được ghi vào một file tạm có phần mở rộng `.tmp` (vd: `/storage/rules.json.tmp`).
-2. Thực hiện `fflush()` và ép đồng bộ sector vật lý.
-3. Sử dụng lời gọi hàm POSIX `rename()` của LittleFS để hoán đổi tên file. Trên LittleFS, `rename()` là thao tác cập nhật con trỏ inode mang tính **nguyên tử (Atomic Operation)**: hệ thống tệp chỉ chuyển sang file mới khi toàn bộ dữ liệu đã nằm an toàn trên flash. Nếu mất điện giữa chừng, lần boot sau hệ thống vẫn đọc được file gốc hoàn chỉnh.
-- `/* ponytail: Tận dụng cơ chế ghi nguyên tử rename() của LittleFS và hàm f_sync() chu kỳ 5s của FATFS; loại bỏ nhu cầu tự phát triển hệ thống ghi nhật ký kép (journaling) hoặc transaction engine cồng kềnh. */`
+### 6.1 Cơ Chế Đồng Bộ Cấu Hình MQTT Downlink & Storage Worker Task
+Nhằm tuân thủ tuyệt đối nguyên tắc **Non-Blocking Dispatcher** và **Inversion of Control (IoC)**, toàn bộ thao tác I/O Flash, kiểm tra tính toàn vẹn và phân tích cú pháp JSON nặng được tách biệt hoàn toàn khỏi luồng mạng và giao cho **Storage Worker Task** (Core 1, Priority 3):
+1. **Tiếp nhận Non-blocking:** MQTT Adapter nhận bản tin `gateway/{id}/config/{type}` (`schedule`, `rules`, hoặc `devices`), sao chép con trỏ payload vào `s_config_worker_queue` (10 slots, timeout = 0ms).
+2. **Kiểm tra Chống Mòn Flash (Hash / CRC Check):** Storage Worker Task tính toán hash (SHA-256 hoặc CRC32) của payload và so sánh với hash của tệp đang lưu trên Flash. Nếu trùng 100% (thường gặp khi nhận lại retained message lúc reconnect), tác vụ bỏ qua ghi flash, bảo vệ chu kỳ P/E của ô nhớ LittleFS.
+3. **Ghi Tệp Nguyên Tử (Atomic LittleFS Write):** Ghi nội dung vào tệp tạm `/storage/{type}.json.tmp`, gọi `fflush()` và `fsync()`.
+4. **Xác thực Cú pháp JSON (Validation):** Gọi `cJSON_Parse()`. Nếu JSON lỗi cấu trúc, tệp `.tmp` bị xóa bỏ ngay, phát cảnh báo `ESP_LOGE` và giữ nguyên file cấu hình cũ an toàn.
+5. **Hoán đổi Nguyên tử (Atomic Rename):** Sử dụng `rename("/storage/{type}.json.tmp", "/storage/{type}.json")`. LittleFS chỉ tráo đổi con trỏ inode khi dữ liệu đã toàn vẹn, bảo đảm không bao giờ bị file 0 byte hay JSON cụt khi mất nguồn đột ngột.
+6. **Phát Sự Kiện Cập Nhật (Inversion of Control):** Worker post sự kiện `EVT_CONFIG_UPDATED_FROM_CLOUD` kèm cờ `config_type_flags_t`:
+   - Cờ `CONFIG_TYPE_RULES`: `rule_engine` tự reload lại danh sách luật tự động hóa.
+   - Cờ `CONFIG_TYPE_SCHEDULE`: `scheduler` tự nạp lại cấu hình lịch biểu và báo thức.
+   - Cờ `CONFIG_TYPE_DEVICES`: `ble_adapter` tự đọc lại `device_list.json` và cập nhật tức thời bảng Whitelist MAC Address (`s_known_devices[]`) mà không cần khởi động lại chip.
+- `/* ponytail: Tận dụng cơ chế ghi nguyên tử rename() của LittleFS, lọc trùng hash chống mòn flash và hàm f_sync() chu kỳ 5s của FATFS; loại bỏ nhu cầu tự phát triển hệ thống journaling phức tạp. */`
 
 ### 6.2 Giao Tiếp Thẻ Nhớ MicroSD SPI và sync_queue.bin
 - **Chân kết nối SPI2_HOST:** `GPIO 10 (CS)`, `GPIO 11 (MOSI)`, `GPIO 12 (CLK)`, `GPIO 13 (MISO)`. Tần số bus SPI 20 MHz.

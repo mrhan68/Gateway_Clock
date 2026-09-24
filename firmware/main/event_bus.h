@@ -21,7 +21,6 @@ typedef enum {
     EVT_WIFI_CONNECTED,
     EVT_WIFI_LOST,
     EVT_BLE_DEVICE_DATA,
-    EVT_BLE_COMMAND_REQUEST,
     EVT_DEVICE_OFFLINE_ALERT,
     EVT_SD_STATUS_CHANGED,
     EVT_CONFIG_RELOAD_REQUEST,
@@ -39,8 +38,6 @@ typedef enum {
     EVT_BUTTON_SCREEN_NEXT,
     EVT_DISPLAY_UPDATE_REQUEST,
     EVT_CONFIG_UPDATED_FROM_CLOUD,
-    EVT_EVENT_LOG_APPENDED,
-    EVT_SYNC_COMPLETED,
     EVT_SYSTEM_HEARTBEAT,
     EVT_MAX_CODES
 } gateway_event_code_t;
@@ -74,7 +71,8 @@ typedef struct {
     int      relay_id;             // 1: Fan, 2: Heater, 3: Dehumidifier, 4: Aux
     char     device_id[32];        // "relay_1", "relay_2", ...
     bool     state;                // true: ON, false: OFF
-    char     reason[32];           // "MANUAL_CMD", "RULE_TRIGGER", "SAFETY_CUTOFF", "SENSOR_OFFLINE"
+    char     reason[32];           // "MANUAL_CMD", "RULE_TRIGGER", "SAFETY_CUTOFF", "SENSOR_OFFLINE", "COOLING_OVERRIDE"
+    int64_t  monotonic_time_us;    // Monotonic timestamp (microseconds)
     uint32_t timestamp;            // Epoch
 } relay_state_changed_t;
 
@@ -125,12 +123,22 @@ typedef struct {
 } config_updated_t;
 
 /**
+ * @brief Alert Types (FSD §4.1.5)
+ */
+typedef enum {
+    ALERT_SENSOR_OFFLINE = 1,
+    ALERT_SENSOR_CORRUPTED = 2,
+    ALERT_SAFETY_CUTOFF = 3
+} alert_type_t;
+
+/**
  * @brief Device Offline / Alert Payload (FSD §4.1.5)
  */
 typedef struct {
-    char     device_id[32];        // Mã thiết bị
-    char     alert_type[32];       // Loại cảnh báo (VD: "OFFLINE", "LOW_BATTERY")
-    uint32_t timestamp;            // Epoch
+    char         device_id[32];        // Mã thiết bị
+    alert_type_t alert_type;           // Enum loại cảnh báo
+    int64_t      monotonic_time_us;    // Monotonic timestamp
+    uint32_t     timestamp;            // Epoch
 } device_alert_t;
 
 /**

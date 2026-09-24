@@ -48,12 +48,6 @@ static float s_latest_temp = 25.0f;
 static float s_latest_hum = 60.0f;
 static bool s_temp_valid = false;
 
-// Khai báo hàm lưu log ngoại lệ local theo FSD §4.9.5
-__attribute__((weak)) void storage_append_event_log(const char *json_log)
-{
-    ESP_LOGI("STORAGE", "[EVENT_LOG LOCAL] %s", json_log);
-}
-
 static void buzzer_start(void)
 {
     ledc_set_duty(BUZZER_LEDC_MODE, BUZZER_LEDC_CHANNEL, 512); // 50% duty
@@ -111,11 +105,6 @@ void display_stop_alarm(void)
     s_alarm_active = false;
     buzzer_stop();
     if (s_display_mutex != NULL) xSemaphoreGive(s_display_mutex);
-
-    // Ghi nhận log dừng báo thức ngoại lệ local FSD §4.9.5
-    char log_buf[96];
-    snprintf(log_buf, sizeof(log_buf), "{\"type\":\"alarm_stopped\",\"ts\":%ld}", (long)time(NULL));
-    storage_append_event_log(log_buf);
 
     display_render();
     ESP_LOGI(TAG, "Alarm stopped, buzzer dismissed");

@@ -29,6 +29,8 @@ static const uint32_t s_relay_max_on_sec[RELAY_COUNT] = {
 
 static bool s_relay_states[RELAY_COUNT] = {false, false, false, false};
 static uint64_t s_relay_on_timestamp[RELAY_COUNT] = {0, 0, 0, 0};
+static uint64_t s_relay_off_timestamp[RELAY_COUNT] = {0, 0, 0, 0};
+static uint64_t s_heater_lockout_until = 0;
 static uint64_t s_last_valid_sensor_time = 0;
 static SemaphoreHandle_t s_relay_mutex = NULL;
 static esp_timer_handle_t s_safety_timer = NULL;
@@ -74,6 +76,7 @@ static void post_relay_state_changed_event(int relay_id, bool state, const char 
         payload->state = state;
         strncpy(payload->reason, reason ? reason : "MANUAL_CMD", sizeof(payload->reason) - 1);
         payload->reason[sizeof(payload->reason) - 1] = '\0';
+        payload->monotonic_time_us = esp_timer_get_time();
         payload->timestamp = (uint32_t)(esp_timer_get_time() / 1000000ULL);
 
         event_bus_post(EVT_RELAY_STATE_CHANGED, payload, sizeof(relay_state_changed_t), false);
@@ -122,6 +125,13 @@ esp_err_t relay_controller_set_state(const char *target_id, bool state, const ch
         gpio_set_level(s_relay_pins[idx], 0);
         s_relay_states[idx] = false;
         s_relay_on_timestamp[idx] = 0;
+        s_relay_off_timestamp[idx] = esp_timer_get_time() / 1000000ULL;
+
+        if (relay_id == 2 && source != NULL &&
+            (strcmp(source, "SAFETY_CUTOFF") == 0 || strcmp(source, "SENSOR_OFFLINE") == 0)) {
+            s_heater_lockout_until = s_relay_off_timestamp[idx] + 300;
+            ESP_LOGW(TAG, "[LOCKOUT] Relay 2 (Heater) safety lockout activated for 300s");
+        }
 
         ESP_LOGI(TAG, "Relay %d (%s) turned OFF [Reason: %s]",
                  relay_id, target_id, source ? source : "UNKNOWN");
@@ -135,19 +145,45 @@ esp_err_t relay_controller_set_state(const char *target_id, bool state, const ch
         return ESP_OK;
     }
 
-    // 2. Nếu lệnh là BẬT (state == true): Áp dụng khóa liên động an toàn (Interlocking)
+    uint64_t now_sec = esp_timer_get_time() / 1000000ULL;
+
+    // 2. Dwell Time 180s - CHỈ áp dụng cho Relay 3 (Máy nén lạnh / Dehumidifier Compressor)
+    if (relay_id == 3) {
+        if (s_relay_off_timestamp[2] > 0 && (now_sec - s_relay_off_timestamp[2] < 180)) {
+            ESP_LOGW(TAG, "[DWELL] Compressor anti-short-cycle locked (180s)! Remaining: %lu s",
+                     (unsigned long)(180 - (now_sec - s_relay_off_timestamp[2])));
+            post_command_ack_event(cmd_id, relay_id, false, ERR_RELAY_DWELL_LOCKED, "Compressor dwell locked (180s)");
+            if (s_relay_mutex != NULL) {
+                xSemaphoreGive(s_relay_mutex);
+            }
+            return ESP_ERR_INVALID_STATE;
+        }
+    }
+
+    // 3. Safety Lockout 300s - Relay 2 (Heater) sau khi ngắt sự cố
+    if (relay_id == 2) {
+        if (now_sec < s_heater_lockout_until) {
+            ESP_LOGW(TAG, "[LOCKOUT] Relay 2 (Heater) safety lockout active! Remaining: %lu s",
+                     (unsigned long)(s_heater_lockout_until - now_sec));
+            post_command_ack_event(cmd_id, relay_id, false, 5, "Heater safety lockout active (300s)");
+            if (s_relay_mutex != NULL) {
+                xSemaphoreGive(s_relay_mutex);
+            }
+            return ESP_ERR_INVALID_STATE;
+        }
+    }
+
+    // 4. Khóa liên động an toàn bất đối xứng (Asymmetric Interlock)
     if (relay_id == 2) {
         // Lệnh BẬT Sưởi (relay_2 = ON):
-        // Nếu Quạt (relay_1) đang BẬT -> Cưỡng chế ngắt Quạt, trễ an toàn 500ms
+        // Nếu Quạt (relay_1) đang BẬT -> TỪ CHỐI (REJECT), KHÔNG tự ý tắt quạt
         if (s_relay_states[0]) {
-            ESP_LOGW(TAG, "[INTERLOCK] Turning ON Heater while Fan is active! Forcing Fan OFF and waiting 500ms...");
-            gpio_set_level(s_relay_pins[0], 0);
-            s_relay_states[0] = false;
-            s_relay_on_timestamp[0] = 0;
-            post_relay_state_changed_event(1, false, "INTERLOCK_CUTOFF");
-
-            // Trễ 500ms để triệt tiêu dòng cảm ứng động cơ quạt trước khi đóng tiếp điểm sưởi
-            vTaskDelay(pdMS_TO_TICKS(RELAY_INTERLOCK_DELAY_MS));
+            ESP_LOGW(TAG, "[INTERLOCK] Cannot turn ON Heater while Fan is running! Rejecting.");
+            post_command_ack_event(cmd_id, relay_id, false, ERR_RELAY_INTERLOCK_CONFLICT, "Cannot turn ON Heater while Fan is running");
+            if (s_relay_mutex != NULL) {
+                xSemaphoreGive(s_relay_mutex);
+            }
+            return ESP_ERR_INVALID_STATE;
         }
     } else if (relay_id == 1) {
         // Lệnh BẬT Quạt (relay_1 = ON):
@@ -157,6 +193,7 @@ esp_err_t relay_controller_set_state(const char *target_id, bool state, const ch
             gpio_set_level(s_relay_pins[1], 0);
             s_relay_states[1] = false;
             s_relay_on_timestamp[1] = 0;
+            s_relay_off_timestamp[1] = now_sec;
             post_relay_state_changed_event(2, false, "COOLING_OVERRIDE");
         }
     }
@@ -164,7 +201,7 @@ esp_err_t relay_controller_set_state(const char *target_id, bool state, const ch
     // Xuất mức HIGH ra chân GPIO vật lý
     gpio_set_level(s_relay_pins[idx], 1);
     s_relay_states[idx] = true;
-    s_relay_on_timestamp[idx] = esp_timer_get_time() / 1000000ULL;
+    s_relay_on_timestamp[idx] = now_sec;
 
     ESP_LOGI(TAG, "Relay %d (%s) turned ON [Reason: %s, Max Duration: %lu s]",
              relay_id, target_id, source ? source : "UNKNOWN",
@@ -306,6 +343,20 @@ static void on_ble_device_data(const gateway_event_t *evt)
     }
 }
 
+static void on_device_offline_alert(const gateway_event_t *evt)
+{
+    if (evt != NULL && evt->data != NULL && evt->len >= sizeof(device_alert_t)) {
+        const device_alert_t *alert = (const device_alert_t *)evt->data;
+        if (alert->alert_type == ALERT_SENSOR_OFFLINE) {
+            // Nếu rơ-le 2 (Heater) đang BẬT -> Ngắt khẩn cấp tức thì (0ms trễ)
+            if (relay_controller_get_state(2)) {
+                ESP_LOGE(TAG, "[FAIL-SAFE] Offline alert for sensor '%s' while Heater active! Emergency shutoff.", alert->device_id);
+                relay_controller_set_state("relay_2", false, NULL, "SENSOR_OFFLINE");
+            }
+        }
+    }
+}
+
 static void relay_safety_timer_cb(void *arg)
 {
     uint64_t now = esp_timer_get_time() / 1000000ULL;
@@ -332,15 +383,9 @@ static void relay_safety_timer_cb(void *arg)
     }
 }
 
-void relay_controller_init(void)
+void relay_gpio_init(void)
 {
-    ESP_LOGI(TAG, "Initializing Relay Controller (GPIO 15..18, Active HIGH, 10k pull-down)...");
-
-    if (s_relay_mutex == NULL) {
-        s_relay_mutex = xSemaphoreCreateMutex();
-    }
-
-    // Cấu hình GPIO output, trở kéo xuống phần cứng 10k, ban đầu xuất mức LOW an toàn (FSD §4.14 Boot Step 2)
+    ESP_LOGI(TAG, "Configuring safe hardware GPIO levels (15..18 LOW, 10k pull-down)...");
     gpio_config_t io_conf = {
         .intr_type = GPIO_INTR_DISABLE,
         .mode = GPIO_MODE_INPUT_OUTPUT,
@@ -357,7 +402,19 @@ void relay_controller_init(void)
         gpio_set_level(s_relay_pins[i], 0);
         s_relay_states[i] = false;
         s_relay_on_timestamp[i] = 0;
+        s_relay_off_timestamp[i] = 0;
     }
+}
+
+void relay_controller_init(void)
+{
+    ESP_LOGI(TAG, "Initializing Relay Controller (Event handlers & Safety Timer)...");
+
+    if (s_relay_mutex == NULL) {
+        s_relay_mutex = xSemaphoreCreateMutex();
+    }
+
+    relay_gpio_init();
 
     s_last_valid_sensor_time = esp_timer_get_time() / 1000000ULL;
 
@@ -366,6 +423,7 @@ void relay_controller_init(void)
     event_bus_register_handler(EVT_RULE_ACTION_REQUEST, on_rule_action_request);
     event_bus_register_handler(EVT_SENSOR_VALUE_INVALID, on_sensor_value_invalid);
     event_bus_register_handler(EVT_BLE_DEVICE_DATA, on_ble_device_data);
+    event_bus_register_handler(EVT_DEVICE_OFFLINE_ALERT, on_device_offline_alert);
 
     // Khởi tạo timer kiểm tra định kỳ an toàn 1 giây (Safe Cutoff & Timeout Watchdog)
     if (s_safety_timer == NULL) {

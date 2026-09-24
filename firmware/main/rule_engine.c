@@ -64,6 +64,8 @@ static void load_default_rules(void)
         .current_state = false,
         .last_triggered_ts = 0,
         .lockout_until_ts = 0,
+        .last_triggered_mono_us = 0,
+        .lockout_until_mono_us = 0,
     };
 
     // Rule 2: Low temperature turns on heater (FSD §4.7.5: threshold 22.0, hysteresis 1.5, cooldown 60)
@@ -80,6 +82,8 @@ static void load_default_rules(void)
         .current_state = false,
         .last_triggered_ts = 0,
         .lockout_until_ts = 0,
+        .last_triggered_mono_us = 0,
+        .lockout_until_mono_us = 0,
     };
 
     // Rule 3: High humidity turns on dehumidifier (threshold 75.0, hysteresis 2.0, cooldown 60)
@@ -96,6 +100,8 @@ static void load_default_rules(void)
         .current_state = false,
         .last_triggered_ts = 0,
         .lockout_until_ts = 0,
+        .last_triggered_mono_us = 0,
+        .lockout_until_mono_us = 0,
     };
 
     ESP_LOGI(TAG, "Loaded %d default automation rules", s_rule_count);
@@ -232,6 +238,8 @@ static bool load_rules_from_storage(void)
         r->current_state = false;
         r->last_triggered_ts = 0;
         r->lockout_until_ts = 0;
+        r->last_triggered_mono_us = 0;
+        r->lockout_until_mono_us = 0;
 
         s_rule_count++;
     }
@@ -281,6 +289,8 @@ bool rule_engine_add_rule(const automation_rule_t *rule)
     s_rules[s_rule_count].current_state = false;
     s_rules[s_rule_count].last_triggered_ts = 0;
     s_rules[s_rule_count].lockout_until_ts = 0;
+    s_rules[s_rule_count].last_triggered_mono_us = 0;
+    s_rules[s_rule_count].lockout_until_mono_us = 0;
     s_rule_count++;
 
     save_rules_to_storage();
@@ -378,6 +388,7 @@ int rule_engine_evaluate_telemetry(const sensor_telemetry_t *telem)
         return 0;
     }
 
+    int64_t now_mono = esp_timer_get_time();
     uint32_t now = get_current_epoch();
     int matched_count = 0;
     lock_rules();
@@ -390,10 +401,9 @@ int rule_engine_evaluate_telemetry(const sensor_telemetry_t *telem)
             continue;
         }
 
-        // FSD §4.7.5: Check 5-minute safety lockout
-        if (now < r->lockout_until_ts) {
-            ESP_LOGD(TAG, "Rule #%d is in lockout until %lu (now %lu), skipping",
-                     r->id, (unsigned long)r->lockout_until_ts, (unsigned long)now);
+        // FSD §4.7.5: Check 5-minute safety lockout (Monotonic clock)
+        if (now_mono < r->lockout_until_mono_us || (r->lockout_until_ts > 0 && now < r->lockout_until_ts)) {
+            ESP_LOGD(TAG, "Rule #%d is in lockout, skipping", r->id);
             continue;
         }
 
@@ -403,15 +413,16 @@ int rule_engine_evaluate_telemetry(const sensor_telemetry_t *telem)
         }
 
         float hyst = (r->hysteresis > 0.0f) ? r->hysteresis : 1.5f;
-        uint32_t cooldown = (r->cooldown_s > 0) ? r->cooldown_s : 60;
+        int64_t cooldown_us = (r->cooldown_s > 0) ? ((int64_t)r->cooldown_s * 1000000ULL) : 60000000ULL;
 
         if (r->condition_type == RULE_CONDITION_SENSOR_GT) {
             // Upper Threshold (e.g. Cooling Fan: Turn ON when val >= threshold, Turn OFF when val <= threshold - hysteresis)
             if (val >= r->threshold) {
                 // Edge Trigger: only trigger if currently inactive and cooldown elapsed
                 if (!r->current_state) {
-                    if (r->last_triggered_ts == 0 || (now >= r->last_triggered_ts && (now - r->last_triggered_ts >= cooldown))) {
+                    if (r->last_triggered_mono_us == 0 || (now_mono - r->last_triggered_mono_us >= cooldown_us)) {
                         r->current_state = true;
+                        r->last_triggered_mono_us = now_mono;
                         r->last_triggered_ts = now;
                         matched_count++;
                         const char *cmd = (strlen(r->action_command) > 0) ? r->action_command : "ON";
@@ -436,8 +447,9 @@ int rule_engine_evaluate_telemetry(const sensor_telemetry_t *telem)
             if (val <= r->threshold) {
                 // Edge Trigger: only trigger if currently inactive and cooldown elapsed
                 if (!r->current_state) {
-                    if (r->last_triggered_ts == 0 || (now >= r->last_triggered_ts && (now - r->last_triggered_ts >= cooldown))) {
+                    if (r->last_triggered_mono_us == 0 || (now_mono - r->last_triggered_mono_us >= cooldown_us)) {
                         r->current_state = true;
+                        r->last_triggered_mono_us = now_mono;
                         r->last_triggered_ts = now;
                         matched_count++;
                         const char *cmd = (strlen(r->action_command) > 0) ? r->action_command : "ON";
@@ -517,25 +529,75 @@ static void on_relay_state_changed(const gateway_event_t *evt)
 
     const relay_state_changed_t *rst = (const relay_state_changed_t *)evt->data;
     uint32_t now = get_current_epoch();
+    int64_t now_mono = esp_timer_get_time();
 
     lock_rules();
     for (int i = 0; i < s_rule_count; i++) {
         automation_rule_t *r = &s_rules[i];
         if (strcmp(r->target_device_id, rst->device_id) == 0) {
+            // Two-way synchronization: reflect actual hardware state
+            r->current_state = rst->state;
+
             // FSD §4.7.5: Engage 5-minute safety lockout if shut down by safety or interlock
-            if (strcmp(rst->reason, "SAFETY_CUTOFF") == 0 ||
-                strcmp(rst->reason, "INTERLOCK_CUTOFF") == 0) {
-                r->current_state = false;
-                r->lockout_until_ts = now + 300; // 5-minute lockout
+            if (!rst->state && (strcmp(rst->reason, "SAFETY_CUTOFF") == 0 ||
+                               strcmp(rst->reason, "INTERLOCK_CUTOFF") == 0 ||
+                               strcmp(rst->reason, "SENSOR_OFFLINE") == 0)) {
+                r->lockout_until_mono_us = now_mono + 300000000ULL; // 5-minute lockout (300s)
+                r->lockout_until_ts = now + 300;
                 ESP_LOGW(TAG, "[SAFETY LOCKOUT] Rule #%d (target '%s') locked out for 300s due to %s",
                          r->id, rst->device_id, rst->reason);
-            } else if (!rst->state) {
-                // If turned off for other reasons (e.g. manual command), sync internal state
-                r->current_state = false;
             }
         }
     }
     unlock_rules();
+}
+
+static void on_command_response(const gateway_event_t *evt)
+{
+    if (evt == NULL || evt->data == NULL || evt->len < sizeof(command_ack_t)) {
+        return;
+    }
+
+    const command_ack_t *ack = (const command_ack_t *)evt->data;
+    // If a rule-initiated action failed or was rejected (e.g., interlock conflict, compressor dwell locked)
+    if (!ack->success && strncmp(ack->command_id, "cmd-rule-", 9) == 0) {
+        lock_rules();
+        for (int i = 0; i < s_rule_count; i++) {
+            if (strcmp(s_rules[i].target_device_id, ack->target_device_id) == 0) {
+                s_rules[i].current_state = false;
+                ESP_LOGW(TAG, "[RULE_ENGINE] Action rejected on '%s' (err=%d: %s). Reverted current_state=false",
+                         ack->target_device_id, ack->error_code, ack->message);
+            }
+        }
+        unlock_rules();
+    }
+}
+
+static void on_device_offline_alert(const gateway_event_t *evt)
+{
+    if (evt == NULL || evt->data == NULL || evt->len < sizeof(device_alert_t)) {
+        return;
+    }
+
+    const device_alert_t *alert = (const device_alert_t *)evt->data;
+    if (alert->alert_type == ALERT_SENSOR_OFFLINE || alert->alert_type == ALERT_SENSOR_CORRUPTED) {
+        lock_rules();
+        for (int i = 0; i < s_rule_count; i++) {
+            automation_rule_t *r = &s_rules[i];
+            if (strcmp(r->device_id, alert->device_id) == 0) {
+                // If sensor offline or corrupted: engage 300s lockout, mark current_state false
+                r->current_state = false;
+                r->lockout_until_mono_us = esp_timer_get_time() + 300000000ULL;
+                r->lockout_until_ts = get_current_epoch() + 300;
+                ESP_LOGW(TAG, "[FAIL-SAFE] Sensor '%s' offline/corrupted alert received. Rule #%d locked out for 300s",
+                         alert->device_id, r->id);
+                // Post immediate shutoff for target device
+                post_rule_action(r->target_device_id, "OFF", r->id);
+            }
+        }
+        unlock_rules();
+        event_bus_post(EVT_SENSOR_VALUE_INVALID, NULL, 0, false);
+    }
 }
 
 void rule_engine_init(void)
@@ -557,6 +619,8 @@ void rule_engine_init(void)
     event_bus_register_handler(EVT_RULE_ACTION_REQUEST, on_rule_action_request);
     event_bus_register_handler(EVT_CONFIG_UPDATED_FROM_CLOUD, on_cloud_config_updated);
     event_bus_register_handler(EVT_RELAY_STATE_CHANGED, on_relay_state_changed);
+    event_bus_register_handler(EVT_COMMAND_RESPONSE, on_command_response);
+    event_bus_register_handler(EVT_DEVICE_OFFLINE_ALERT, on_device_offline_alert);
 
     ESP_LOGI(TAG, "Rule Engine initialized with %d active rules (Hysteresis & Safety Lockout ready)", s_rule_count);
 }
@@ -566,7 +630,9 @@ void rule_engine_reset_lockouts(void)
     lock_rules();
     for (int i = 0; i < s_rule_count; i++) {
         s_rules[i].lockout_until_ts = 0;
+        s_rules[i].lockout_until_mono_us = 0;
         s_rules[i].last_triggered_ts = 0;
+        s_rules[i].last_triggered_mono_us = 0;
         s_rules[i].current_state = false;
     }
     unlock_rules();

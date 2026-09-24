@@ -117,16 +117,17 @@ static void append_sync_queue_record(const sd_log_item_t *item)
     sync_queue_header_t hdr;
     ensure_sync_queue_header(f, &hdr);
 
-    // Đóng gói 32-byte binary record chuẩn FSD §4.11.3 / test_sync_queue.py
+    // Đóng gói 172-byte binary record chuẩn FSD §4.11.3 / test_sync_queue.py
     sync_queue_record_t rec;
     memset(&rec, 0, sizeof(sync_queue_record_t));
     rec.timestamp = item->timestamp;
     rec.record_type = item->record_type;
     rec.flags = item->flags;
-    rec.reserved = 0;
     strncpy(rec.device_id, item->device_id, sizeof(rec.device_id) - 1);
-    rec.value = item->value;
-    rec.crc32 = calculate_crc32((const uint8_t *)&rec, 28);
+    snprintf(rec.payload, sizeof(rec.payload), "{\"val\":%.2f,\"ts\":%lu}",
+             item->value, (unsigned long)item->timestamp);
+    rec.payload_len = (uint16_t)strlen(rec.payload);
+    rec.crc32 = calculate_crc32((const uint8_t *)&rec, 168);
 
     // Ghi record vào vị trí write_offset
     fseek(f, hdr.write_offset, SEEK_SET);
@@ -260,16 +261,12 @@ void sd_logger_trigger_backfill(void)
                 break;
             }
 
-            uint32_t expected_crc = calculate_crc32((const uint8_t *)&rec, 28);
+            uint32_t expected_crc = calculate_crc32((const uint8_t *)&rec, 168);
             if (rec.crc32 == expected_crc) {
                 // Publish bản tin telemetry bù lên MQTT broker
                 char topic[64];
-                char payload[128];
-                snprintf(topic, sizeof(topic), "device/%s/telemetry", rec.device_id);
-                snprintf(payload, sizeof(payload), "{\"val\":%.2f,\"ts\":%lu,\"backfill\":true}",
-                         rec.value, (unsigned long)rec.timestamp);
-
-                mqtt_adapter_publish(topic, payload);
+                snprintf(topic, sizeof(topic), "gateway/local/telemetry/batch");
+                mqtt_adapter_publish(topic, rec.payload);
             } else {
                 ESP_LOGW(TAG, "[BACKFILL] Record at offset %lu corrupt, skipping", (unsigned long)hdr.read_offset);
             }

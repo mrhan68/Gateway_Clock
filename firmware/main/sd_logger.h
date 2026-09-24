@@ -42,18 +42,21 @@ typedef struct __attribute__((packed)) {
 } sync_queue_header_t;
 
 /**
- * @brief Cấu trúc Bản ghi nhị phân Store-and-Forward Sync Queue (FSD §4.11.3, đúng 32 bytes)
- * Khớp 100% với tests/host/test_sync_queue.py
+ * @brief Cấu trúc Bản ghi nhị phân Store-and-Forward Sync Queue (FSD §4.11.3, đúng 172 bytes)
+ * Khớp 100% với tests/host/test_sync_queue.py (<IBBH32s128sI)
  */
 typedef struct __attribute__((packed)) {
     uint32_t timestamp;      // 4 bytes: Unix epoch timestamp
     uint8_t  record_type;    // 1 byte: 0x01=telemetry, 0x02=event_log, 0x03=command_ack
     uint8_t  flags;          // 1 byte: bit 0: QoS1, bit 1: encrypted
-    uint16_t reserved;       // 2 bytes: alignment padding
-    char     device_id[16];  // 16 bytes: Định danh thiết bị (null-terminated)
-    float    value;          // 4 bytes: Giá trị đo telemetry (IEEE 754 float)
-    uint32_t crc32;          // 4 bytes: Checksum CRC32 của 28 bytes đầu
+    uint16_t payload_len;    // 2 bytes: chiều dài chuỗi trong buffer payload (1..128)
+    char     device_id[32];  // 32 bytes: Định danh thiết bị (null-terminated)
+    char     payload[128];   // 128 bytes: Chuỗi JSON telemetry, event log, hoặc command ACK UUID
+    uint32_t crc32;          // 4 bytes: Checksum CRC32 của 168 bytes đầu
 } sync_queue_record_t;
+
+_Static_assert(sizeof(sync_queue_header_t) == 24, "sync_queue_header_t must be 24 bytes");
+_Static_assert(sizeof(sync_queue_record_t) == 172, "sync_queue_record_t must be 172 bytes");
 
 /**
  * @brief Khởi tạo giao tiếp MicroSD SPI2_HOST, mount FATFS và tạo sd_log_task (FSD §4.11)

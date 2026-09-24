@@ -25,76 +25,96 @@ Các nguy cơ thảm họa tiềm ẩn:
 
 ---
 
-## 2. Quyết Định Kiến Trúc (Decision)
+### 2. Quyết Định Kiến Trúc (Decision)
 
-Chúng tôi quyết định áp dụng **Kiến Trúc An Toàn Cơ Cấu Chấp Hành Đa Tầng (Multi-Layer Actuator Safety Architecture)**:
+Chúng tôi quyết định áp dụng **Kiến Trúc An Toàn Cơ Cấu Chấp Hành Đa Tầng Bất Đối Xứng (Asymmetric Multi-Layer Actuator Safety Architecture)**:
 
 ```
-                               Ngõ Vào Lệnh Điều Khiển
-                             (Cloud MQTT / Local Rules)
-                                         │
-                                         ▼
-                            ┌─────────────────────────┐
-                            │ 1. Dwell Time Lockout   │──[Chưa đủ 180s]──► Từ chối lệnh / Hoãn
-                            │ (Anti-Short-Cycle >=180s│
-                            └─────────────────────────┘
-                                         │ [Hợp lệ]
-                                         ▼
-                            ┌─────────────────────────┐
-                            │ 2. Khóa Liên Động       │──[Bật Sưởi khi Quạt tắt]──► Tự động BẬT Quạt
-                            │ (Fan-Heater Interlock)  │                             Chờ trễ 500ms
-                            └─────────────────────────┘                             Bật Sưởi sau
-                                         │
-                                         ▼
-                            ┌─────────────────────────┐
-                            │ 3. Giới Hạn Cưỡng Chế   │──► Kích hoạt Timer 30m (Emergency Cutoff)
-                            │ (RELAY_2_MAX_ON_SEC=30m)│
-                            └─────────────────────────┘
-                                         │
-                                         ▼
-                            Kích hoạt chân GPIO 15..18
+                                  Ngõ Vào Lệnh Điều Khiển
+                                (Cloud MQTT / Local Rules)
+                                            │
+                                            ▼
+           ┌─────────────────────────────────────────────────────────────────┐
+           │ 1. Khóa Chu Kỳ Ngắn Có Chọn Lọc (Selective Anti-Short-Cycle)   │
+           │    - CHỈ áp dụng Dwell Time 180s cho Relay 3 (Máy nén lạnh)    │
+           │      [Chưa đủ 180s Monotonic] ──► Từ chối (ERR_RELAY_DWELL_LOCKED│
+           │    - Relay 1 (Quạt) & Relay 4: Debounce <= 1s (Bỏ Dwell 180s)   │
+           │    - Relay 2 (Sưởi): Bỏ Dwell 180s thường (chỉ Lockout 300s)    │
+           └────────────────────────────────┬────────────────────────────────┘
+                                            │ [Hợp lệ]
+                                            ▼
+           ┌─────────────────────────────────────────────────────────────────┐
+           │ 2. Khóa Liên Động Bất Đối Xứng (Asymmetric Interlock Rule)      │
+           │    - Quạt (Relay 1) và Sưởi (Relay 2) KHÔNG BAO GIỜ cùng ON    │
+           │    - Lệnh BẬT Sưởi khi Quạt ON: TỪ CHỐI (ERR_INTERLOCK_CONFLICT)│
+           │      (success = false, error_code = 3, KHÔNG tự ý tắt Quạt)     │
+           │    - Lệnh BẬT Quạt khi Sưởi ON: ƯU TIÊN GIẢI NHIỆT (Override)  │
+           │      (Ngắt Sưởi tức thì 0ms, lý do "COOLING_OVERRIDE", bật Quạt)│
+           └────────────────────────────────┬────────────────────────────────┘
+                                            │ [Hợp lệ]
+                                            ▼
+           ┌─────────────────────────────────────────────────────────────────┐
+           │ 3. Giới Hạn Cưỡng Chế Monotonic (Emergency Cutoff & Lockout)    │
+           │    - Relay 2 (Sưởi): Tối đa 30m -> Cutoff 0ms, Lockout 300s     │
+           │    - Relay 1 (Quạt): Tối đa 4h; Relay 3 (Nén): Tối đa 60m       │
+           │    - Cảm biến lỗi / Offline > 60s: Cutoff Sưởi 0ms, Lockout 300s│
+           │    - Toàn bộ timer bảo vệ dùng esp_timer_get_time() (Monotonic) │
+           └────────────────────────────────┬────────────────────────────────┘
+                                            │
+                                            ▼
+                               Kích hoạt chân GPIO 15..18
 ```
 
-1. **Phần cứng Fail-Safe mặc định (Hardware Fail-Safe):**
+1. **Phần cứng Fail-Safe mặc định và Tách biệt Hai Giai đoạn Khởi tạo:**
    - Mạch driver rơ-le được thiết kế theo logic **Active HIGH** với điện trở kéo xuống (Pull-down $10\,\text{k}\Omega$) cố định trên các chân GPIO 15..18.
-   - Ngay tại Bước 3 của Boot sequence (trước khi bất kỳ tác vụ mạng hay scheduler nào khởi chạy), hàm `relay_controller_init()` kéo toàn bộ các chân này về mức `LOW`, bảo đảm tải luôn bị ngắt điện khi khởi động hoặc chập chờn nguồn.
-2. **Khóa liên động vật lý và logic (Interlocking Logic):**
-   - Quy tắc bất biến: **Máy sưởi (`relay_2`) chỉ được phép hoạt động khi Quạt (`relay_1`) đang BẬT.**
-   - Nếu nhận lệnh bật Sưởi khi Quạt đang tắt: Controller tự động bật Quạt trước, kích hoạt bộ đếm trễ `RELAY_INTERLOCK_DELAY_MS = 500ms` để luồng không khí lưu thông ổn định, sau đó mới đóng tiếp điểm Máy sưởi.
-   - Nếu người dùng hoặc Cloud yêu cầu tắt Quạt khi Máy sưởi đang chạy: Controller **cưỡng chế ngắt Máy sưởi ngay lập tức**, sau đó mới cho phép tắt Quạt.
-3. **Cắt nguồn khẩn cấp (Emergency Cutoff Timer):**
-   - Kênh Máy sưởi được gắn bộ giám sát thời gian tối đa `RELAY_2_MAX_ON_SEC = 1800` giây (30 phút). Hết 30 phút, rơ-le tự động nhả tiếp điểm và phát sự kiện `SAFETY_CUTOFF` bất kể trạng thái Cloud.
-4. **Bảo vệ chống chu kỳ ngắn (Anti-Short-Cycle Dwell Time):**
-   - Áp dụng thời gian trễ tối thiểu **180 giây** giữa hai lần đảo trạng thái ON $\leftrightarrow$ OFF liên tiếp của cùng một kênh rơ-le.
-5. **Dải trễ Hysteresis Deadband ($1.5^\circ\text{C}$) và Lockout (300s):**
-   - Rule Engine áp dụng dải trễ $1.5^\circ\text{C}$ đối xứng xung quanh ngưỡng cài đặt và áp dụng thời gian khóa an toàn 300s sau mỗi lần chuyển mạch, triệt tiêu hoàn toàn hiện tượng chattering.
-6. **Chính sách Safe-Default khi mất tín hiệu cảm biến:**
-   - Khi không nhận được beacon từ cảm biến sau 60 giây hoặc cờ `valid == false`: **Lập tức ngắt cưỡng chế Relay 2 (Máy sưởi)**, duy trì Relay 1 (Quạt) ở mức giải nhiệt an toàn.
+   - **Giai đoạn 1 (Boot Step 2 — TRƯỚC Event Bus):** `relay_gpio_init()` được thực thi ngay lập tức để cấu hình GPIO 15..18 thành ngõ ra mức `LOW` với trở kéo 10kΩ, triệt tiêu 100% hiện tượng xung áp trôi nổi (floating voltage) có thể kích đóng nhầm thiết bị khi chip vừa cấp điện.
+   - **Giai đoạn 2 (Boot Step 5 — SAU Event Bus):** `relay_controller_init()` chỉ được gọi sau khi Event Bus queue đã tạo xong, bảo đảm đăng ký an toàn các handler sự kiện (`EVT_DEVICE_COMMAND_REQUEST`, `EVT_RULE_ACTION_REQUEST`, `EVT_SENSOR_VALUE_INVALID`, `EVT_DEVICE_OFFLINE_ALERT`) và khởi tạo các monotonic timers.
+2. **Quy tắc Khóa liên động Bất đối xứng (Asymmetric Fan-Heater Interlock):**
+   - **Quy tắc bất biến:** Quạt làm mát (`relay_1`) và Máy sưởi nhiệt (`relay_2`) **tuyệt đối không bao giờ được phép BẬT đồng thời**.
+   - **Lệnh BẬT Sưởi khi Quạt đang ON $\rightarrow$ TỪ CHỐI (REJECT):**
+     Nếu `relay_1` đang BẬT: Từ chối thực thi lệnh bật `relay_2`. Bộ điều khiển trả về Command ACK lỗi: `success = false`, `error_code = 3` (`ERR_RELAY_INTERLOCK_CONFLICT`), `message = "Cannot turn ON Heater while Fan is running"`. Giữ nguyên trạng thái Quạt, tuyệt đối **không tự ý tắt quạt** của người dùng.
+   - **Lệnh BẬT Quạt khi Sưởi đang ON $\rightarrow$ ƯU TIÊN GIẢI NHIỆT (Cooling Safety Override):**
+     Làm mát và chống quá nhiệt là ưu tiên an toàn cao nhất trong nhà. Nếu `relay_2` đang BẬT mà có lệnh BẬT `relay_1`: Cưỡng chế ngắt ngay lập tức `relay_2 = OFF` (0ms trễ, lý do `"COOLING_OVERRIDE"`), phát `EVT_RELAY_STATE_CHANGED`, sau đó đóng rơ-le Quạt `relay_1 = ON`.
+3. **Bỏ qua Cooldown khi TẮT (Immediate Shutoff):**
+   - Mọi lệnh hoặc điều kiện bảo vệ yêu cầu TẮT rơ-le (đặc biệt là Máy sưởi `relay_2`) **bắt buộc thực thi ngay lập tức (0ms trễ, bypass toàn bộ cooldown)**. Cooldown chỉ áp dụng cho chiều BẬT để chống rung tiếp điểm cơ.
+4. **Phân định phạm vi Khóa chu kỳ ngắn (Selective Anti-Short-Cycle Dwell Time):**
+   - **CHỈ áp dụng Dwell Time 180s cho Relay 3 (Máy hút ẩm / Tải máy nén lạnh - Compressor):** Khi Relay 3 vừa ngắt về OFF, bộ điều khiển kích hoạt timer monotonic khóa tối thiểu **180 giây** trước khi cho phép đóng lại kênh đó. Lệnh kích hoạt trong thời gian này bị từ chối với mã lỗi `ERR_RELAY_DWELL_LOCKED` (code 4) nhằm chống kẹt áp suất khí gas máy nén.
+   - **Relay 1 (Quạt) & Relay 4 (Aux):** Bỏ Dwell Time 180s; chỉ áp dụng thời gian chống rung cơ học (Mechanical Debounce $\le 1\text{s}$).
+   - **Relay 2 (Sưởi điện trở):** Bỏ Dwell Time 180s của chu kỳ thường; chỉ kích hoạt **Safety Lockout 300 giây (5 phút)** khi có sự cố ngắt khẩn cấp (`SAFETY_CUTOFF`, `SENSOR_OFFLINE`, chạy quá 30 phút).
+5. **Đồng bộ Monotonic Clock (`esp_timer_get_time()`) & Khóa An Toàn 300s (Safety Lockout):**
+   - Toàn bộ thời gian bảo vệ (cooldown, lockout 300s, thời gian bật tối đa 30m/4h/60m, dwell 180s máy nén) được tính toán bằng Monotonic Clock (`esp_timer_get_time()`), loại trừ 100% rủi ro do điều chỉnh múi giờ hoặc bước nhảy NTP.
+   - Khi `relay_2` bị cưỡng chế TẮT do vượt quá thời gian tối đa 30 phút hoặc do cảm biến mất tín hiệu (>60s) / báo lỗi:
+     - `relay_controller` xuất mức LOW ra GPIO ngay lập tức và phát sự kiện `EVT_RELAY_STATE_CHANGED` (`state = false`, `reason = "SAFETY_CUTOFF"` hoặc `"SENSOR_OFFLINE"`, kèm `monotonic_time_us`).
+     - `rule_engine` bắt sự kiện này và đồng bộ lại trạng thái nội bộ: gán `current_state = false`.
+     - Thiết lập thời gian khóa bảo vệ (Safety Lockout = 300s / 5 phút): `lockout_until_mono_us = esp_timer_get_time() + 300000000ULL`. Rule Engine không cho phép bất kỳ quy tắc tự động nào kích hoạt bật lại Máy sưởi trong vòng 5 phút tiếp theo để thanh nhiệt hoàn toàn nguội.
+6. **Dải trễ Hysteresis Deadband ($1.5^\circ\text{C}$):**
+   - Rule Engine áp dụng dải trễ $1.5^\circ\text{C}$ đối xứng xung quanh ngưỡng cài đặt (bật khi $T \ge T_{\text{set}} + 0.75$, tắt khi $T \le T_{\text{set}} - 0.75$ đối với quạt), triệt tiêu hoàn toàn hiện tượng chattering tiếp điểm.
 
 ---
 
 ## 3. Hệ Quả và Đánh Giá Đánh Đổi (Consequences)
 
 ### Tích Cực (Positive):
-- **Triệt tiêu nguy cơ hỏa hoạn:** Cơ chế liên động và bộ đếm 30 phút bảo đảm thiết bị sưởi không bao giờ bị quá nhiệt không kiểm soát.
-- **Bảo vệ tuổi thọ phần cứng:** Dwell time 180s và Hysteresis $1.5^\circ\text{C}$ bảo vệ tiếp điểm rơ-le và động cơ khỏi hao mòn hồ quang.
-- **Tự trị an toàn (Autonomous Edge Safety):** Toàn bộ logic bảo vệ chạy nội bộ trên ESP32-S3 Core 0, không phụ thuộc vào kết nối Wi-Fi hay Cloud.
+- **Triệt tiêu nguy cơ hỏa hoạn và quá nhiệt:** Cơ chế khóa độc quyền loại trừ hoàn toàn tình huống Quạt và Sưởi cùng chạy hoặc Sưởi chạy quá 30 phút. Ưu tiên giải nhiệt (Cooling Override) bảo vệ an toàn tính mạng và tài sản.
+- **Tôn trọng quyền chủ động của người dùng:** Lệnh bật sưởi khi quạt đang chạy không tự ý dập tắt quạt của người dùng mà từ chối rõ ràng kèm lỗi `ERR_RELAY_INTERLOCK_CONFLICT`.
+- **Bảo vệ chuẩn xác từng loại tải phần cứng:** Máy nén (Relay 3) được bảo vệ chống kẹt áp gas bằng dwell 180s, trong khi Quạt (Relay 1) và Sưởi (Relay 2) đáp ứng nhanh không bị trễ 180s vô lý.
+- **Miễn nhiễm với bước nhảy NTP:** Sử dụng `esp_timer_get_time()` bảo đảm các bộ đếm ngắt khẩn cấp và lockout 300s hoạt động tin cậy 100% ngay cả khi đồng hồ hệ thống bị chỉnh lùi hoặc tiến nhiều giờ.
 
 ### Tiêu Cực & Đánh Đổi (Negative & Neutral):
-- **Trễ thực thi lệnh:** Khi người dùng cố tình bật/tắt liên tục trong vòng 180s, lệnh sau sẽ bị từ chối hoặc hoãn thực thi để bảo vệ thiết bị.
-- **Phụ thuộc logic quạt:** Nếu quạt hỏng cơ học (kẹt cánh), hệ thống cảm biến gián tiếp chưa phát hiện được dòng tải trừ khi trang bị thêm cảm biến dòng (Current Sensor) ở các phiên bản sau.
+- **Từ chối lệnh điều khiển khi xung đột:** Người dùng phải chủ động tắt quạt trước khi muốn bật máy sưởi.
+- **Thời gian chờ máy nén:** Sau khi tắt máy hút ẩm/máy nén, bắt buộc phải chờ đủ 180 giây trước khi có thể bật lại.
 
 ---
 
 ## 4. Tuân Thủ và Xác Nhận (Compliance & Verification)
 
-- **Verification Contract:** Khớp chuẩn xác với `FR-RELAY-01` (Khóa liên động phần cứng, Khóa chu kỳ ngắn & Ngắt khẩn cấp) và `FR-RULE-01` tại FSD §4.10.6 & §4.7.7.
-- **Kiểm thử tự động:** Bộ kiểm thử [tests/host/test_relay_controller.py](file:///home/chien/ai-workspace/qwen-test/tests/host/test_relay_controller.py) và [tests/host/test_rule_engine.py](file:///home/chien/ai-workspace/qwen-test/tests/host/test_rule_engine.py) xác nhận tính đúng đắn của toàn bộ các ca kiểm thử Interlock, Dwell Time, Hysteresis và Safe-Default.
+- **Verification Contract:** Khớp chuẩn xác với `FR-RELAY-01` (Khóa liên động bất đối xứng, Dwell máy nén & Ngắt khẩn cấp an toàn) và `FR-RULE-01` (Hysteresis Deadband, Đồng bộ hai chiều, Monotonic Clock & Khóa 300s) tại FSD §4.10.6 & §4.7.7.
+- **Kiểm thử tự động:** Bộ kiểm thử [tests/host/test_relay_controller.py](file:///home/chien/ai-workspace/qwen-test/tests/host/test_relay_controller.py) và [tests/host/test_rule_engine.py](file:///home/chien/ai-workspace/qwen-test/tests/host/test_rule_engine.py) xác nhận tính đúng đắn của toàn bộ các ca kiểm thử Interlock Asymmetry, Cooling Override, Selective Dwell Time 180s, Monotonic Safety Cutoff và Lockout 300s.
 
 ---
 
 ## 5. Thẩm Tra Ponytail và Đánh Đổi Tối Giản (Ponytail Audit & Trade-off)
 
 - **Từ chối HAL Trừu Tượng Đa Cấu Hình (Flat Static Table):** Chỉ có 4 kênh rơ-le vật lý cố định trên bo mạch, hệ thống từ chối các lớp trừu tượng Device Tree hay Object-Oriented Actuator Classes. Một mảng cấu hình tĩnh phẳng 4 phần tử ánh xạ trực tiếp sang GPIO 15..18, truy xuất $O(1)$.
-- **Không dùng FreeRTOS Software Timers cho Dwell Time:** Kiểm tra Dwell Time (180s) và Cutoff (1800s) bằng phép trừ số nguyên epoch timestamp đơn giản (`now - last_state_change >= 180`). Không tạo 4 timer threads chạy ngầm trong FreeRTOS timer service, tiết kiệm CPU cycles và stack heap.
-- `/* ponytail: Quản lý 4 kênh rơ-le qua mảng tĩnh phẳng và so sánh epoch trực tiếp; không tạo HAL trừu tượng, không cấp phát FreeRTOS timer động; giảm thiểu tối đa độ phức tạp và tiêu hao RAM. */`
+- **Không dùng FreeRTOS Software Timers cho Dwell/Lockout:** Sử dụng trực tiếp `esp_timer_get_time()` (monotonic microsecond clock) để kiểm tra Dwell Time (180s máy nén), Lockout (300s sưởi) và Cutoff (1800s sưởi) bằng phép trừ số nguyên $O(1)$. Không tạo timer threads chạy ngầm trong FreeRTOS timer service, tiết kiệm CPU cycles và stack heap, đồng thời miễn nhiễm với bước nhảy NTP.
+- `/* ponytail: Quản lý 4 kênh rơ-le qua mảng tĩnh phẳng và so sánh Monotonic Clock (esp_timer_get_time()) trực tiếp; không tạo HAL trừu tượng, không cấp phát FreeRTOS timer động; giảm thiểu tối đa độ phức tạp và tiêu hao RAM. Tách biệt rõ rệt relay_gpio_init() ở Boot Step 2 và relay_controller_init() ở Boot Step 5. */`

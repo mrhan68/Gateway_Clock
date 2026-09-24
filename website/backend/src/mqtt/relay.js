@@ -9,7 +9,7 @@
  *   gateway/{gatewayId}/device/{deviceId}/command
  *
  * The Gateway (ESP32) is subscribed to this topic and forwards the command
- * to the appropriate protocol adapter (BLE GATT write or MQTT device publish).
+ * to the appropriate protocol adapter (MQTT device publish or local relay).
  */
 const broker = require('./broker');
 

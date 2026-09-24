@@ -11,17 +11,8 @@ extern "C" {
 #endif
 
 #define BLE_MAX_DEVICES         16
-#define BLE_CMD_QUEUE_DEPTH     10
 
 // Note: ble_telemetry_t is defined in event_bus.h (FSD §4.1.5)
-
-/**
- * @brief BLE Downlink Command
- */
-typedef struct {
-    char device_id[32];
-    char command[32];
-} ble_cmd_t;
 
 /**
  * @brief Initialize BLE Adapter: initializes NimBLE stack, event handlers, and scan task.
