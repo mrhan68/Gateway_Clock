@@ -506,7 +506,7 @@ typedef struct {
     char     command_id[36];       // Khớp command_id của yêu cầu gửi xuống
     char     target_device_id[32]; // Thiết bị thực thi
     bool     success;              // true nếu thực thi thành công
-    int      error_code;           // 0: OK, 1: TIMEOUT, 2: INVALID_CMD, 3: INTERLOCK_CONFLICT, 4: DWELL_LOCKED
+    int      error_code;           // 0: OK, 1: TIMEOUT, 2: INVALID_CMD, 3: INTERLOCK_CONFLICT, 4: DWELL_LOCKED, 5: LOCKOUT_ACTIVE
     char     message[64];          // Mô tả kết quả thực thi
     uint32_t executed_at;          // Thời điểm thực thi xong
 } command_ack_t;
@@ -544,7 +544,7 @@ typedef struct {
 4. **An toàn đa luồng (Mutex Protection):**
    - Bảng lịch biểu `entries[]` của Scheduler được bảo vệ bởi `s_scheduler_mutex`.
    - Bảng đăng ký thiết bị `s_known_devices` được bảo vệ bởi `s_device_mutex`.
-   - Các thao tác đọc/ghi file nhật ký sự kiện `event_log.json` và `sync_queue.bin` được bảo vệ bởi `s_storage_mutex`.
+   - Các thao tác đọc/ghi file nhật ký hàng đợi ngoại tuyến `sync_queue.bin` trên MicroSD được bảo vệ bởi `s_storage_mutex`.
 
 ```
 Vòng đời payload:
@@ -1929,7 +1929,7 @@ Backend server làm trung gian giữa Web App và Gateway. Là **source of truth
 | BE-04 | Quản lý Automation Rule | CRUD rule "IF condition THEN action" |
 | BE-05 | Nhận telemetry | Lưu trữ dữ liệu sensor từ Gateway |
 | BE-06 | Nhận event log | Lưu log sự kiện từ Gateway (alarm stopped, rule executed...) |
-| BE-07 | Sync API | Cung cấp endpoint để Gateway pull config + push log |
+| BE-07 | Sync & Config Topics | Cung cấp MQTT topics để Backend đẩy config (retained) + nhận log/telemetry |
 | BE-08 | MQTT broker relay | Chuyển tiếp lệnh từ Web App → Gateway |
 | BE-09 | Authentication | (Should-have) JWT/API Key |
 
@@ -2246,30 +2246,41 @@ Tệp lưu trữ danh sách các quy tắc tự động hóa IF-THEN cục bộ 
 >   3. `"mijia_v2"`: Chuẩn Xiaomi MiBeacon V2/V3/V4 (giải mã AES-128 CCM với `bindkey` 16 bytes).
 > - **Thiết bị Chấp hành Ngoại vi:** Bắt buộc thuộc `protocol: "mqtt"` (kết nối qua Wi-Fi), điều khiển qua publish lệnh tới topic `gateway/{id}/device/{did}/command`. Không hỗ trợ BLE Actuator.
 
-### 7.5 JSON Schema — event_log.json (trên Gateway Flash /storage)
+### 7.5 Đặc tả Cấu trúc Bản tin Sự kiện (Event Payload Schema — MQTT & Offline MicroSD)
 
+> **Lưu ý kiến trúc:** Gateway không lưu trữ file JSON sự kiện tích lũy trên bộ nhớ Flash SPIFFS để triệt tiêu hao mòn chip nhớ (wear-leveling protection).
+> - **Khi Online:** Sự kiện được publish trực tiếp lên MQTT topic `gateway/{id}/events` (QoS 1).
+> - **Khi Offline:** Sự kiện được đóng gói thành bản ghi nhị phân 172 bytes (`sync_queue_record_t`, `record_type = 0x02`) lưu vào `sync_queue.bin` trên thẻ nhớ MicroSD, trong đó trường `payload` chứa chuỗi JSON dưới đây (tối đa 128 bytes).
+
+*Ví dụ bản tin Rule Event:*
 ```json
-[
-  {
-    "type": "rule_executed",
-    "ts": 1723621234,
-    "rule_id": 1,
-    "target": "fan_01",
-    "command": "ON"
-  },
-  {
-    "type": "alarm_stopped",
-    "ts": 1723621567,
-    "schedule_id": 201
-  },
-  {
-    "type": "automation_triggered",
-    "ts": 1723621800,
-    "schedule_id": 101,
-    "target": "bedroom_light",
-    "command": "ON"
-  }
-]
+{
+  "type": "rule_executed",
+  "ts": 1723621234,
+  "rule_id": 1,
+  "target": "fan_01",
+  "command": "ON"
+}
+```
+
+*Ví dụ bản tin Alarm Event:*
+```json
+{
+  "type": "alarm_stopped",
+  "ts": 1723621567,
+  "schedule_id": 201
+}
+```
+
+*Ví dụ bản tin Automation Event:*
+```json
+{
+  "type": "automation_triggered",
+  "ts": 1723621800,
+  "schedule_id": 101,
+  "target": "bedroom_light",
+  "command": "ON"
+}
 ```
 
 ---
@@ -2671,6 +2682,7 @@ Tất cả các endpoint trả về lỗi đều sử dụng chung format JSON s
 | 409 | `DEVICE_ID_CONFLICT` | `device_id` đã tồn tại | POST /devices với `device_id` trùng |
 | 409 | `DEVICE_IN_USE` | Thiết bị đang được rule tham chiếu | Xóa sensor/actuator đang có rule (nếu không cascade) |
 | 409 | `ERR_RELAY_DWELL_LOCKED` | Relay đang trong thời gian trễ bảo vệ | Nhận lệnh đóng/ngắt Relay 3 (máy nén) khi chưa hết 180s Dwell Time |
+| 409 | `ERR_RELAY_LOCKOUT_ACTIVE` | Khóa an toàn máy sưởi đang kích hoạt (300s) | Nhận lệnh bật Máy sưởi (Relay 2) khi đang trong 300s Lockout sau sự cố ngắt khẩn cấp |
 | 410 | `CLAIM_CODE_EXPIRED` | Mã xác thực Claim Code đã hết hạn | Nhập mã sau 24 giờ kể từ khi Gateway phát sinh và gửi `register-claim` |
 | 422 | `GATEWAY_OFFLINE` | Gateway không online | POST /command nhưng gateway đang offline |
 | 429 | `CLAIM_RATE_LIMITED` | Quá giới hạn thử mã xác thực | Nhập sai Claim Code quá 5 lần trong 15 phút (chặn brute-force) |
@@ -2838,7 +2850,7 @@ hoặc LWT:
 | | 3. Trình duyệt tự mở captive portal |
 | | 4. User nhập SSID + Password (timezone tự lấy từ JS) |
 | | 5. Gateway lưu NVS → kết nối Wi-Fi → set timezone → sync NTP |
-| | 6. Gateway pull config từ Backend → sẵn sàng hoạt động |
+| | 6. Gateway nhận config từ Backend qua MQTT topics → sẵn sàng hoạt động |
 | **Postcondition** | Gateway online, hiển thị đúng giờ, đã sync config |
 
 ### UC-02: Thêm thiết bị
@@ -2849,7 +2861,7 @@ hoặc LWT:
 | **Precondition** | Gateway đã online |
 | **Main Flow** | 1. User mở Web App → Thiết bị → Thêm mới |
 | | 2. Nhập: device_id, tên, protocol (BLE/MQTT), MAC/topic |
-| | 3. Backend lưu DB → push device_list mới cho Gateway (MQTT hoặc chờ sync) |
+| | 3. Backend lưu DB → publish device_list mới cho Gateway qua MQTT |
 | | 4. Gateway nhận → cập nhật `device_list.json` → `ble_adapter` hoặc `mqtt_adapter` nạp device mới |
 | **Postcondition** | Thiết bị xuất hiện trên Gateway, bắt đầu đọc telemetry |
 
@@ -3034,17 +3046,17 @@ Cảm biến mất tín hiệu / Hỏng (valid = false hoặc Timeout > 60s)
 | OLED buffer (u8g2) | ~4-8 KB | Tùy độ phân giải |
 | Rule Engine + Scheduler | ~5-10 KB | Tùy số lượng rule |
 | Event bus queue | ~1 KB | 20 slot × ~48 bytes |
-| FreeRTOS task stacks | ~24 KB | 6 tasks × ~4096 bytes |
-| **Tổng ước tính** | **~110-150 KB** | ESP32 có ~520 KB SRAM |
+| FreeRTOS task stacks | ~28 KB | 7 tasks × ~4096 bytes (watchdog mask 0x7F) |
+| **Tổng ước tính** | **~115-155 KB** | ESP32-S3 có ~512 KB SRAM nội bộ |
 
 ### 12.3 Độ tin cậy
 
 | Yêu cầu | Chỉ tiêu |
 |---|---|
 | Uptime | Chạy liên tục 24/7 (có task watchdog) |
-| Data persistence | Schedule/device list/event log survive reboot (LittleFS + NVS) |
+| Data persistence | Schedule/device list survive reboot (SPIFFS /storage), offline sync queue (MicroSD), Wi-Fi creds (NVS) |
 | Clock accuracy | ± 2 phút/tháng (DS3231), hiệu chỉnh mỗi lần có NTP |
-| Offline operation | Vô hạn thời gian (giới hạn bởi flash capacity cho event log) |
+| Offline operation | Vô hạn thời gian (giới hạn bởi MicroSD dung lượng 50.000 records cho sync_queue.bin) |
 
 ### 12.4 Bảo mật (Should-have)
 
@@ -3173,7 +3185,7 @@ Bảng tiêu chí nghiệm thu dưới đây map từng tính năng Must-have (M
 | M05 | Local Scheduler: automation/alarm theo giờ | UC-04 | Tạo schedule "17:30 bật đèn" trên Web. Đến 17:30 → đèn bật tự động (± 5s). Tạo alarm "06:30" → đến 06:30 buzzer kêu | Schedule không trigger đúng giờ (sai > 10s), hoặc trigger trùng (bắn 2 lần cùng phút) |
 | M06 | Offline-first: hoạt động khi mất mạng | UC-05 | Ngắt Internet → scheduler vẫn trigger đúng giờ, rule engine vẫn đánh giá BLE telemetry, event log và telemetry ghi vào thẻ nhớ SD | Hệ thống treo/reboot khi mất mạng, hoặc scheduler ngừng hoạt động |
 | M07 | RTC giữ giờ khi mất điện | UC-05 | Rút điện 5 phút → cắm lại → OLED hiển thị đúng giờ (± 2 phút, không cần NTP) | Giờ reset về epoch 0 hoặc sai > 5 phút sau khi mất điện |
-| M08 | Cloud Sync: đồng bộ config + event log | UC-06 | Bật Internet → Gateway tự pull schedule/device_list mới từ Backend + push event log tích lũy. Backend nhận đủ event log | Sync không chạy khi có mạng, hoặc config mới không được apply, hoặc event log mất |
+| M08 | Cloud Sync: đồng bộ config + event log | UC-06 | Bật Internet → Gateway tự nhận schedule/device_list mới từ MQTT retained config + push dữ liệu bù từ MicroSD qua `gateway/{id}/telemetry/batch`. Backend nhận đủ dữ liệu | Sync không chạy khi có mạng, hoặc config mới không được apply, hoặc dữ liệu bị mất |
 | M09 | Wi-Fi Provisioning: SoftAP + Captive Portal | UC-01 | Bật Gateway mới → xuất hiện AP "SmartClock-Setup" → kết nối → captive portal tự mở → nhập SSID/password → Gateway kết nối Wi-Fi thành công | AP không xuất hiện, captive portal không mở, hoặc Wi-Fi connect fail sau khi nhập đúng credentials |
 | M10 | REST API quản lý device, schedule, rule | UC-02, UC-03, UC-04 | Tất cả endpoint CRUD (GET/POST/PUT/DELETE) cho device, schedule, rule hoạt động đúng. Response 200/201 cho success, 4xx cho lỗi client | Endpoint trả 500 cho request hợp lệ, hoặc không trả response |
 | M11 | Web App: CRUD device, schedule, xem trạng thái | UC-02, UC-03, UC-04 | Web App hiển thị danh sách device/schedule/rule. Thêm/sửa/xóa hoạt động. Trạng thái device (online/offline) cập nhật | UI không load, CRUD fail, hoặc trạng thái không đồng bộ với thực tế |
