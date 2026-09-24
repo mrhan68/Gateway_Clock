@@ -165,7 +165,7 @@ esp_err_t relay_controller_set_state(const char *target_id, bool state, const ch
         if (now_sec < s_heater_lockout_until) {
             ESP_LOGW(TAG, "[LOCKOUT] Relay 2 (Heater) safety lockout active! Remaining: %lu s",
                      (unsigned long)(s_heater_lockout_until - now_sec));
-            post_command_ack_event(cmd_id, relay_id, false, 5, "Heater safety lockout active (300s)");
+            post_command_ack_event(cmd_id, relay_id, false, ERR_RELAY_LOCKOUT_ACTIVE, "Heater safety lockout active (300s)");
             if (s_relay_mutex != NULL) {
                 xSemaphoreGive(s_relay_mutex);
             }

@@ -34,6 +34,7 @@ extern "C" {
 
 #define ERR_RELAY_INTERLOCK_CONFLICT  3
 #define ERR_RELAY_DWELL_LOCKED        4
+#define ERR_RELAY_LOCKOUT_ACTIVE      5
 
 /**
  * @brief Cấu hình an toàn mức GPIO vật lý (Boot Step 2, trước Event Bus)

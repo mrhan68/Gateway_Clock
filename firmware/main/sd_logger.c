@@ -124,6 +124,7 @@ static void append_sync_queue_record(const sd_log_item_t *item)
     rec.record_type = item->record_type;
     rec.flags = item->flags;
     strncpy(rec.device_id, item->device_id, sizeof(rec.device_id) - 1);
+    rec.device_id[sizeof(rec.device_id) - 1] = '\0';
     snprintf(rec.payload, sizeof(rec.payload), "{\"val\":%.2f,\"ts\":%lu}",
              item->value, (unsigned long)item->timestamp);
     rec.payload_len = (uint16_t)strlen(rec.payload);
