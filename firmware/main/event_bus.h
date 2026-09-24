@@ -114,9 +114,22 @@ typedef struct {
 } rule_action_request_t;
 
 /**
+ * @brief Configuration Type Bitmask Flags (FSD §4.1.5)
+ */
+typedef enum {
+    CONFIG_TYPE_NONE     = 0,
+    CONFIG_TYPE_SCHEDULE = 1 << 0, // schedule.json đã được cập nhật
+    CONFIG_TYPE_RULES    = 1 << 1, // rules.json đã được cập nhật
+    CONFIG_TYPE_DEVICES  = 1 << 2  // device_list.json đã được cập nhật (whitelist sensor BLE)
+} config_type_flags_t;
+
+/**
  * @brief Configuration Update Notification Payload (FSD §4.1.5)
  */
 typedef struct {
+    config_type_flags_t flags;     // Mặt nạ bitmask loại cấu hình được cập nhật (FSD §4.1.5)
+    uint32_t            version;   // Version / checksum cấu hình mới (FSD §4.1.5)
+    // Cờ tương thích ngược:
     bool schedule_changed;         // schedule.json đã được cập nhật từ Cloud
     bool rules_changed;            // rules.json đã được cập nhật từ Cloud
     bool ble_devices_changed;      // device_list.json đã được cập nhật
@@ -154,13 +167,17 @@ typedef struct {
 /* Event Bus Core Structures and APIs                                        */
 /* ========================================================================= */
 
-// Cấu trúc một event trên bus
+// Cấu trúc một event trên bus (FSD §4.1.6, §14.5)
 typedef struct {
     gateway_event_code_t code;
     void *data;        // Con trỏ tới payload được malloc bởi producer
     size_t len;        // Kích thước payload
     uint32_t timestamp;// Thời điểm sinh event
 } gateway_event_t;
+
+// FSD §14.5 type alias & static assertion
+typedef gateway_event_t event_bus_msg_t;
+_Static_assert(sizeof(event_bus_msg_t) <= 48, "event_bus_msg_t size must not exceed 48 bytes");
 
 // Kiểu hàm callback xử lý event
 typedef void (*gateway_event_handler_t)(const gateway_event_t *evt);

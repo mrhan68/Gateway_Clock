@@ -20,14 +20,21 @@ def main():
     os.makedirs("testing", exist_ok=True)
     full_log = []
 
-    print(f"[SERIAL] Opening {PORT} at {BAUD} baud (DTR=False, RTS=False)...")
+    print(f"[SERIAL] Opening {PORT} at {BAUD} baud...")
     ser = serial.Serial(PORT, BAUD, timeout=0.2)
     ser.dtr = False
     ser.rts = False
 
+    # Trigger hardware reset pulse via RTS
+    print("[SERIAL] Sending hardware reset pulse to capture full boot sequence...")
+    ser.rts = True
+    time.sleep(0.1)
+    ser.rts = False
+    time.sleep(0.1)
+
     # Reset input buffer to start clean
     ser.reset_input_buffer()
-    print("[SERIAL] Listening for bootloader and 16-step boot sequence...")
+    print("[SERIAL] Listening for bootloader and 17-step boot sequence...")
 
     start_time = time.time()
     alive_markers_count = 0
@@ -79,32 +86,32 @@ def main():
     print("        ESP32-S3 BOOT & RUNTIME VERIFICATION REPORT        ")
     print("="*60)
 
-    # 1. 16 Boot Steps Check
+    # 1. 17 Boot Steps Check
     step_results = {}
-    for s in range(1, 17):
-        m = re.search(rf"\[BOOT {s}/16\] (.*)", combined_log)
+    for s in range(1, 18):
+        m = re.search(rf"\[BOOT {s}/17\] (.*)", combined_log)
         if m:
             step_results[s] = m.group(0).strip()
             print(f"  ✓ {m.group(0).strip()}")
         else:
             step_results[s] = None
-            print(f"  ✗ [BOOT {s}/16] NOT FOUND")
+            print(f"  ✗ [BOOT {s}/17] NOT FOUND")
 
     # 2. KPI-BOOT-01 Verification
-    # Measure time from [BOOT 1/16] to [BOOT 6/16] / display render
-    m1 = re.search(r"I \((\d+)\) MAIN: \[BOOT 1/16\]", combined_log)
-    m6 = re.search(r"I \((\d+)\) MAIN: \[BOOT 6/16\]", combined_log)
+    # Measure time from [BOOT 1/17] to [BOOT 7/17] / display render
+    m1 = re.search(r"I \((\d+)\) MAIN: \[BOOT 1/17\]", combined_log)
+    m7 = re.search(r"I \((\d+)\) MAIN: \[BOOT 7/17\]", combined_log)
     m_disp = re.search(r"I \((\d+)\) DISPLAY: Display Subsystem initialized", combined_log)
 
     kpi_boot_passed = False
-    if m1 and m6:
+    if m1 and m7:
         t1 = int(m1.group(1))
-        t6 = int(m6.group(1))
-        td = int(m_disp.group(1)) if m_disp else t6
+        t7 = int(m7.group(1))
+        td = int(m_disp.group(1)) if m_disp else t7
         delta_boot1_to_display = td - t1
         print("\n[KPI-BOOT-01] Display initialization benchmark:")
         print(f"  - Boot Step 1 timestamp: {t1} ms")
-        print(f"  - Boot Step 6 (Display Subsystem) timestamp: {t6} ms")
+        print(f"  - Boot Step 7 (Display Subsystem) timestamp: {t7} ms")
         if m_disp:
             print(f"  - Display Subsystem initialized timestamp: {td} ms")
         print(f"  - Execution latency (Step 1 -> Display Ready): {delta_boot1_to_display} ms")
