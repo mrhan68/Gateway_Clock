@@ -1,4 +1,4 @@
-name: host tests + lint
+name: Full-Stack CI Pipeline
 
 on:
   push:
@@ -6,7 +6,8 @@ on:
   pull_request:
 
 jobs:
-  check:
+  python-host-tests:
+    name: Pytest Host Suite & Lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -17,7 +18,49 @@ jobs:
       - run: ruff check .
       - run: pytest tests/host/ -q
 
-  build:
+  c-host-tests:
+    name: C Native Host Harness & Static Assertions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build & Run C Host Tests
+        run: make -C test/host
+
+  backend-tests:
+    name: Node.js Backend Tests & Broker Lifecycle
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install Dependencies
+        working-directory: website/backend
+        run: npm ci
+      - name: Run Jest Compliance Tests
+        working-directory: website/backend
+        run: npm test
+
+  frontend-check:
+    name: React Vite Frontend Lint & Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install Dependencies
+        working-directory: website/web-app
+        run: npm ci
+      - name: ESLint Check
+        working-directory: website/web-app
+        run: npm run lint
+      - name: Production Bundle Build
+        working-directory: website/web-app
+        run: npm run build
+
+  firmware-build:
+    name: ESP32-S3 Firmware Compilation (ESP-IDF v5.3.1)
     runs-on: ubuntu-latest
     container: espressif/idf:v5.3.1
     env:
@@ -88,4 +131,3 @@ jobs:
             firmware/firmware_v*.elf
             firmware/sdkconfig.generated
             firmware/coldflash/
-

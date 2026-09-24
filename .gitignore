@@ -28,10 +28,12 @@ Thumbs.db
 # ─── Testing & Python ──
 .coverage
 .pytest_cache/
+.ruff_cache/
 .venv/
 venv/
 __pycache__/
 *.py[cod]
+test/host/host_tests
 
 # ─── Firmware ──
 firmware/build/
