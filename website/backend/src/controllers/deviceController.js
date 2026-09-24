@@ -5,6 +5,7 @@ const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
 const { createError } = require('../middleware/errorHandler');
 const relay = require('../mqtt/relay');
+const crypto = require('crypto');
 
 /**
  * GET /gateways/{gateway_id}/devices
@@ -174,9 +175,8 @@ async function updateDevice(req, res, next) {
  * DELETE /gateways/{gateway_id}/devices/{device_id}
  */
 async function deleteDevice(req, res, next) {
+  const { gateway_id, device_id } = req.params;
   try {
-    const { gateway_id, device_id } = req.params;
-
     // Check if device is referenced by automation rules or schedules
     const ruleRefs = await prisma.automationRule.count({
       where: {
@@ -219,8 +219,6 @@ async function deleteDevice(req, res, next) {
     next(err);
   }
 }
-
-const crypto = require('crypto');
 
 /**
  * POST /gateways/{gateway_id}/devices/{device_id}/command (FSD §8.3)

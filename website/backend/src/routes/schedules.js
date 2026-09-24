@@ -1,9 +1,8 @@
 const express = require('express');
 const router = express.Router({ mergeParams: true });
 const scheduleController = require('../controllers/scheduleController');
-const { scheduleRules, gatewayIdRules, numericIdRules, ScheduleToggle } = require('../middleware/validation');
-const { body } = require('express-validator');
-const { validationResult } = require('express-validator');
+const { scheduleRules, gatewayIdRules, numericIdRules } = require('../middleware/validation');
+const { body, validationResult } = require('express-validator');
 
 const validate = (req, res, next) => {
   const errors = validationResult(req);
@@ -15,11 +14,11 @@ const validate = (req, res, next) => {
 router.get('/:gateway_id/schedules', gatewayIdRules, validate, scheduleController.listSchedules);
 
 // POST /gateways/{gateway_id}/schedules
-router.post('/:gateway_id/schedules', [...gatewayIdRules, scheduleRules], validate, scheduleController.createSchedule);
+router.post('/:gateway_id/schedules', [...gatewayIdRules, ...scheduleRules], validate, scheduleController.createSchedule);
 
 // PUT /gateways/{gateway_id}/schedules/{id}
 router.put('/:gateway_id/schedules/:id',
-  [...gatewayIdRules, numericIdRules('id'), scheduleRules], validate, scheduleController.updateSchedule);
+  [...gatewayIdRules, ...numericIdRules('id'), ...scheduleRules], validate, scheduleController.updateSchedule);
 
 // DELETE /gateways/{gateway_id}/schedules/{id}
 router.delete('/:gateway_id/schedules/:id',

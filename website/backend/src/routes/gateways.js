@@ -2,7 +2,6 @@ const express = require('express');
 const router = express.Router();
 const { body, validationResult } = require('express-validator');
 const gatewayController = require('../controllers/gatewayController');
-const { errorHandler } = require('../middleware/errorHandler');
 
 // GET /gateways — list all gateways
 router.get('/', gatewayController.listGateways);

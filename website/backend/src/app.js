@@ -12,7 +12,6 @@
 const express = require('express');
 const cors = require('cors');
 const http = require('http');
-const net = require('net');
 const config = require('./config');
 const { errorHandler } = require('./middleware/errorHandler');
 const mqttBroker = require('./mqtt/broker');

@@ -9,6 +9,7 @@
  */
 const { Aedes } = require('aedes');
 const net = require('net');
+const crypto = require('crypto');
 const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
 
@@ -106,8 +107,12 @@ async function startBroker(port = 1883) {
   });
 
   // Handle broker errors gracefully
-  aedes.on('connection_error', (client, err) => {
-    console.error(`[MQTT] Connection error for client ${client?.id}:`, err.message);
+  aedes.on('clientError', (client, err) => {
+    console.error(`[MQTT] Client error for ${client?.id}:`, err.message);
+  });
+
+  aedes.on('connectionError', (client, err) => {
+    console.error(`[MQTT] Connection error for ${client?.id}:`, err.message);
   });
 }
 
@@ -285,7 +290,6 @@ async function handleGatewayStatus(gatewayId, payload) {
  * Topic: gateway/{gatewayId}/device/{deviceId}/command
  */
 function publishDeviceCommand({ gatewayId, deviceId, command, commandId, ttlSeconds = 60 }) {
-  const crypto = require('crypto');
   const cmdId = commandId || crypto.randomUUID();
   const topic = `gateway/${gatewayId}/device/${deviceId}/command`;
   const payload = JSON.stringify({

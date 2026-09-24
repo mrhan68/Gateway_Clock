@@ -14,11 +14,11 @@ const validate = (req, res, next) => {
 router.get('/:gateway_id/rules', gatewayIdRules, validate, ruleController.listRules);
 
 // POST /gateways/{gateway_id}/rules
-router.post('/:gateway_id/rules', [...gatewayIdRules, ruleRules], validate, ruleController.createRule);
+router.post('/:gateway_id/rules', [...gatewayIdRules, ...ruleRules], validate, ruleController.createRule);
 
 // PUT /gateways/{gateway_id}/rules/{id}
 router.put('/:gateway_id/rules/:id',
-  [...gatewayIdRules, numericIdRules('id'), ruleRules], validate, ruleController.updateRule);
+  [...gatewayIdRules, ...numericIdRules('id'), ...ruleRules], validate, ruleController.updateRule);
 
 // DELETE /gateways/{gateway_id}/rules/{id}
 router.delete('/:gateway_id/rules/:id',
