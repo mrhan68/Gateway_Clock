@@ -79,16 +79,68 @@ function Settings() {
     }
   }
 
+  const [backendUrl, setBackendUrl] = useState(localStorage.getItem('apiBaseUrl') || '')
+
+  const handleSaveBackendUrl = (e) => {
+    e.preventDefault()
+    localStorage.setItem('apiBaseUrl', backendUrl.trim())
+    setNotification({ type: 'success', message: 'Đã lưu Backend API URL! Đang kết nối lại...' })
+    setTimeout(() => {
+      window.location.reload()
+    }, 700)
+  }
+
+  const renderBackendCard = () => (
+    <div className="bg-dark-900 border border-zinc-800 rounded-xl p-5 shadow-sm space-y-4">
+      <div className="flex items-center gap-3">
+        <div className="w-9 h-9 rounded-lg bg-blue-500/10 border border-blue-500/30 flex items-center justify-center text-blue-400">
+          <CloudArrowUpIcon className="w-5 h-5" />
+        </div>
+        <div>
+          <h2 className="text-sm font-semibold text-zinc-100">Backend API URL (Render / Cloud)</h2>
+          <p className="text-xs text-zinc-400">
+            Địa chỉ REST API backend của bạn trên Render.com hoặc VPS để Web App kết nối.
+          </p>
+        </div>
+      </div>
+      <form onSubmit={handleSaveBackendUrl} className="flex flex-col sm:flex-row gap-3 pt-2">
+        <input
+          type="url"
+          value={backendUrl}
+          onChange={(e) => setBackendUrl(e.target.value)}
+          placeholder="https://smartclock-backend.onrender.com"
+          className="flex-1 bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-zinc-200 placeholder-zinc-500 focus:outline-none focus:border-emerald-500/60 font-mono"
+        />
+        <button
+          type="submit"
+          className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-medium transition-colors whitespace-nowrap"
+        >
+          Lưu & Kết Nối
+        </button>
+      </form>
+    </div>
+  )
+
   if (!gatewayId) {
     return (
-      <div className="max-w-md mx-auto text-center py-20">
-        <div className="w-12 h-12 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-400 flex items-center justify-center mx-auto mb-4">
-          <Cog6ToothIcon className="w-6 h-6" />
+      <div className="space-y-6 max-w-4xl">
+        {notification && (
+          <Toast
+            message={notification.message}
+            type={notification.type}
+            onClose={() => setNotification(null)}
+          />
+        )}
+        {renderBackendCard()}
+        <div className="max-w-md mx-auto text-center py-12">
+          <div className="w-12 h-12 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-400 flex items-center justify-center mx-auto mb-4">
+            <Cog6ToothIcon className="w-6 h-6" />
+          </div>
+          <h2 className="text-base font-semibold text-zinc-100">Chưa chọn Gateway</h2>
+          <p className="text-xs text-zinc-400 mt-1.5">
+            Vui lòng nhập Backend URL ở trên hoặc chọn Gateway trên thanh điều hướng để cấu hình.
+          </p>
         </div>
-        <h2 className="text-base font-semibold text-zinc-100">Chưa chọn Gateway</h2>
-        <p className="text-xs text-zinc-400 mt-1.5">
-          Vui lòng chọn Gateway trên thanh điều hướng để cấu hình thông số.
-        </p>
       </div>
     )
   }
@@ -127,6 +179,8 @@ function Settings() {
           <ArrowPathIcon className={`w-4 h-4 ${loading ? 'animate-spin text-emerald-400' : ''}`} />
         </button>
       </div>
+
+      {renderBackendCard()}
 
       {loading && !gateway ? (
         <div className="space-y-4">

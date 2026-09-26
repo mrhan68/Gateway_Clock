@@ -241,6 +241,31 @@ function Layout({ children }) {
           </button>
         </header>
 
+        {/* Backend disconnected warning banner */}
+        {!backendHealthy && (
+          <div className="bg-amber-500/10 border-b border-amber-500/20 px-4 py-2 flex flex-wrap items-center justify-between gap-2 text-xs text-amber-300">
+            <div className="flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse flex-shrink-0" />
+              <span>
+                Chưa kết nối Backend API. Vui lòng thiết lập URL Render của bạn.
+              </span>
+            </div>
+            <button
+              onClick={() => {
+                const current = localStorage.getItem('apiBaseUrl') || ''
+                const url = window.prompt('Nhập URL Backend Render của bạn (vd: https://smartclock-backend.onrender.com):', current)
+                if (url !== null) {
+                  localStorage.setItem('apiBaseUrl', url.trim())
+                  window.location.reload()
+                }
+              }}
+              className="px-2.5 py-1 bg-amber-500/20 hover:bg-amber-500/30 rounded border border-amber-500/40 text-[11px] font-medium transition-colors"
+            >
+              Cấu hình Backend URL
+            </button>
+          </div>
+        )}
+
         {/* Dynamic Page Content */}
         <main className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8 bg-dark-950">
           {children}
