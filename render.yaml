@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: smartclock-backend
+    runtime: node
+    rootDir: website/backend
+    region: singapore
+    plan: free
+    buildCommand: npm ci && npx prisma generate && npx prisma db push
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: GATEWAY_KEY
+        generateValue: true
