@@ -39,7 +39,18 @@ if (config.nodeEnv === 'development') {
   app.use(require('morgan')('dev'));
 }
 
-// ─── Health check ───
+// ─── Health & Root check ───
+app.get('/', (req, res) => {
+  res.json({
+    service: 'Smart Clock Gateway Backend API',
+    status: 'online',
+    version: '1.6.0',
+    health: '/health',
+    gateways: '/api/v1/gateways',
+    timestamp: new Date().toISOString()
+  });
+});
+
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
