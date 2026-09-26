@@ -112,6 +112,11 @@ async function startBroker(port = 1883) {
   });
 
   aedes.on('connectionError', (client, err) => {
+    // HTTP requests (e.g. 'GET /' starting with 0x47 'G') trigger invalid puback header flag
+    if (err.message && err.message.includes('Invalid header flag bits')) {
+      console.warn(`[MQTT] Non-MQTT packet (likely HTTP GET probe) received on MQTT port: ignored`);
+      return;
+    }
     console.error(`[MQTT] Connection error for ${client?.id}:`, err.message);
   });
 }
