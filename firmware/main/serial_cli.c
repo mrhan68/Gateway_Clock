@@ -2,10 +2,15 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <dirent.h>
+#include <sys/stat.h>
+#include <errno.h>
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_timer.h"
 #include "driver/uart.h"
+#include "driver/gpio.h"
+#include "esp_rom_sys.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "config_manager.h"
@@ -18,6 +23,8 @@
 #include "event_bus.h"
 #include "ble_adapter.h"
 #include "relay_controller.h"
+#include "sd_logger.h"
+#include "board_led.h"
 
 static const char *TAG __attribute__((unused)) = "CLI";
 
@@ -48,6 +55,9 @@ static void print_help(void)
     printf("  help                                 - Show this help message\n");
     printf("  status                               - Show system uptime, heap and task health\n");
     printf("  time                                 - Show current RTC / NTP system time\n");
+    printf("  time set <YYYY-MM-DD> <HH:MM:SS>     - Manually set RTC hardware time\n");
+    printf("  sd status                            - Show MicroSD card mount status\n");
+    printf("  sd mount                             - Attempt to mount / remount MicroSD card\n");
     printf("  ble status                           - Show BLE scanner status and discovered devices\n");
     printf("  ble start                            - Start BLE GAP scanner\n");
     printf("  ble stop                             - Stop BLE GAP scanner\n");
@@ -76,6 +86,9 @@ static void print_help(void)
     printf("  relay on <target_id>                 - Turn on relay (fan, heater, dehum, aux)\n");
     printf("  relay off <target_id>                - Turn off relay\n");
     printf("  relay emergency                      - Emergency shutdown all relays (Active LOW)\n");
+    printf("  rgb off                              - Turn off on-board RGB LED (GPIO 48, 38, 21)\n");
+    printf("  rgb set <gpio> <r> <g> <b>           - Set color on WS2812 pin (e.g. rgb set 48 0 0 0)\n");
+    printf("  rgb test                             - Test blink candidate pins to locate RGB LED\n");
     printf("  cmd send <target_id> <command>       - Dispatch command to device\n");
     printf("  test freeze event_bus                - Test hook: simulate frozen event_bus task (FR-SUP-02)\n");
     printf("  test burst [count]                   - Test hook: burst events into event bus queue (FSD §4.1.6)\n");
@@ -94,6 +107,26 @@ static void handle_command(char *cmd_line)
 
     if (strcmp(cmd_line, "help") == 0) {
         print_help();
+    } else if (strncmp(cmd_line, "time set", 8) == 0) {
+        int y, m, d, h, min, s;
+        if (sscanf(cmd_line + 8, "%d-%d-%d %d:%d:%d", &y, &m, &d, &h, &min, &s) == 6) {
+            struct tm ti = {
+                .tm_year = y - 1900,
+                .tm_mon  = m - 1,
+                .tm_mday = d,
+                .tm_hour = h,
+                .tm_min  = min,
+                .tm_sec  = s,
+                .tm_isdst = 0
+            };
+            app_rtc_set_time(&ti);
+            printf("OK: Time set and saved to DS3231: %04d-%02d-%02d %02d:%02d:%02d\n", y, m, d, h, min, s);
+        } else {
+            printf("Usage: time set YYYY-MM-DD HH:MM:SS (e.g. time set 2026-09-26 19:00:00)\n");
+        }
+    } else if (strcmp(cmd_line, "time sync") == 0) {
+        app_rtc_sync_from_ntp_and_save();
+        printf("OK: Triggered NTP network sync.\n");
     } else if (strcmp(cmd_line, "time") == 0) {
         char time_buf[64];
         app_rtc_get_formatted_time(time_buf, sizeof(time_buf));
@@ -407,6 +440,60 @@ static void handle_command(char *cmd_line)
     } else if (strcmp(cmd_line, "relay emergency") == 0) {
         relay_controller_emergency_shutdown_all();
         printf("EMERGENCY SHUTDOWN: All 4 relays forced LOW.\n");
+    } else if (strcmp(cmd_line, "rgb off") == 0) {
+        board_led_all_off();
+        printf("OK: WS2812 0s sent and pulled LOW on all candidate pins.\n");
+    } else if (strcmp(cmd_line, "rgb float") == 0) {
+        static const gpio_num_t candidate_pins[] = {
+            48, 38, 21, 47, 14, 2, 3, 5, 6, 7, 35, 36, 37, 39, 40, 41, 42, 45, 46
+        };
+        for (size_t i = 0; i < sizeof(candidate_pins) / sizeof(candidate_pins[0]); i++) {
+            gpio_reset_pin(candidate_pins[i]);
+            gpio_set_direction(candidate_pins[i], GPIO_MODE_INPUT);
+        }
+        printf("OK: All candidate pins set to INPUT (Floating / High-Z). Any discrete LED forced OFF.\n");
+    } else if (strncmp(cmd_line, "rgb set", 7) == 0) {
+        int gpio = 48, r = 0, g = 0, b = 0;
+        int parsed = sscanf(cmd_line + 7, "%d %d %d %d", &gpio, &r, &g, &b);
+        if (parsed >= 4) {
+            board_led_set_rgb((gpio_num_t)gpio, (uint8_t)r, (uint8_t)g, (uint8_t)b);
+            printf("OK: Set RGB on GPIO %d: R=%d, G=%d, B=%d\n", gpio, r, g, b);
+        } else {
+            printf("Usage: rgb set <gpio> <r> <g> <b> (e.g. rgb set 48 0 0 0)\n");
+        }
+    } else if (strcmp(cmd_line, "rgb test") == 0) {
+        printf("Testing on-board RGB LED pins...\n");
+        printf("1. Flashing GPIO 48 (Red)...\n");
+        board_led_set_rgb(BOARD_LED_PIN_DEVKITC1, 40, 0, 0);
+        vTaskDelay(pdMS_TO_TICKS(1000));
+        board_led_set_rgb(BOARD_LED_PIN_DEVKITC1, 0, 0, 0);
+
+        printf("2. Flashing GPIO 38 (Green)...\n");
+        board_led_set_rgb(BOARD_LED_PIN_ALT1, 0, 40, 0);
+        vTaskDelay(pdMS_TO_TICKS(1000));
+        board_led_set_rgb(BOARD_LED_PIN_ALT1, 0, 0, 0);
+
+        printf("3. Flashing GPIO 21 (Blue)...\n");
+        board_led_set_rgb(BOARD_LED_PIN_ZERO, 0, 0, 40);
+        vTaskDelay(pdMS_TO_TICKS(1000));
+        board_led_set_rgb(BOARD_LED_PIN_ZERO, 0, 0, 0);
+
+        board_led_all_off();
+        printf("Test complete. All LEDs turned OFF.\n");
+    } else if (strcmp(cmd_line, "rgb scan") == 0) {
+        static const gpio_num_t test_pins[] = {
+            48, 38, 21, 47, 14, 2, 3, 5, 6, 7, 35, 36, 37, 39, 40, 41, 42, 45, 46
+        };
+        printf("=== Scanning all GPIO pins with WS2812 OFF signal ===\n");
+        for (size_t i = 0; i < sizeof(test_pins) / sizeof(test_pins[0]); i++) {
+            gpio_num_t p = test_pins[i];
+            printf("Testing Pin GPIO %d... ", p);
+            board_led_set_rgb(p, 0, 0, 0);
+            vTaskDelay(pdMS_TO_TICKS(100));
+            printf("done\n");
+        }
+        printf("Scan complete. If your LED was a WS2812, it should now be OFF!\n");
+
     } else if (strcmp(cmd_line, "test freeze event_bus") == 0) {
         printf("TEST HOOK: Simulating EVENT_BUS task stall (FSD §4.13.4 FR-SUP-02)...\n");
         printf("Task will stop heartbeat. Supervisor should reboot in 15 seconds!\n");
@@ -416,6 +503,224 @@ static void handle_command(char *cmd_line)
         sscanf(cmd_line + 10, "%d", &count);
         if (count < 1) count = 40;
         event_bus_test_burst(count);
+    } else if (strncmp(cmd_line, "sd", 2) == 0) {
+        if (strcmp(cmd_line, "sd status") == 0) {
+            printf("MicroSD Status: %s (Mount point: %s)\n",
+                   sd_logger_is_mounted() ? "MOUNTED (FAT32)" : "NOT MOUNTED (SPIFFS Fallback)",
+                   SDCARD_MOUNT_POINT);
+        } else if (strcmp(cmd_line, "sd mount") == 0) {
+            printf("Retrying MicroSD mount on SPI2 (CS=10, MOSI=11, CLK=12, MISO=13)...\n");
+            esp_err_t err = sd_logger_remount();
+            if (err == ESP_OK) {
+                printf("SUCCESS: MicroSD card mounted at %s!\n", SDCARD_MOUNT_POINT);
+            } else {
+                printf("FAILED: MicroSD mount returned %s (0x%x).\n", esp_err_to_name(err), err);
+            }
+        } else if (strcmp(cmd_line, "sd diag") == 0) {
+            printf("--- MicroSD Hardware Pin Diagnostics ---\n");
+            gpio_set_direction(SD_PIN_CS, GPIO_MODE_INPUT);
+            gpio_set_direction(SD_PIN_MOSI, GPIO_MODE_INPUT);
+            gpio_set_direction(SD_PIN_CLK, GPIO_MODE_INPUT);
+            gpio_set_direction(SD_PIN_MISO, GPIO_MODE_INPUT);
+
+            gpio_set_pull_mode(SD_PIN_CS, GPIO_FLOATING);
+            gpio_set_pull_mode(SD_PIN_MOSI, GPIO_FLOATING);
+            gpio_set_pull_mode(SD_PIN_CLK, GPIO_FLOATING);
+            gpio_set_pull_mode(SD_PIN_MISO, GPIO_FLOATING);
+            esp_rom_delay_us(100);
+            printf("[Floating] CS=%d, MOSI=%d, CLK=%d, MISO=%d\n",
+                   gpio_get_level(SD_PIN_CS), gpio_get_level(SD_PIN_MOSI),
+                   gpio_get_level(SD_PIN_CLK), gpio_get_level(SD_PIN_MISO));
+
+            gpio_set_pull_mode(SD_PIN_CS, GPIO_PULLDOWN_ONLY);
+            gpio_set_pull_mode(SD_PIN_MOSI, GPIO_PULLDOWN_ONLY);
+            gpio_set_pull_mode(SD_PIN_CLK, GPIO_PULLDOWN_ONLY);
+            gpio_set_pull_mode(SD_PIN_MISO, GPIO_PULLDOWN_ONLY);
+            esp_rom_delay_us(100);
+            printf("[PullDown] CS=%d, MOSI=%d, CLK=%d, MISO=%d (1 = powered/ext pullup)\n",
+                   gpio_get_level(SD_PIN_CS), gpio_get_level(SD_PIN_MOSI),
+                   gpio_get_level(SD_PIN_CLK), gpio_get_level(SD_PIN_MISO));
+
+            gpio_set_pull_mode(SD_PIN_CS, GPIO_PULLUP_ONLY);
+            gpio_set_pull_mode(SD_PIN_MOSI, GPIO_PULLUP_ONLY);
+            gpio_set_pull_mode(SD_PIN_CLK, GPIO_PULLUP_ONLY);
+            gpio_set_pull_mode(SD_PIN_MISO, GPIO_PULLUP_ONLY);
+            esp_rom_delay_us(100);
+            printf("[PullUp  ] CS=%d, MOSI=%d, CLK=%d, MISO=%d (0 = shorted to GND)\n",
+                   gpio_get_level(SD_PIN_CS), gpio_get_level(SD_PIN_MOSI),
+                   gpio_get_level(SD_PIN_CLK), gpio_get_level(SD_PIN_MISO));
+            printf("----------------------------------------\n");
+        } else if (strncmp(cmd_line, "sd test", 7) == 0) {
+            int cs_pin = SD_PIN_CS;
+            int mosi_pin = SD_PIN_MOSI;
+            int clk_pin = SD_PIN_CLK;
+            int miso_pin = SD_PIN_MISO;
+            sscanf(cmd_line + 7, "%d %d %d %d", &cs_pin, &mosi_pin, &clk_pin, &miso_pin);
+            printf("=== Raw MicroSD SPI Hardware Ping (CMD0) ===\n");
+            printf("Testing Pins: CS=GPIO %d, MOSI=GPIO %d, CLK=GPIO %d, MISO=GPIO %d\n",
+                   cs_pin, mosi_pin, clk_pin, miso_pin);
+            gpio_set_direction(cs_pin, GPIO_MODE_OUTPUT);
+            gpio_set_direction(mosi_pin, GPIO_MODE_OUTPUT);
+            gpio_set_direction(clk_pin, GPIO_MODE_OUTPUT);
+            gpio_set_direction(miso_pin, GPIO_MODE_INPUT);
+            gpio_set_pull_mode(miso_pin, GPIO_PULLUP_ONLY);
+
+            gpio_set_level(cs_pin, 1);
+            gpio_set_level(mosi_pin, 1);
+            for (int i = 0; i < 80; i++) {
+                gpio_set_level(clk_pin, 0);
+                esp_rom_delay_us(10);
+                gpio_set_level(clk_pin, 1);
+                esp_rom_delay_us(10);
+            }
+
+            gpio_set_level(cs_pin, 0);
+            esp_rom_delay_us(20);
+
+            uint8_t cmd0[] = {0x40, 0x00, 0x00, 0x00, 0x00, 0x95};
+            for (int b = 0; b < 6; b++) {
+                uint8_t byte = cmd0[b];
+                for (int bit = 7; bit >= 0; bit--) {
+                    gpio_set_level(mosi_pin, (byte >> bit) & 1);
+                    gpio_set_level(clk_pin, 0);
+                    esp_rom_delay_us(5);
+                    gpio_set_level(clk_pin, 1);
+                    esp_rom_delay_us(5);
+                }
+            }
+
+            gpio_set_level(mosi_pin, 1);
+
+            printf("Bytes received from MISO: ");
+            uint8_t resp[16] = {0};
+            for (int b = 0; b < 16; b++) {
+                uint8_t rx = 0;
+                for (int bit = 7; bit >= 0; bit--) {
+                    gpio_set_level(SD_PIN_CLK, 0);
+                    esp_rom_delay_us(5);
+                    if (gpio_get_level(SD_PIN_MISO)) {
+                        rx |= (1 << bit);
+                    }
+                    gpio_set_level(SD_PIN_CLK, 1);
+                    esp_rom_delay_us(5);
+                }
+                resp[b] = rx;
+                printf("0x%02X ", rx);
+            }
+            printf("\n");
+
+            gpio_set_level(SD_PIN_CS, 1);
+
+            bool found_01 = false;
+            for (int b = 0; b < 16; b++) {
+                if (resp[b] == 0x01) {
+                    found_01 = true;
+                    break;
+                }
+            }
+
+            if (found_01) {
+                printf(">> [SUCCESS] MicroSD card is ALIVE! Responded 0x01 (In Idle State).\n");
+                printf(">> Hardware SPI wiring is 100%% working!\n");
+            } else if (resp[0] == 0xFF && resp[1] == 0xFF && resp[2] == 0xFF && resp[3] == 0xFF) {
+                printf(">> [SILENT / 0xFF] Card did not reply. Common causes:\n"
+                       "   1. Card not inserted completely into socket.\n"
+                       "   2. Pin order reversed or swapped (check CS vs MISO, MOSI vs CLK).\n"
+                       "   3. 3.3V power contact loose on breadboard.\n");
+            } else if (resp[0] == 0x00 && resp[1] == 0x00 && resp[2] == 0x00 && resp[3] == 0x00) {
+                printf(">> [ALL ZEROS / 0x00] MISO pin is shorted to GND or pulled down!\n");
+            } else {
+                printf(">> [UNEXPECTED BYTES] Received mixed signal (possible contact bounce or noise).\n");
+            }
+            printf("=============================================\n");
+        } else if (strncmp(cmd_line, "sd ls", 5) == 0 || strncmp(cmd_line, "sd list", 7) == 0) {
+            char path[128] = "/sdcard";
+            if (strncmp(cmd_line, "sd ls", 5) == 0 && strlen(cmd_line) > 6) {
+                sscanf(cmd_line + 6, "%127s", path);
+            } else if (strncmp(cmd_line, "sd list", 7) == 0 && strlen(cmd_line) > 8) {
+                sscanf(cmd_line + 8, "%127s", path);
+            }
+            DIR *dir = opendir(path);
+            if (!dir) {
+                printf("Error opening directory '%s' (errno=%d: %s)\n", path, errno, strerror(errno));
+            } else {
+                printf("\nDirectory listing for '%s':\n", path);
+                struct dirent *entry;
+                int count = 0;
+                while ((entry = readdir(dir)) != NULL) {
+                    char full_item[512];
+                    snprintf(full_item, sizeof(full_item), "%s/%s", path, entry->d_name);
+                    struct stat st;
+                    long fsize = 0;
+                    if (stat(full_item, &st) == 0) {
+                        fsize = (long)st.st_size;
+                    }
+                    printf("  - %-24s [%s] %ld bytes\n",
+                           entry->d_name, (entry->d_type == DT_DIR) ? "DIR " : "FILE", fsize);
+                    count++;
+                }
+                closedir(dir);
+                printf("Total items: %d\n\n", count);
+            }
+        } else if (strncmp(cmd_line, "sd cat", 6) == 0) {
+            char path[128] = {0};
+            if (sscanf(cmd_line + 6, "%127s", path) == 1) {
+                FILE *f = fopen(path, "r");
+                if (!f) {
+                    printf("Error opening file '%s' (errno=%d: %s)\n", path, errno, strerror(errno));
+                } else {
+                    printf("\n=== File Content: '%s' ===\n", path);
+                    char buf[128];
+                    size_t n;
+                    while ((n = fread(buf, 1, sizeof(buf) - 1, f)) > 0) {
+                        buf[n] = '\0';
+                        printf("%s", buf);
+                    }
+                    fclose(f);
+                    printf("\n==================================\n\n");
+                }
+            } else {
+                printf("Usage: sd cat <filepath> (e.g. sd cat /sdcard/data/telemetry/2026-09-26.csv)\n");
+            }
+        } else if (strcmp(cmd_line, "sd queue") == 0) {
+            FILE *f = fopen("/sdcard/data/sync_queue.bin", "rb");
+            if (!f) {
+                printf("Error opening /sdcard/data/sync_queue.bin (errno=%d: %s)\n", errno, strerror(errno));
+            } else {
+                sync_queue_header_t hdr;
+                if (fread(&hdr, 1, sizeof(hdr), f) == sizeof(hdr)) {
+                    printf("\n=== MicroSD Store-and-Forward Header (24 Bytes, FSD §4.11.3) ===\n");
+                    printf("Magic           : 0x%08lX (%s)\n", (unsigned long)hdr.magic, (hdr.magic == SYNC_QUEUE_MAGIC) ? "VALID" : "INVALID");
+                    printf("Write Offset    : %lu bytes\n", (unsigned long)hdr.write_offset);
+                    printf("Read Offset     : %lu bytes\n", (unsigned long)hdr.read_offset);
+                    printf("Total Records   : %lu\n", (unsigned long)hdr.total_records);
+                    printf("Unacked Count   : %lu\n", (unsigned long)hdr.unacked_count);
+                    printf("Header CRC32    : 0x%08lX\n", (unsigned long)hdr.crc32);
+
+                    printf("\n=== Records Stored in sync_queue.bin (172 Bytes each) ===\n");
+                    sync_queue_record_t rec;
+                    int idx = 0;
+                    while (fread(&rec, 1, sizeof(rec), f) == sizeof(rec)) {
+                        printf("  [#%d] TS: %lu | Type: 0x%02X | Dev: '%s' | Payload: '%s' | CRC: 0x%08lX\n",
+                               idx++, (unsigned long)rec.timestamp, rec.record_type, rec.device_id, rec.payload, (unsigned long)rec.crc32);
+                    }
+                    printf("=================================================================\n\n");
+                }
+                fclose(f);
+            }
+        } else {
+            printf("Usage: sd status | sd mount | sd ls [path] | sd cat <file> | sd queue | sd diag | sd test\n");
+        }
+    } else if (strncmp(cmd_line, "pin", 3) == 0) {
+        int gpio = 0, level = 0;
+        if (sscanf(cmd_line + 3, "%d %d", &gpio, &level) == 2) {
+            gpio_reset_pin((gpio_num_t)gpio);
+            gpio_set_direction((gpio_num_t)gpio, GPIO_MODE_OUTPUT);
+            gpio_set_level((gpio_num_t)gpio, level ? 1 : 0);
+            printf("OK: GPIO %d set to %d\n", gpio, level ? 1 : 0);
+        } else {
+            printf("Usage: pin <gpio_num> <0|1> (e.g. pin 2 1 or pin 48 0)\n");
+        }
     } else if (strcmp(cmd_line, "reboot") == 0) {
         printf("Restarting ESP32 Gateway...\n");
         vTaskDelay(pdMS_TO_TICKS(500));

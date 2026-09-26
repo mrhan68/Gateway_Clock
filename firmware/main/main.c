@@ -41,11 +41,15 @@
 #include "display.h"
 #include "storage.h"
 #include "sd_logger.h"
+#include "board_led.h"
 
 static const char *TAG = "MAIN";
 
 void app_main(void)
 {
+    // Tắt ngay lập tức LED RGB trên bo mạch khi vừa cấp nguồn
+    board_led_init();
+
     // Chờ 1.5s để USB-UART trên Host ổn định enumeration
     vTaskDelay(pdMS_TO_TICKS(1500));
 

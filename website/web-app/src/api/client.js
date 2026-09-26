@@ -1,10 +1,10 @@
 import axios from 'axios'
 
-// Base URL from env (Vite exposes import.meta.env with VITE_ prefix)
-const baseURL = import.meta.env.VITE_API_URL || ''
+// Base URL from localStorage (for GitHub Pages static hosting) or env VITE_API_URL
+const getBaseURL = () => localStorage.getItem('apiBaseUrl') || import.meta.env.VITE_API_URL || ''
 
 const api = axios.create({
-  baseURL,
+  baseURL: getBaseURL(),
   timeout: 10000,
   headers: {
     'Content-Type': 'application/json',
@@ -24,8 +24,12 @@ export const setActiveGateway = (id) => {
 export const getActiveGateway = () => activeGateway
 
 // --- Request interceptor ---
-// Attach JWT if present (should-have feature, for now we use a placeholder)
+// Attach JWT if present and dynamically apply active API URL
 api.interceptors.request.use((config) => {
+  const customBase = getBaseURL()
+  if (customBase) {
+    config.baseURL = customBase
+  }
   const token = localStorage.getItem('authToken')
   if (token) {
     config.headers.Authorization = `Bearer ${token}`

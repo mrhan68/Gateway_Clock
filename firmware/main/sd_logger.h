@@ -69,6 +69,11 @@ void sd_logger_init(void);
 bool sd_logger_is_mounted(void);
 
 /**
+ * @brief Thử mount lại thẻ MicroSD (dùng cho CLI hoặc cắm lại thẻ)
+ */
+esp_err_t sd_logger_remount(void);
+
+/**
  * @brief Đưa một điểm đo telemetry vào hàng đợi ghi bất đồng bộ (s_sd_log_queue)
  */
 esp_err_t sd_logger_enqueue_telemetry(const char *device_id, float value, uint32_t timestamp);

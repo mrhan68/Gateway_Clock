@@ -35,6 +35,11 @@ esp_err_t wifi_provisioning_connect(const char *ssid, const char *password);
 bool wifi_provisioning_is_connected(void);
 
 /**
+ * @brief Kiểm tra xem SoftAP đang phát sóng hay không
+ */
+bool wifi_provisioning_is_softap(void);
+
+/**
  * @brief Lấy địa chỉ IP hiện tại (chuỗi)
  */
 const char* wifi_provisioning_get_ip(void);

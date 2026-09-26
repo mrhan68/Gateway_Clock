@@ -17,6 +17,7 @@
 #include "mqtt_adapter.h"
 #include "relay_controller.h"
 #include "scheduler.h"
+#include "font5x7.h"
 
 static const char *TAG = "DISPLAY";
 
@@ -29,6 +30,14 @@ static const char *TAG = "DISPLAY";
 #define BUZZER_LEDC_CHANNEL     LEDC_CHANNEL_0
 #define BUZZER_FREQ_HZ          2000
 #define BUZZER_AUTO_OFF_SEC     60
+
+// SSD1327 128x128 4-bit Grayscale Framebuffer (64 bytes/row, 128 rows = 8192 bytes)
+#define SSD1327_WIDTH           128
+#define SSD1327_HEIGHT          128
+#define SSD1327_BYTES_PER_ROW   (SSD1327_WIDTH / 2)
+#define SSD1327_BUFFER_SIZE     (SSD1327_BYTES_PER_ROW * SSD1327_HEIGHT)
+
+static uint8_t s_oled_buffer[SSD1327_BUFFER_SIZE];
 
 static TaskHandle_t s_display_task_handle = NULL;
 static SemaphoreHandle_t s_display_mutex = NULL;
@@ -47,6 +56,157 @@ static uint32_t s_snooze_until_epoch = 0;
 static float s_latest_temp = 25.0f;
 static float s_latest_hum = 60.0f;
 static bool s_temp_valid = false;
+
+// =========================================================================
+// SSD1327 OLED Low-Level I2C Hardware Driver
+// =========================================================================
+
+static esp_err_t ssd1327_send_cmd(uint8_t cmd)
+{
+    i2c_cmd_handle_t h = i2c_cmd_link_create();
+    i2c_master_start(h);
+    i2c_master_write_byte(h, (DISPLAY_I2C_ADDR << 1) | I2C_MASTER_WRITE, true);
+    i2c_master_write_byte(h, 0x00, true); // Control byte: Command stream
+    i2c_master_write_byte(h, cmd, true);
+    i2c_master_stop(h);
+    esp_err_t ret = i2c_master_cmd_begin(DISPLAY_I2C_PORT, h, pdMS_TO_TICKS(50));
+    i2c_cmd_link_delete(h);
+    return ret;
+}
+
+static esp_err_t ssd1327_send_data(const uint8_t *data, size_t len)
+{
+    i2c_cmd_handle_t h = i2c_cmd_link_create();
+    i2c_master_start(h);
+    i2c_master_write_byte(h, (DISPLAY_I2C_ADDR << 1) | I2C_MASTER_WRITE, true);
+    i2c_master_write_byte(h, 0x40, true); // Control byte: Data stream
+    i2c_master_write(h, (uint8_t *)data, len, true);
+    i2c_master_stop(h);
+    esp_err_t ret = i2c_master_cmd_begin(DISPLAY_I2C_PORT, h, pdMS_TO_TICKS(100));
+    i2c_cmd_link_delete(h);
+    return ret;
+}
+
+static void ssd1327_init_hardware(void)
+{
+    ESP_LOGI(TAG, "Configuring SSD1327 (MSP1503 128x128 4-bit Grayscale)...");
+
+    // Sequence chuẩn chính hãng LCDWiki MSP1503 SSD1327 128x128
+    static const uint8_t init_cmds[] = {
+        0xFD, 0x12,       // 1. Command unlock (BẮT BUỘC ĐẦU TIÊN để mở khóa chip nhận lệnh)
+        0xAE,             // 2. Display OFF
+        0x15, 0x00, 0x3F, // 3. Set Column Address: 0 to 63 (128 pixels, 2 pixels/col)
+        0x75, 0x00, 0x7F, // 4. Set Row Address: 0 to 127
+        0xA8, 0x7F,       // 5. Multiplex ratio: 127 (128 rows)
+        0xA1, 0x00,       // 6. Start line: 0
+        0xA2, 0x00,       // 7. Display offset: 0
+        0xA0, 0x51,       // 8. Remap: 0x51 (horizontal increment, 8-bit bus, COM remap)
+        0xAB, 0x01,       // 9. Select internal VDD regulator
+        0x81, 0x70,       // 10. Contrast control: 0x70 (Độ tương phản sáng)
+        0xB1, 0x51,       // 11. Phase length
+        0xB3, 0x01,       // 12. Front clock divider
+        0xB9,             // 13. Linear grayscale lookup table (Bảng sắc xám tuyến tính)
+        0xBC, 0x08,       // 14. Pre-charge voltage
+        0xBE, 0x07,       // 15. VCOMH voltage
+        0xB6, 0x01,       // 16. Second pre-charge period
+        0xD5, 0x62,       // 17. Function selection B
+        0xA4,             // 18. Normal display
+        0xAF              // 19. Display ON (BẬT SÁNG MÀN HÌNH)
+    };
+
+    for (size_t i = 0; i < sizeof(init_cmds); i++) {
+        ssd1327_send_cmd(init_cmds[i]);
+    }
+
+    ESP_LOGI(TAG, "SSD1327 display powered ON successfully!");
+}
+
+static void ssd1327_clear(void)
+{
+    memset(s_oled_buffer, 0, sizeof(s_oled_buffer));
+}
+
+static void ssd1327_draw_pixel(int x, int y, uint8_t gray)
+{
+    if (x < 0 || x >= SSD1327_WIDTH || y < 0 || y >= SSD1327_HEIGHT) return;
+    int idx = y * SSD1327_BYTES_PER_ROW + (x / 2);
+    if ((x & 1) == 0) {
+        // Pixel chẵn nằm ở 4 bit cao (High nibble)
+        s_oled_buffer[idx] = (s_oled_buffer[idx] & 0x0F) | ((gray & 0x0F) << 4);
+    } else {
+        // Pixel lẻ nằm ở 4 bit thấp (Low nibble)
+        s_oled_buffer[idx] = (s_oled_buffer[idx] & 0xF0) | (gray & 0x0F);
+    }
+}
+
+static void ssd1327_draw_char(int x, int y, char c, uint8_t gray, int scale)
+{
+    if (c < 32 || c > 126) c = ' ';
+    const uint8_t *bitmap = font5x7[c - 32];
+    for (int col = 0; col < 5; col++) {
+        uint8_t line = bitmap[col];
+        for (int row = 0; row < 8; row++) {
+            if (line & (1 << row)) {
+                if (scale <= 1) {
+                    ssd1327_draw_pixel(x + col, y + row, gray);
+                } else {
+                    for (int dx = 0; dx < scale; dx++) {
+                        for (int dy = 0; dy < scale; dy++) {
+                            ssd1327_draw_pixel(x + col * scale + dx, y + row * scale + dy, gray);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+static void ssd1327_draw_string(int x, int y, const char *str, uint8_t gray, int scale)
+{
+    if (!str) return;
+    int cur_x = x;
+    int char_w = 6 * scale;
+    while (*str) {
+        if (*str == '\n') {
+            y += 8 * scale;
+            cur_x = x;
+        } else {
+            ssd1327_draw_char(cur_x, y, *str, gray, scale);
+            cur_x += char_w;
+        }
+        str++;
+    }
+}
+
+static void ssd1327_draw_hline(int x, int y, int w, uint8_t gray)
+{
+    for (int i = 0; i < w; i++) {
+        ssd1327_draw_pixel(x + i, y, gray);
+    }
+}
+
+static void ssd1327_flush(void)
+{
+    if (!s_oled_detected) return;
+
+    // Thiết lập vùng quét: Column 0..63 (128 pixels), Row 0..127
+    ssd1327_send_cmd(0x15);
+    ssd1327_send_cmd(0x00);
+    ssd1327_send_cmd(0x3F);
+
+    ssd1327_send_cmd(0x75);
+    ssd1327_send_cmd(0x00);
+    ssd1327_send_cmd(0x7F);
+
+    // Gửi 128 dòng dữ liệu, mỗi dòng 64 bytes
+    for (int row = 0; row < SSD1327_HEIGHT; row++) {
+        ssd1327_send_data(&s_oled_buffer[row * SSD1327_BYTES_PER_ROW], SSD1327_BYTES_PER_ROW);
+    }
+}
+
+// =========================================================================
+// Buzzer & Button Management
+// =========================================================================
 
 static void buzzer_start(void)
 {
@@ -135,6 +295,10 @@ void display_set_screen(uint8_t screen_index)
     }
 }
 
+// =========================================================================
+// Screen Render Logic (Physical OLED + Serial Virtual Console)
+// =========================================================================
+
 void display_render(void)
 {
     char time_str[32] = {0};
@@ -148,8 +312,106 @@ void display_render(void)
     const char *wday = (ti.tm_wday >= 0 && ti.tm_wday <= 6) ? wday_names[ti.tm_wday] : "??";
 
     bool wifi_ok = wifi_provisioning_is_connected();
+    bool wifi_ap = wifi_provisioning_is_softap();
     bool mqtt_ok = mqtt_adapter_is_connected();
 
+    // 1. Kết xuất đồ họa lên màn hình OLED vật lý SSD1327 (128x128)
+    if (s_oled_detected) {
+        ssd1327_clear();
+
+        if (s_alarm_active) {
+            // Màn hình cảnh báo Báo thức
+            ssd1327_draw_string(14, 8, "! ALARM !", 0xF, 2);
+            ssd1327_draw_hline(6, 28, 116, 0xC);
+            ssd1327_draw_string(8, 38, s_alarm_title, 0xF, 1);
+            ssd1327_draw_string(8, 56, time_str, 0xE, 1);
+            ssd1327_draw_hline(6, 78, 116, 0x8);
+            ssd1327_draw_string(8, 90, "Btn 2: DISMISS", 0xF, 1);
+            ssd1327_draw_string(8, 108, "Btn 1: SNOOZE 9m", 0xB, 1);
+        } else {
+            switch (s_current_screen) {
+                case DISPLAY_SCREEN_CLOCK_TEMP: {
+                    // Header Bar (Thứ, ngày/tháng, trạng thái Wi-Fi, MQTT)
+                    char header_buf[32];
+                    snprintf(header_buf, sizeof(header_buf), "%s %02d/%02d", wday, ti.tm_mday, ti.tm_mon + 1);
+                    ssd1327_draw_string(4, 4, header_buf, 0xC, 1);
+
+                    char net_buf[16];
+                    snprintf(net_buf, sizeof(net_buf), "%s %s", wifi_ok ? "WF" : (wifi_ap ? "AP" : "--"), mqtt_ok ? "MQ" : "--");
+                    ssd1327_draw_string(88, 4, net_buf, 0xA, 1);
+                    ssd1327_draw_hline(0, 16, 128, 0x6);
+
+                    // Đồng hồ lớn chính giữa màn hình (Scale 2)
+                    char clock_buf[16];
+                    snprintf(clock_buf, sizeof(clock_buf), "%02d:%02d:%02d", ti.tm_hour, ti.tm_min, ti.tm_sec);
+                    ssd1327_draw_string(16, 26, clock_buf, 0xF, 2);
+
+                    ssd1327_draw_hline(0, 48, 128, 0x6);
+
+                    // Thông số Cảm biến Môi trường
+                    if (s_temp_valid) {
+                        char env_buf[32];
+                        snprintf(env_buf, sizeof(env_buf), "Temp: %.1f C", s_latest_temp);
+                        ssd1327_draw_string(8, 56, env_buf, 0xE, 1);
+                        snprintf(env_buf, sizeof(env_buf), "Humi: %.1f %%", s_latest_hum);
+                        ssd1327_draw_string(8, 72, env_buf, 0xE, 1);
+                    } else {
+                        ssd1327_draw_string(8, 56, "Temp: --.- C", 0x7, 1);
+                        ssd1327_draw_string(8, 72, "Humi: --.- %", 0x7, 1);
+                    }
+
+                    // Thanh trạng thái dưới cùng
+                    ssd1327_draw_hline(0, 94, 128, 0x5);
+                    if (s_snooze_until_epoch > now_epoch) {
+                        char snz[32];
+                        snprintf(snz, sizeof(snz), "SNOOZE: %lus", (unsigned long)(s_snooze_until_epoch - now_epoch));
+                        ssd1327_draw_string(8, 106, snz, 0xD, 1);
+                    } else {
+                        ssd1327_draw_string(8, 106, "SMART CLOCK EDGE", 0x9, 1);
+                    }
+                    break;
+                }
+
+                case DISPLAY_SCREEN_UPCOMING_EVENT: {
+                    ssd1327_draw_string(4, 4, "UPCOMING EVENTS", 0xF, 1);
+                    ssd1327_draw_hline(0, 16, 128, 0x6);
+                    ssd1327_draw_string(6, 26, "06:30 Wakeup", 0xE, 1);
+                    ssd1327_draw_string(6, 46, "17:30 Fan Auto", 0xC, 1);
+                    ssd1327_draw_string(6, 66, "21:00 Aux Off", 0xA, 1);
+                    ssd1327_draw_hline(0, 98, 128, 0x4);
+                    ssd1327_draw_string(6, 108, "[SCREEN 1/3]", 0x8, 1);
+                    break;
+                }
+
+                case DISPLAY_SCREEN_DEVICE_STATUS: {
+                    ssd1327_draw_string(4, 4, "RELAY STATUS", 0xF, 1);
+                    ssd1327_draw_hline(0, 16, 128, 0x6);
+                    bool r1 = relay_controller_get_state(1);
+                    bool r2 = relay_controller_get_state(2);
+                    bool r3 = relay_controller_get_state(3);
+                    bool r4 = relay_controller_get_state(4);
+                    char buf[32];
+                    snprintf(buf, sizeof(buf), "R1 Fan:  %s", r1 ? "ON " : "OFF");
+                    ssd1327_draw_string(6, 26, buf, r1 ? 0xF : 0x7, 1);
+                    snprintf(buf, sizeof(buf), "R2 Heat: %s", r2 ? "ON " : "OFF");
+                    ssd1327_draw_string(6, 44, buf, r2 ? 0xF : 0x7, 1);
+                    snprintf(buf, sizeof(buf), "R3 Deh:  %s", r3 ? "ON " : "OFF");
+                    ssd1327_draw_string(6, 62, buf, r3 ? 0xF : 0x7, 1);
+                    snprintf(buf, sizeof(buf), "R4 Aux:  %s", r4 ? "ON " : "OFF");
+                    ssd1327_draw_string(6, 80, buf, r4 ? 0xF : 0x7, 1);
+                    ssd1327_draw_hline(0, 98, 128, 0x4);
+                    ssd1327_draw_string(6, 108, "[SCREEN 2/3]", 0x8, 1);
+                    break;
+                }
+
+                default:
+                    break;
+            }
+        }
+        ssd1327_flush();
+    }
+
+    // 2. Ghi ra Serial Console cho Virtual UI Testing
     if (s_alarm_active) {
         printf("\n==================================================\n");
         printf("               ⚠️  BÁO THỨC ĐANG REO  ⚠️          \n");
@@ -174,7 +436,7 @@ void display_render(void)
                 printf("│ Nhiệt & Ẩm : --.- °C  |  --.- %%RH              │\n");
             }
             printf("│ Mạng       : Wi-Fi: %s  |  MQTT: %s       │\n",
-                   wifi_ok ? "● OK " : "○ OFF", mqtt_ok ? "● OK " : "○ OFF");
+                   wifi_ok ? "● OK " : (wifi_ap ? "◐ AP " : "○ OFF"), mqtt_ok ? "● OK " : "○ OFF");
             if (s_snooze_until_epoch > now_epoch) {
                 printf("│ Trạng thái : SNOOZE 9m (còn %lu s)           │\n",
                        (unsigned long)(s_snooze_until_epoch - now_epoch));
@@ -406,6 +668,8 @@ void display_init(void)
     if (ret == ESP_OK) {
         s_oled_detected = true;
         ESP_LOGI(TAG, "OLED SSD1327 detected at I2C address 0x%02X", DISPLAY_I2C_ADDR);
+        // Khởi tạo phần cứng màn hình vật lý SSD1327 MSP1503
+        ssd1327_init_hardware();
     } else {
         s_oled_detected = false;
         ESP_LOGW(TAG, "OLED SSD1327 not detected at I2C 0x%02X (using virtual UI display)", DISPLAY_I2C_ADDR);
@@ -433,5 +697,5 @@ void display_init(void)
         DISPLAY_TASK_CORE
     );
 
-    ESP_LOGI(TAG, "Display Subsystem initialized successfully (Direct-to-Task Notification enabled)");
+    ESP_LOGI(TAG, "Display Subsystem initialized successfully (Physical OLED + Direct Notification enabled)");
 }

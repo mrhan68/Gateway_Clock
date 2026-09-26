@@ -254,9 +254,39 @@ static void stop_dns_task(void *pv)
     vTaskDelete(NULL);
 }
 
+static void start_softap_internal(void)
+{
+    if (s_in_softap_mode) return;
+    s_in_softap_mode = true;
+
+    wifi_config_t ap_config = {
+        .ap = {
+            .ssid = SOFTAP_SSID,
+            .ssid_len = strlen(SOFTAP_SSID),
+            .channel = 1,
+            .password = "",
+            .max_connection = SOFTAP_MAX_CONN,
+            .authmode = WIFI_AUTH_OPEN
+        },
+    };
+
+    esp_wifi_set_mode(WIFI_MODE_APSTA);
+    esp_wifi_set_config(WIFI_IF_AP, &ap_config);
+    esp_wifi_start();
+
+    stop_dns_only();
+    xTaskCreate(dns_server_task, "dns_task", 4096, NULL, 5, &s_dns_task_handle);
+    web_server_start();
+
+    event_bus_post(EVT_WIFI_PROVISIONING_STARTED, NULL, 0, false);
+    ESP_LOGI(TAG, "[PROVISIONING] SoftAP active. Connect to '%s' (IP: 192.168.4.1)", SOFTAP_SSID);
+}
+
 static void wifi_event_handler(void *arg, esp_event_base_t event_base,
                                int32_t event_id, void *event_data)
 {
+    static int s_sta_retry_count = 0;
+
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
         if (wifi_provisioning_is_configured()) {
             ESP_LOGI(TAG, "Wi-Fi Station started, connecting...");
@@ -270,6 +300,13 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
         strcpy(s_current_ip, "0.0.0.0");
         ESP_LOGW(TAG, "[WIFI] Disconnected from AP (Reason code: %d).", disconn ? disconn->reason : -1);
         event_bus_post(EVT_WIFI_LOST, NULL, 0, false);
+
+        s_sta_retry_count++;
+        if (s_sta_retry_count >= 3 && !s_in_softap_mode) {
+            ESP_LOGW(TAG, "STA connection failed (%d retries). Starting SoftAP fallback...", s_sta_retry_count);
+            start_softap_internal();
+        }
+
         if (wifi_provisioning_is_configured()) {
             esp_wifi_connect();
         }
@@ -277,6 +314,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
         ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
         esp_ip4addr_ntoa(&event->ip_info.ip, s_current_ip, sizeof(s_current_ip));
         s_is_connected = true;
+        s_sta_retry_count = 0;
 
         printf("\n[WIFI] Connected, IP: %s\n", s_current_ip);
         fflush(stdout);
@@ -315,27 +353,7 @@ void wifi_provisioning_init(void)
         wifi_provisioning_connect(sys_cfg->wifi_ssid, sys_cfg->wifi_password);
     } else {
         ESP_LOGI(TAG, "No Wi-Fi credentials (Volatile RAM mode). Starting SoftAP '%s'...", SOFTAP_SSID);
-        s_in_softap_mode = true;
-
-        wifi_config_t ap_config = {
-            .ap = {
-                .ssid = SOFTAP_SSID,
-                .ssid_len = strlen(SOFTAP_SSID),
-                .channel = 1,
-                .password = "",
-                .max_connection = SOFTAP_MAX_CONN,
-                .authmode = WIFI_AUTH_OPEN
-            },
-        };
-
-        ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
-        ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap_config));
-        ESP_ERROR_CHECK(esp_wifi_start());
-
-        xTaskCreate(dns_server_task, "dns_task", 4096, NULL, 5, &s_dns_task_handle);
-
-        event_bus_post(EVT_WIFI_PROVISIONING_STARTED, NULL, 0, false);
-        ESP_LOGI(TAG, "[PROVISIONING] SoftAP active. Connect to '%s' (IP: 192.168.4.1)", SOFTAP_SSID);
+        start_softap_internal();
     }
 }
 
@@ -354,27 +372,8 @@ void wifi_provisioning_force_reset(void)
     esp_wifi_disconnect();
     esp_wifi_stop();
 
-    s_in_softap_mode = true;
-    wifi_config_t ap_config = {
-        .ap = {
-            .ssid = SOFTAP_SSID,
-            .ssid_len = strlen(SOFTAP_SSID),
-            .channel = 1,
-            .password = "",
-            .max_connection = SOFTAP_MAX_CONN,
-            .authmode = WIFI_AUTH_OPEN
-        },
-    };
-
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap_config));
-    ESP_ERROR_CHECK(esp_wifi_start());
-
-    stop_dns_only();
-    xTaskCreate(dns_server_task, "dns_task", 4096, NULL, 5, &s_dns_task_handle);
-    web_server_start();
-
-    event_bus_post(EVT_WIFI_PROVISIONING_STARTED, NULL, 0, false);
+    s_in_softap_mode = false;
+    start_softap_internal();
 }
 
 esp_err_t wifi_provisioning_connect(const char *ssid, const char *password)
@@ -400,7 +399,18 @@ bool wifi_provisioning_is_connected(void)
     return s_is_connected;
 }
 
+bool wifi_provisioning_is_softap(void)
+{
+    return s_in_softap_mode;
+}
+
 const char* wifi_provisioning_get_ip(void)
 {
-    return s_current_ip;
+    if (s_is_connected) {
+        return s_current_ip;
+    }
+    if (s_in_softap_mode) {
+        return "192.168.4.1";
+    }
+    return "0.0.0.0";
 }

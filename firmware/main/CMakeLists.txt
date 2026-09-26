@@ -15,5 +15,7 @@ idf_component_register(SRCS "main.c"
                             "display.c"
                             "storage.c"
                             "sd_logger.c"
+                            "board_led.c"
+                            "led_strip_encoder.c"
                    INCLUDE_DIRS "."
-                   REQUIRES freertos esp_system esp_timer log nvs_flash driver esp_wifi esp_event esp_netif esp_http_server lwip mqtt json bt spiffs fatfs sdmmc vfs)
+                   REQUIRES freertos esp_system esp_timer log nvs_flash driver esp_wifi esp_event esp_netif esp_http_server lwip mqtt json bt spiffs fatfs sdmmc vfs esp_driver_rmt)

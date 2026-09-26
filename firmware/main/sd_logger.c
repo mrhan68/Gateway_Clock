@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <sys/stat.h>
 #include <time.h>
+#include <errno.h>
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_vfs_fat.h"
@@ -104,12 +105,13 @@ static void append_sync_queue_record(const sd_log_item_t *item)
 
     if (s_sd_mutex) xSemaphoreTake(s_sd_mutex, portMAX_DELAY);
 
+    mkdir("/sdcard/data", 0755);
     FILE *f = fopen(SD_SYNC_QUEUE_PATH, "r+b");
     if (!f) {
         f = fopen(SD_SYNC_QUEUE_PATH, "w+b");
     }
     if (!f) {
-        ESP_LOGE(TAG, "Cannot open %s for writing", SD_SYNC_QUEUE_PATH);
+        ESP_LOGE(TAG, "Cannot open %s for writing (errno=%d: %s)", SD_SYNC_QUEUE_PATH, errno, strerror(errno));
         if (s_sd_mutex) xSemaphoreGive(s_sd_mutex);
         return;
     }
@@ -331,6 +333,75 @@ static void on_mqtt_connected(const gateway_event_t *evt)
     sd_logger_trigger_backfill();
 }
 
+esp_err_t sd_logger_remount(void)
+{
+    if (s_sd_mounted && s_sd_card != NULL) {
+        esp_vfs_fat_sdcard_unmount(SDCARD_MOUNT_POINT, s_sd_card);
+        s_sd_card = NULL;
+        s_sd_mounted = false;
+        ESP_LOGI(TAG, "Unmounted previous MicroSD card.");
+    }
+
+    // 1. Pull-up nội cho các chân SPI để ổn định giao tiếp trên breadboard
+    gpio_set_pull_mode(SD_PIN_MISO, GPIO_PULLUP_ONLY);
+    gpio_set_pull_mode(SD_PIN_MOSI, GPIO_PULLUP_ONLY);
+    gpio_set_pull_mode(SD_PIN_CLK, GPIO_PULLUP_ONLY);
+    gpio_set_pull_mode(SD_PIN_CS, GPIO_PULLUP_ONLY);
+
+    sdmmc_host_t host = SDSPI_HOST_DEFAULT();
+    host.slot = SPI2_HOST;
+    host.max_freq_khz = 4000; // 4MHz cho breadboard
+
+    sdspi_device_config_t slot_config = SDSPI_DEVICE_CONFIG_DEFAULT();
+    slot_config.gpio_cs = SD_PIN_CS;
+    slot_config.host_id = SPI2_HOST;
+
+    esp_vfs_fat_sdmmc_mount_config_t mount_config = {
+        .format_if_mount_failed = false,
+        .max_files = 5,
+        .allocation_unit_size = 16 * 1024
+    };
+
+    esp_err_t ret = ESP_FAIL;
+    for (int retry = 1; retry <= 3; retry++) {
+        ESP_LOGI(TAG, "Attempting MicroSD mount (attempt %d/3, freq: %d kHz)...", retry, host.max_freq_khz);
+        ret = esp_vfs_fat_sdspi_mount(SDCARD_MOUNT_POINT, &host, &slot_config, &mount_config, &s_sd_card);
+        if (ret == ESP_OK) {
+            break;
+        }
+        vTaskDelay(pdMS_TO_TICKS(150));
+    }
+
+    if (ret == ESP_OK) {
+        s_sd_mounted = true;
+        ESP_LOGI(TAG, "MicroSD card mounted successfully at %s!", SDCARD_MOUNT_POINT);
+        mkdir("/sdcard/data", 0755);
+        mkdir(SD_TELEMETRY_DIR, 0755);
+        mkdir(SD_LOGS_DIR, 0755);
+    } else {
+        s_sd_mounted = false;
+        ESP_LOGW(TAG, "MicroSD mount failed (%s / 0x%x). System running with local SPIFFS fallback.",
+                 esp_err_to_name(ret), ret);
+        if (ret == ESP_ERR_TIMEOUT) {
+            ESP_LOGW(TAG, "HINT: 0x107 (TIMEOUT) usually means:\n"
+                          "  1. Card needs FAT32 format (Windows: Right-click -> Format -> File System: FAT32).\n"
+                          "  2. MicroSD module power: If module has 3.3V LDO (e.g. AMS1117 chip), connect VCC to 5V/VIN.\n"
+                          "  3. Check pin wiring: CS=10, MOSI=11, SCK/CLK=12, MISO=13.");
+        }
+    }
+
+    // Thông báo trạng thái SD lên Event Bus
+    sd_status_t *status = (sd_status_t *)malloc(sizeof(sd_status_t));
+    if (status) {
+        status->mounted = s_sd_mounted;
+        status->free_kb = s_sd_mounted ? 1000000 : 0;
+        status->total_kb = s_sd_mounted ? 2000000 : 0;
+        event_bus_post(EVT_SD_STATUS_CHANGED, status, sizeof(sd_status_t), false);
+    }
+
+    return ret;
+}
+
 void sd_logger_init(void)
 {
     ESP_LOGI(TAG, "Initializing MicroSD SPI2_HOST (CS=10, MOSI=11, CLK=12, MISO=13)...");
@@ -341,11 +412,6 @@ void sd_logger_init(void)
     if (s_sd_log_queue == NULL) {
         s_sd_log_queue = xQueueCreate(SD_QUEUE_DEPTH, sizeof(sd_log_item_t));
     }
-
-    // 1. Cấu hình phần cứng MicroSD qua SPI2_HOST
-    sdmmc_host_t host = SDSPI_HOST_DEFAULT();
-    host.slot = SPI2_HOST;
-    host.max_freq_khz = 20000;
 
     spi_bus_config_t bus_cfg = {
         .mosi_io_num = SD_PIN_MOSI,
@@ -361,36 +427,7 @@ void sd_logger_init(void)
         ESP_LOGW(TAG, "SPI bus initialize returned %s", esp_err_to_name(ret));
     }
 
-    sdspi_device_config_t slot_config = SDSPI_DEVICE_CONFIG_DEFAULT();
-    slot_config.gpio_cs = SD_PIN_CS;
-    slot_config.host_id = SPI2_HOST;
-
-    esp_vfs_fat_sdmmc_mount_config_t mount_config = {
-        .format_if_mount_failed = false,
-        .max_files = 5,
-        .allocation_unit_size = 16 * 1024
-    };
-
-    ret = esp_vfs_fat_sdspi_mount(SDCARD_MOUNT_POINT, &host, &slot_config, &mount_config, &s_sd_card);
-    if (ret == ESP_OK) {
-        s_sd_mounted = true;
-        ESP_LOGI(TAG, "MicroSD card mounted successfully at %s!", SDCARD_MOUNT_POINT);
-        mkdir(SD_TELEMETRY_DIR, 0755);
-        mkdir(SD_LOGS_DIR, 0755);
-    } else {
-        s_sd_mounted = false;
-        ESP_LOGW(TAG, "MicroSD card not detected at %s (%s). System running with local SPIFFS fallback.",
-                 SDCARD_MOUNT_POINT, esp_err_to_name(ret));
-    }
-
-    // Thông báo trạng thái SD lên Event Bus
-    sd_status_t *status = (sd_status_t *)malloc(sizeof(sd_status_t));
-    if (status) {
-        status->mounted = s_sd_mounted;
-        status->free_kb = s_sd_mounted ? 1000000 : 0;
-        status->total_kb = s_sd_mounted ? 2000000 : 0;
-        event_bus_post(EVT_SD_STATUS_CHANGED, status, sizeof(sd_status_t), false);
-    }
+    sd_logger_remount();
 
     // Đăng ký nhận sự kiện từ Event Bus
     event_bus_register_handler(EVT_BLE_DEVICE_DATA, on_ble_device_data);
