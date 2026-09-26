@@ -191,7 +191,10 @@ EXCEPTION
     WHEN duplicate_object THEN null;
 END $$;
 
+ALTER TABLE "Gateway" ALTER COLUMN "updatedAt" SET DEFAULT CURRENT_TIMESTAMP;
+ALTER TABLE "Schedule" ALTER COLUMN "updatedAt" SET DEFAULT CURRENT_TIMESTAMP;
+
 -- 5. Seed default Gateway for immediate pairing
-INSERT INTO "Gateway" ("id", "name", "status", "firmwareVersion", "timezone", "claimCode")
-VALUES ('gw_smartclock_01', 'Smart Clock Gateway 01', 'online', '1.6.0', 'ICT-7', 'CLAIM123')
+INSERT INTO "Gateway" ("id", "name", "status", "firmwareVersion", "timezone", "claimCode", "createdAt", "updatedAt")
+VALUES ('gw_smartclock_01', 'Smart Clock Gateway 01', 'online', '1.6.0', 'ICT-7', 'CLAIM123', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
 ON CONFLICT ("id") DO NOTHING;
