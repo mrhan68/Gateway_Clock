@@ -205,7 +205,7 @@ Smart Clock không phải là một IoT device đơn lẻ, mà là một **Gatew
 | M06 | Offline-first: hoạt động khi mất mạng | Gateway |
 | M07 | RTC giữ giờ khi mất điện | Gateway |
 | M08 | Cloud Sync: đồng bộ config + event log | Gateway + Backend |
-| M09 | Wi-Fi Provisioning: SoftAP + Captive Portal | Gateway |
+| M09 | Wi-Fi Provisioning: SoftAP WPA2 ("changeme"), Prompt OLED & One-shot RTC | Gateway |
 | M10 | REST API quản lý device, schedule, rule | Backend |
 | M11 | Web App: CRUD device, schedule, xem trạng thái | Web App |
 | M12 | Personal schedule/alarm: CRUD trên Web, kêu chuông tại Gateway | Gateway + Web App |
@@ -591,7 +591,7 @@ Nguồn giờ duy nhất của hệ thống. Sử dụng chip DS3231 (I2C) có p
 |---|---|---|
 | RTC-01 | Đọc giờ từ DS3231 khi boot | `rtc_init()` đọc I2C → `settimeofday()` |
 | RTC-02 | Cung cấp API giờ thống nhất | `rtc_get_time()` — toàn hệ thống chỉ gọi hàm này |
-| RTC-03 | Đồng bộ NTP khi có Wi-Fi | Handler `EVT_WIFI_CONNECTED` → `esp_sntp` → ghi lại DS3231 |
+| RTC-03 | Đồng bộ NTP 1 lần khi có Wi-Fi (One-shot) | Handler `EVT_WIFI_CONNECTED` → kích hoạt `esp_sntp` → ghi lại DS3231 → `esp_sntp_stop()`, để RTC tự chạy |
 | RTC-04 | Set timezone từ captive portal | `rtc_set_timezone(tz)` → `setenv("TZ", tz, 1); tzset()` |
 
 #### 4.2.2.1 Bảng Ánh Xạ Múi Giờ IANA (Web App / Browser) sang POSIX (ESP-IDF)
@@ -634,9 +634,9 @@ time_t rtc_get_time(void);
 // QUAN TRỌNG: Toàn bộ code PHẢI gọi hàm này, KHÔNG gọi time(NULL) trực tiếp
 
 bool rtc_sync_from_ntp_and_save(void);
-// Hành vi: esp_sntp đồng bộ (chế độ Smooth Slew) → ghi giờ mới vào DS3231
-// Trả về: true nếu đồng bộ thành công
-// Gọi khi: EVT_WIFI_CONNECTED handler
+// Hành vi: esp_sntp đồng bộ One-shot mốc giờ chuẩn Internet → ghi giờ mới vào DS3231 → esp_sntp_stop()
+// Trả về: true nếu đồng bộ và lưu thành công
+// Gọi khi: EVT_WIFI_CONNECTED handler (chỉ thực thi 1 lần duy nhất sau boot khi có mạng)
 
 bool rtc_is_valid(void);
 // Hành vi: Kiểm tra năm hiện tại có >= 2020 không (xác nhận giờ đã được set từ DS3231 hoặc NTP).
@@ -660,35 +660,37 @@ void rtc_set_timezone(const char *tz_string);
 | Clock speed | 400 kHz |
 | Pin backup | CR2032 (giữ giờ ~8 năm khi mất điện chính) |
 
-#### 4.2.5 Ràng buộc & Cơ chế Đồng Bộ Thời Gian Hybrid (Step vs Smooth Slew)
+#### 4.2.5 Ràng buộc & Cơ chế Đồng Bộ Thời Gian One-Shot NTP
 
 - **Mọi module** đọc thời gian dân dụng (Wall-clock Epoch) bắt buộc gọi `rtc_get_time()`, tuyệt đối không bao giờ gọi trực tiếp `time(NULL)`.
 - **Bảo vệ báo thức khi chưa có giờ (RTC Valid Guard):** Scheduler bắt buộc kiểm tra `rtc_is_valid()`. Nếu `false` (năm hệ thống < 2020) $\rightarrow$ tạm dừng kích hoạt các lịch hẹn/báo thức theo giờ để chống reo nhầm chuông lúc boot khi chưa có giờ mạng tin cậy. (Lưu ý: Các luật tự động của Rule Engine theo ngưỡng cảm biến nhiệt/ẩm vẫn hoạt động 100% độc lập với RTC).
-- **Cơ chế Đồng bộ Giờ Hybrid (Step Adjustment vs Smooth Slew):**
-  1. **Bước nhảy tức thời (Step Adjustment via `settimeofday()`):** Áp dụng khi độ lệch thời gian giữa RTC và NTP $|\Delta t| > 15\text{ phút}$ HOẶC khi hệ thống vừa khởi động mà `rtc_is_valid() == false`. Giúp hệ thống bắt kịp giờ chuẩn Internet ngay lập tức thay vì phải chờ hàng tuần nếu chỉ dùng slew.
-  2. **Trượt thời gian êm dịu (Smooth Slew via `adjtime()` / `SNTP_SYNC_MODE_SMOOTH`):** Áp dụng khi độ lệch thời gian $|\Delta t| \le 15\text{ phút}$. Tốc độ bù trôi tối đa $\pm 0.5\text{ms/s}$, bảo đảm thời gian trôi tịnh tiến liên tục, triệt tiêu nguy cơ nhảy lùi thời gian (Time Jump Backwards) làm đảo lộn chu kỳ log hoặc kích hoạt lại báo thức đã tắt.
-- **Chu kỳ đồng bộ NTP:** Thực hiện 1 lần ngay sau khi kết nối Wi-Fi thành công (`EVT_WIFI_CONNECTED`), sau đó định kỳ kiểm tra mỗi 6 giờ 1 lần. Mỗi lần đồng bộ thành công đều cập nhật lại thanh ghi phần cứng của chip ngoại vi DS3231.
+- **Cơ chế One-shot NTP Sync & Độc Lập Phần Cứng:**
+  1. Khi nhận sự kiện `EVT_WIFI_CONNECTED` và đã có địa chỉ IP Internet, Gateway kích hoạt SNTP client (`esp_sntp_init()`).
+  2. Ngay khi callback đồng bộ `time_sync_notification_cb` nhận được mốc thời gian chuẩn từ pool NTP (`pool.ntp.org` / `time.google.com`), hệ thống ghi ngay lập tức mốc giờ này vào thanh ghi ngoại vi DS3231 và gọi `settimeofday()`.
+  3. **Ngắt hoàn toàn SNTP client (`esp_sntp_stop()`):** Không duy trì polling định kỳ ngầm nhằm triệt tiêu 100% lưu lượng mạng UDP dư thừa, giải phóng socket, và tránh hiện tượng giật bước nhảy thời gian ảnh hưởng các timer bảo vệ rơ-le. Sau đó để phần cứng DS3231 (sai số $\pm 2\text{ppm}$, tích hợp pin dự phòng CR2032) tự chạy độc lập.
 
 #### 4.2.6 Verification Contract — Module RTC
 
-**Verification Contract — FR-RTC-01: Giữ giờ RTC khi mất điện & Cơ chế Hybrid NTP Slew/Step**
+**Verification Contract — FR-RTC-01: One-shot NTP Sync vào RTC DS3231 & Độc Lập Giữ Giờ Ngoại Tuyến**
 - **Tier:** target
-- **Preconditions:** DS3231 đã lắp pin CR2032 (điện áp ≥ 2.8V), đã đồng bộ giờ Internet chính xác (vd: 14:00:00).
+- **Preconditions:** DS3231 đã lắp pin CR2032 (điện áp $\ge 2.8\text{V}$); Gateway kết nối vào mạng Wi-Fi có kết nối Internet; máy chủ NTP phản hồi bình thường.
 - **Stimulus:**
-  1. Ngắt nguồn điện chính của Gateway trong 30 phút.
-  2. Cấp điện lại khi không có Wi-Fi (offline boot).
-  3. Kết nối Wi-Fi với máy chủ NTP: Trường hợp A giả lập lệch giờ 5 phút; Trường hợp B giả lập lệch giờ 2 giờ.
+  1. Khởi động Gateway và cho kết nối Wi-Fi Station thành công (`EVT_WIFI_CONNECTED`).
+  2. Quan sát tiến trình đồng bộ giờ Internet qua giao thức SNTP và quá trình ghi vào chip DS3231.
+  3. Theo dõi hệ thống trong 1 giờ tiếp theo và ngắt hoàn toàn kết nối Wi-Fi của router.
+  4. Ngắt nguồn chính Gateway trong 10 phút rồi cắm điện lại ở chế độ offline.
 - **Expected:**
-  1. Lúc khởi động offline, `rtc_init()` đọc I2C từ DS3231 thành công, thời gian hệ thống hiển thị 14:30:xx (sai số trôi giờ ≤ 1 giây).
-  2. `rtc_is_valid()` trả về `true`.
-  3. Trường hợp A (lệch ≤ 15m): Hệ thống kích hoạt Smooth Slew, giờ trôi êm dịu không nhảy lùi.
-  4. Trường hợp B (lệch > 15m): Hệ thống kích hoạt Step Adjustment, cập nhật ngay lập tức sang mốc giờ mới và ghi đè thanh ghi DS3231 thành công.
-- **Timing / tolerance:** Độ trôi RTC khi mất nguồn ≤ 2 ppm (~0.17 giây/ngày). Thời gian đọc I2C lúc boot ≤ 20ms.
-- **Prohibited:** Bị reset về Epoch 1970 khi mất điện; treo hệ thống khi NTP server không phản hồi; lạm dụng Step Adjustment khi độ lệch nhỏ (≤ 15m).
+  1. Khi nhận `EVT_WIFI_CONNECTED`: Khởi tạo `esp_sntp_init()`, lấy mốc giờ chuẩn UTC/ICT-7 thành công.
+  2. Callback `time_sync_notification_cb` ghi mốc thời gian chuẩn vào thanh ghi DS3231 và lập tức thực thi `esp_sntp_stop()`.
+  3. Trong suốt thời gian vận hành sau đó (và khi ngắt Wi-Fi): Tuyệt đối không phát sinh thêm bất kỳ gói tin UDP NTP nào ra mạng.
+  4. Sau khi ngắt nguồn 10 phút và boot offline: `rtc_init()` khôi phục giờ chính xác từ DS3231, `rtc_is_valid()` trả về `true`, thời gian khớp với giờ thực tế (độ lệch $\le 1\text{s}$).
+- **Timing / tolerance:** Độ trôi RTC DS3231 $\le 2\text{ppm}$ (~0.17 giây/ngày). Thời gian hoàn tất One-shot NTP sync $\le 10\text{s}$ từ lúc có Wi-Fi.
+- **Prohibited:** Duy trì tiến trình polling NTP định kỳ ngầm (gây lãng phí tài nguyên mạng và làm giật monotonic timer); xóa giờ về Epoch 1970 khi mất nguồn; treo hệ thống nếu NTP server không phản hồi.
 - **Operator instructions:**
-  1. Nạp firmware, kiểm tra serial log xác nhận `[RTC] Loaded time from DS3231: 2026-xx-xx`.
-  2. Rút cáp nguồn, đợi 5 phút, cắm lại cáp và đối chiếu giờ in ra terminal với đồng hồ điện thoại. Phải khớp từng phút.
-  3. Chạy test giả lập NTP bù giờ nhỏ và lớn, kiểm tra log `[RTC] Smooth slew applied` và `[RTC] Step adjustment applied`.
+  1. Nạp firmware, theo dõi Serial Monitor khi kết nối Wi-Fi.
+  2. Xác nhận log: `[RTC] NTP Time synchronized successfully`, `[RTC] Saved NTP synchronized time into DS3231`, và `[RTC] One-shot SNTP stopped. Hardware RTC now running independently`.
+  3. Dùng Wireshark hoặc router monitor kiểm tra: không có gói tin UDP 123 nào phát ra từ Gateway sau lần đồng bộ đầu tiên.
+  4. Rút nguồn 5 phút, cắm lại offline và xác nhận giờ hiển thị trên OLED chạy đúng giờ hiện tại.
 
 ---
 
@@ -810,75 +812,104 @@ Setup Wi-Fi lần đầu qua SoftAP + Captive Portal. Không cần mobile app �
 
 | ID | Chức năng | Mô tả |
 |---|---|---|
-| WP-01 | Kiểm tra NVS có Wi-Fi config | Boot → đọc NVS "wifi_cfg" |
-| WP-02 | Bật SoftAP nếu chưa config | AP name: "SmartClock-Setup", open network |
-| WP-03 | Captive Portal tự mở trên trình duyệt | DNS redirect tất cả domain → IP của ESP32 |
-| WP-04 | Form nhập SSID + Password + Timezone | Timezone tự lấy từ JS: `Intl.DateTimeFormat().resolvedOptions().timeZone` |
-| WP-05 | Lưu config vào NVS | Namespace "wifi_cfg", keys: ssid, password, timezone |
+| WP-01 | Kiểm tra NVS có Wi-Fi config | Boot → đọc NVS "wifi_cfg" (SSID, pass, softap_pass, danh sách Wi-Fi đã lưu `w_count`, `w_ssid_*`) |
+| WP-02 | SoftAP Thích Ứng (Open khi mới reset, WPA2-PSK khi đã cấu hình) | AP name: "SmartClock-Setup". Khi chưa cấu hình (xuất xưởng / sau factory reset): Chế độ `WIFI_AUTH_OPEN` (không mật khẩu) để kết nối tức thì. Khi truy cập web, bắt buộc yêu cầu người dùng thiết lập mật khẩu SoftAP mới trước, sau đó mới mở giao diện điều khiển. Khi đã có mật khẩu: SoftAP hoạt động ở chế độ `WIFI_AUTH_WPA2_PSK` |
+| WP-03 | Captive Portal tự mở trên trình duyệt | DNS redirect tất cả domain → IP của ESP32 (192.168.4.1); hiển thị màn hình cài đặt mật khẩu (nếu OPEN) hoặc mở thẳng Bảng điều khiển (nếu đã đặt mật khẩu) |
+| WP-04 | Giao diện Bảng Điều Khiển & Quản Lý Đa Mạng Wi-Fi (Saved Wi-Fi Manager) | Giao diện điều khiển hiển thị: (1) Danh sách các mạng Wi-Fi đã lưu trong NVS (tối đa 5 mạng), kèm trạng thái kết nối; (2) Chức năng Thêm mạng Wi-Fi mới (quét tự động hoặc nhập tay SSID + Password); (3) Sửa mật khẩu mạng đã lưu; (4) Xóa mạng khỏi danh sách; (5) Nút bấm chuyển kết nối ngay; (6) Điều khiển 4 kênh rơ-le và xem telemetry trực tiếp |
+| WP-05 | Lưu config vào NVS | Namespace "wifi_cfg" & "config_mgr": keys: `softap_pass`, `w_count`, `w_ssid_0..4`, `w_pass_0..4`, `timezone` |
 | WP-06 | Post events lên bus | `EVT_WIFI_CREDENTIALS_RECEIVED`, `EVT_WIFI_CONNECTED`, `EVT_WIFI_LOST` |
-| WP-07 | Force reset | Xóa NVS wifi_cfg, quay lại SoftAP (khi user giữ nút reset > 5s) |
+| WP-07 | Factory Reset NVS toàn diện | Giữ BTN_BOOT ≥ 5s (khi không có chuông) hoặc CLI/API: Xóa sạch danh sách Wi-Fi đã lưu và mật khẩu SoftAP trong NVS, SoftAP trở về `WIFI_AUTH_OPEN`, yêu cầu người dùng tạo mật khẩu mới ở lần truy cập tiếp theo |
+| WP-08 | SoftAP luôn bật (Concurrent AP+STA) | SoftAP duy trì phát sóng liên tục cả khi Station đã kết nối Wi-Fi nhà thành công, cho phép truy cập Local Dashboard và quản lý danh sách Wi-Fi tại 192.168.4.1 |
+| WP-09 | Điều Phối Vô Tuyến Coexistence Trong Provisioning | Khi SoftAP đang ở trạng thái cấu hình ban đầu (chưa kết nối Station), Gateway tạm dừng BLE scanner (`ble_adapter_pause_scan()`) để nhường 100% tài nguyên RF 2.4GHz cho SoftAP phát Beacon và bắt tay kết nối với điện thoại, triệt tiêu hiện tượng rụng sóng Wi-Fi |
+| WP-10 | Tối Ưu Hóa Captive Portal & Chống Nghẽn Socket | (1) DNS Server chỉ spoof IPv4 Type A và ANY với IP 192.168.4.1, trả về `NOERROR` với `ANCOUNT=0` cho IPv6 Type AAAA; (2) Web Server trả header `Connection: close` trên mọi phản hồi để giải phóng socket TCP ngay lập tức; (3) Tự động chuyển hướng HTTP 302 Redirect về `http://192.168.4.1/` cho các probe của Apple, Android, Windows |
 
 #### 4.4.3 API
 
 ```c
 void wifi_provisioning_init(void);
 // Hành vi:
-//   Đọc NVS "wifi_cfg"
-//   Nếu có → try_connect_saved_wifi()
-//   Nếu không → start_softap_captive_portal()
+//   Khởi tạo chế độ WIFI_MODE_APSTA (Concurrent AP+STA)
+//   Nếu NVS chưa có softap_pass (hoặc rỗng) → Bật SoftAP "SmartClock-Setup" ở chế độ WIFI_AUTH_OPEN (không mật khẩu)
+//   Nếu NVS đã có softap_pass → Bật SoftAP "SmartClock-Setup" với WPA2-PSK (mật khẩu người dùng đã đặt)
+//   Đọc NVS "wifi_cfg" / danh sách Wi-Fi đã lưu
+//   Nếu có mạng đã lưu → esp_wifi_connect() vào mạng ưu tiên
+//   Nếu không → hiển thị màn hình OLED Provisioning nhắc người dùng kết nối qua SoftAP
 
-void wifi_provisioning_force_reset(void);
-// Hành vi: Xóa NVS, bật lại SoftAP
+void wifi_provisioning_factory_reset(void);
+// Hành vi: Xóa toàn bộ NVS wifi_cfg và danh sách Wi-Fi đã lưu, đặt lại SoftAP về chế độ OPEN, reboot
 
 bool wifi_provisioning_is_configured(void);
 // Trả về: true nếu đã có SSID/password trong NVS
+
+bool wifi_provisioning_is_softap(void);
+// Trả về: true vì SoftAP luôn bật ở chế độ Concurrent AP+STA
 ```
 
-#### 4.4.4 Captive Portal Flow
+#### 4.4.4 Captive Portal & Dashboard Flow
 
 ```
-User                    ESP32 SoftAP              NVS        Event Bus
- │                         │                       │             │
- │── Kết nối WiFi ────────►│                       │             │
- │   "SmartClock-Setup"    │                       │             │
- │                         │── DNS redirect ──────►│             │
- │◄── Tự mở trình duyệt ──│   mọi domain          │             │
- │                         │   → 192.168.4.1       │             │
- │                         │                       │             │
- │── Nhập SSID, Pass ─────►│                       │             │
- │   (Timezone tự lấy      │                       │             │
- │    từ JS browser)       │                       │             │
- │                         │── Lưu NVS ───────────►│             │
- │                         │── Post ──────────────────────────► EVT_WIFI_CREDENTIALS_RECEIVED
- │                         │                       │             │  → rtc_set_timezone()
- │                         │── esp_wifi_connect()   │             │
- │                         │── Thành công ────────────────────► EVT_WIFI_CONNECTED
- │                         │                       │             │  → rtc_sync_ntp()
- │                         │                       │             │  → mqtt_connect()
-```
-
-#### 4.4.5 Captive Portal HTML Form
-
-```html
-<!-- Các field bắt buộc -->
-<input type="text"     name="ssid"     placeholder="Tên Wi-Fi" required>
-<input type="password" name="password" placeholder="Mật khẩu"  required>
-<input type="hidden"   name="timezone" id="timezone">
-
-<script>
-  // Tự lấy timezone khi trang load — không cần API ngoài
-  document.getElementById('timezone').value =
-      Intl.DateTimeFormat().resolvedOptions().timeZone;
-</script>
+User (Phone/PC)               ESP32 SoftAP                Web Server & NVS
+  │                                │                             │
+  │── Kết nối SoftAP OPEN ────────►│ (Chưa có mật khẩu)          │
+  │   "SmartClock-Setup"           │                             │
+  │                                │                             │
+  │── Truy cập http://192.168.4.1 ─►│── Kiểm tra softap_pass ────►│
+  │                                │   Chưa có mật khẩu          │
+  │◄── Màn hình Đặt Mật Khẩu Mới ──│◄────────────────────────────│
+  │    (Bắt buộc >= 8 ký tự)       │                             │
+  │                                │                             │
+  │── Nhập mật khẩu SoftAP mới ───►│── Lưu NVS & nâng WPA2 ─────►│
+  │                                │                             │
+  │◄── MỞ BẢNG ĐIỀU KHIỂN CHÍNH ───│◄────────────────────────────│
+  │    (Quản lý Wi-Fi đã lưu,      │                             │
+  │     Thêm / Sửa / Xóa Wi-Fi,    │                             │
+  │     Điều khiển Rơ-le, Status)  │                             │
 ```
 
 #### 4.4.6 NVS Storage
 
-| Namespace | Key | Type | Ví dụ |
-|---|---|---|---|
-| `wifi_cfg` | `ssid` | string (max 33) | `"MyHomeWiFi"` |
-| `wifi_cfg` | `password` | string (max 65) | `"secret123"` |
-| `wifi_cfg` | `timezone` | string (max 64) | `"ICT-7"` |
+| Namespace | Key | Type | Giá trị mặc định / Ví dụ | Mô tả |
+|---|---|---|---|---|
+| `wifi_cfg` | `ssid` | string (max 33) | `""` (Rỗng khi xuất xưởng) | Tên Wi-Fi Station đang kết nối hiện tại |
+| `wifi_cfg` | `password` | string (max 65) | `""` (Rỗng khi xuất xưởng) | Mật khẩu Wi-Fi Station hiện tại |
+| `wifi_cfg` | `timezone` | string (max 64) | `"ICT-7"` | Chuỗi định dạng múi giờ POSIX |
+| `wifi_cfg` | `softap_pass` | string (max 65) | `""` (Rỗng ban đầu, WPA2 khi người dùng đặt) | Mật khẩu SoftAP Gateway |
+| `wifi_cfg` | `w_count` | uint8_t (max 5) | `0` | Số lượng mạng Wi-Fi đã lưu |
+| `wifi_cfg` | `w_ssid_0..4` | string (max 33) | `""` | Tên các SSID đã lưu |
+| `wifi_cfg` | `w_pass_0..4` | string (max 65) | `""` | Mật khẩu tương ứng các SSID đã lưu |
+
+#### 4.4.7 Verification Contract — Wi-Fi Provisioning & SoftAP Lifecycle
+
+**Verification Contract — FR-WIFI-01: SoftAP Thích Ứng (Open khi mới reset, bắt buộc đặt mật khẩu trước khi mở Bảng Điều Khiển & Quản lý Wi-Fi đã lưu)**
+- **Tier:** target
+- **Preconditions:** Gateway đã nạp firmware mới; NVS ở trạng thái mặc định (chưa cấu hình); router Wi-Fi 2.4GHz đang phát sóng thử nghiệm.
+- **Stimulus:**
+  1. Khởi động Gateway lần đầu (hoặc sau Factory Reset): Dùng điện thoại/laptop kết nối vào SoftAP `SmartClock-Setup` (OPEN, không mật khẩu).
+  2. Mở trình duyệt truy cập `http://192.168.4.1/`: Quan sát màn hình bắt buộc thiết lập mật khẩu SoftAP mới (chưa cho phép vào thẳng Dashboard).
+  3. Nhập mật khẩu SoftAP mới ($\ge 8$ ký tự, VD: `Admin@12345`) và bấm xác nhận.
+  4. Hệ thống lưu mật khẩu, nâng cấp SoftAP sang WPA2-PSK và mở ngay Giao diện Điều Khiển (Dashboard).
+  5. Trong Bảng điều khiển:
+     - Quan sát danh sách Wi-Fi đã lưu (ban đầu trống).
+     - Thực hiện Thêm mạng Wi-Fi: bấm quét mạng (hoặc nhập SSID/Password), bấm Lưu & Kết nối.
+     - Kiểm tra mạng vừa thêm xuất hiện trong danh sách đã lưu.
+     - Thực hiện Sửa mật khẩu hoặc Xóa mạng khỏi danh sách.
+  6. Nhấn giữ Nút 1 (`BTN_BOOT` / GPIO 0) liên tục trong $\ge 5\text{s}$ khi còi không reo (hoặc gửi CLI `system factory-reset`).
+- **Expected:**
+  1. Khi chưa có mật khẩu: SoftAP phát `WIFI_AUTH_OPEN`, cấp IP DHCP $\le 2\text{s}$. Truy cập web hiện form đặt mật khẩu SoftAP đầu tiên. BLE scanner tạm dừng (`ble_adapter_pause_scan()`) để bảo đảm 100% tài nguyên RF cho SoftAP, không rụng beacon.
+  2. DNS Server phản hồi hợp lệ cho Type A/ANY, trả về `NOERROR` rỗng cho IPv6 AAAA. Mọi phản hồi HTTP mang header `Connection: close` tránh nghẽn socket. Các URL probe của hệ điều hành được chuyển hướng 302 về `http://192.168.4.1/`.
+  3. Không cho phép xem cấu hình hay điều khiển thiết bị nếu chưa đặt mật khẩu SoftAP mới.
+  4. Sau khi đặt mật khẩu: Mở Giao diện Điều khiển đầy đủ tính năng; danh sách Wi-Fi hỗ trợ Thêm, Sửa, Xóa và Kết nối tức thì (lưu tối đa 5 mạng vào NVS).
+  5. Sau khi kết nối Station thành công: BLE scanner tự động kích hoạt lại với 30% Duty Cycle (100ms itvl, 30ms window) hoạt động đồng thời 24/7 với Wi-Fi.
+  6. Lần khởi động hoặc kết nối lại tiếp theo: SoftAP yêu cầu mật khẩu WPA2-PSK đã đặt mới cho phép kết nối.
+  7. Khi giữ nút $\ge 5\text{s}$: Xóa sạch danh sách Wi-Fi và mật khẩu SoftAP trong NVS; SoftAP trở về chế độ `OPEN` và quy trình lặp lại an toàn.
+- **Timing / tolerance:** Thời gian nhận diện giữ nút reset: $5.0 \pm 0.5\text{s}$. Thời gian tải trang web $\le 100\text{ms}$.
+- **Prohibited:** Cho phép vào giao diện điều khiển khi chưa đặt mật khẩu SoftAP; mất danh sách Wi-Fi đã lưu sau khi reboot thông thường; BLE chiếm dụng sóng làm rớt SoftAP trong lúc cấu hình.
+- **Operator instructions:**
+  1. Kết nối Wi-Fi `SmartClock-Setup` (OPEN).
+  2. Mở `http://192.168.4.1`, nhập mật khẩu SoftAP mới (tối thiểu 8 ký tự), bấm Lưu.
+  3. Trang web tự động mở Bảng Điều Khiển: thêm mạng Wi-Fi nhà bạn, kiểm tra trạng thái kết nối.
+  4. Thử tính năng sửa mật khẩu hoặc xóa mạng trong danh sách Wi-Fi đã lưu.
+  5. Quan sát log serial xác nhận BLE scan kích hoạt lại với 30% duty cycle sau khi Wi-Fi kết nối.
 
 ---
 
@@ -892,7 +923,7 @@ Chịu trách nhiệm quét thụ động liên tục (Passive BLE Advertisement
 | ID | Chức năng | Mô tả |
 |---|---|---|
 | BA-01 | Quản lý danh sách cảm biến BLE | Tra cứu `s_known_devices[]`, nạp từ `/storage/device_list.json` lúc boot; tự động cập nhật lại whitelist khi nhận `EVT_CONFIG_UPDATED_FROM_CLOUD` (cờ `CONFIG_TYPE_DEVICES`) |
-| BA-02 | Passive Scan Advertisement | `ble_scan_task` (Core 0, priority 5), quét thụ động liên tục với Software Coexistence (50% Duty Cycle) |
+| BA-02 | Passive Scan Advertisement & Coexistence | `ble_scan_task` (Core 0, priority 5), quét thụ động với Software Coexistence Time-Slicing chuẩn (30% BLE Duty Cycle: itvl=160 (100ms), window=48 (30ms)); hỗ trợ tạm dừng khi SoftAP đang Provisioning |
 | BA-03 | Lọc trùng & Post Telemetry | Lọc trùng phần mềm (Software Dedupe Window); đẩy `EVT_BLE_DEVICE_DATA` với `ble_telemetry_t*` (temp, hum, batt, valid, ts) |
 | BA-04 | Phát hiện cảm biến offline | Không nhận beacon sau **60 giây** → post `EVT_DEVICE_OFFLINE_ALERT`. Tuyệt đối cố định 60s cho cảm biến sưởi, không nới lỏng |
 | BA-05 | Báo cáo nhịp tim Supervisor | Định kỳ 1000ms gọi `supervisor_report_heartbeat(TASK_HEARTBEAT_BLE)` |
@@ -910,6 +941,12 @@ void ble_adapter_reload_whitelist(void);
 
 void ble_adapter_register_device(const char *device_id, const char *mac_address);
 // Hành vi: Thêm cảm biến vào bảng theo dõi (tối đa 16 thiết bị)
+
+void ble_adapter_pause_scan(void);
+// Hành vi: Tạm dừng quét BLE để nhường 100% tài nguyên RF 2.4GHz cho Wi-Fi Provisioning
+
+void ble_adapter_resume_scan(void);
+// Hành vi: Kích hoạt lại quét BLE với chu kỳ 30% Duty Cycle sau khi Wi-Fi đã kết nối
 ```
 
 #### 4.5.4 BLE Advertisement Processing Flow
@@ -951,10 +988,11 @@ ble_scan_task (vòng lặp chu kỳ 1000ms)
 
 #### 4.5.5 Cấu hình NimBLE Link-layer & Bộ lọc trùng phần mềm (Software Dedupe Window)
 
-1. **Cấu hình NimBLE Link-layer:**
+1. **Cấu hình NimBLE Link-layer & Coexistence:**
    - **Tắt lọc trùng phần cứng của Controller:** `disc_params.filter_duplicates = 0`.
      - *Lý do kỹ thuật bắt buộc:* Nếu bật `filter_duplicates = 1`, phần cứng BLE controller sẽ âm thầm vứt bỏ toàn bộ các gói tin phát lại định kỳ của cảm biến sau lần nhận đầu tiên, khiến hệ thống hiểu nhầm cảm biến bị chết sau 60 giây. Bắt buộc để `filter_duplicates = 0` để nhận các beacon lặp lại.
-   - **Software Coexistence:** Tỷ lệ **50% Duty Cycle** (`scan_interval = 60ms`, `scan_window = 30ms`), bảo đảm không gây nghẽn kết nối Wi-Fi.
+   - **Software Coexistence Time-Slicing chuẩn:** Tỷ lệ **30% Duty Cycle** (`scan_interval = 160` (100ms), `scan_window = 48` (30ms)), bảo đảm 70% thời gian vô tuyến cho Wi-Fi truyền nhận MQTT và giữ kết nối router không gián đoạn.
+   - **Ưu tiên Vô Tuyến Cho Provisioning:** Khi Gateway đang ở trạng thái SoftAP chờ cấu hình Wi-Fi ban đầu, BLE scanner tự động tạm dừng (`ble_adapter_pause_scan()`) để SoftAP phát Beacon 100 TU liên tục, giúp điện thoại kết nối tức thì và không bị rụng sóng. Khi đã kết nối Wi-Fi thành công, scanner tự động kích hoạt lại với 30% Duty Cycle.
 2. **Bộ lọc trùng phần mềm (Software Dedupe Window):**
    - Lưu trữ `last_payload_hash` (hoặc packet counter) và `last_processed_mono_us` cho từng MAC trong whitelist.
    - Nếu gói tin trùng lặp 100% trong vòng **5 giây** $\rightarrow$ drop ngay tại chỗ để chống bão Event Bus.
@@ -1420,12 +1458,13 @@ OLED SSD1327 + nút bấm + buzzer. Module hiển thị dữ liệu từ hệ th
 
 | ID | Chức năng | Mô tả |
 |---|---|---|
-| DI-01 | Hiển thị 3 màn hình luân phiên | Clock/Temp ↔ Upcoming Event ↔ Device Status |
+| DI-01 | Hiển thị các màn hình luân phiên | Clock/Temp ↔ Upcoming Event ↔ Device Status (kèm icon trạng thái SoftAP/STA) |
 | DI-02 | Auto-refresh clock mỗi giây | `display_task` gọi `display_render()` trực tiếp |
-| DI-03 | Chuyển màn hình khi bấm nút | Handler `EVT_BUTTON_SCREEN_NEXT` |
+| DI-03 | Chuyển màn hình khi bấm nút | Handler `EVT_BUTTON_SCREEN_NEXT` (Nút 2 / GPIO 4) |
 | DI-04 | Hiển thị báo thức + bật buzzer | Handler `EVT_SCHEDULE_ALARM_TRIGGERED` |
 | DI-05 | Tắt / Snooze báo thức | Xử lý Direct-to-Task ISR, tắt buzzer và post `EVT_BUTTON_ALARM_STOP` |
 | DI-06 | Cập nhật khi module khác yêu cầu | Handler `EVT_DISPLAY_UPDATE_REQUEST` |
+| DI-07 | Hiển thị màn hình Provisioning | Tự động kích hoạt khi chưa có Wi-Fi Station hoặc sau Factory Reset: Hiển thị SSID SoftAP, Mật khẩu "changeme", IP 192.168.4.1 |
 
 #### 4.9.3 Màn hình OLED
 
@@ -1438,14 +1477,22 @@ Screen 0: CLOCK_TEMP               Screen 1: UPCOMING_EVENT
 │  ● Wi-Fi  ● MQTT  │             │                    │
 └────────────────────┘             └────────────────────┘
 
-Screen 2: DEVICE_STATUS             Screen ALARM (overlay):
+Screen 2: DEVICE_STATUS             Screen PROVISIONING (Chưa có Wi-Fi):
 ┌────────────────────┐             ┌────────────────────┐
-│  Thiết bị:         │             │    ⚠️ BÁO THỨC     │
-│  💡 Đèn phòng  ON  │             │                    │
-│  🌡 Sensor    28.5°│             │    06:30           │
-│  🔌 Quạt     OFF  │             │   Dậy đi học       │
-└────────────────────┘             │  [Bấm nút tắt]    │
-                                   └────────────────────┘
+│  Thiết bị:         │             │   ⚙️ WI-FI SETUP   │
+│  💡 Đèn phòng  ON  │             │ AP: SmartClock-AP  │
+│  🌡 Sensor    28.5°│             │ Pass: changeme     │
+│  🔌 Quạt     OFF  │             │ IP: 192.168.4.1    │
+└────────────────────┘             └────────────────────┘
+
+Screen ALARM (overlay):
+┌────────────────────┐
+│    ⚠️ BÁO THỨC     │
+│                    │
+│    06:30           │
+│   Dậy đi học       │
+│  [Bấm nút tắt]    │
+└────────────────────┘
 ```
 
 #### 4.9.4 Nút bấm GPIO & Trải nghiệm người dùng (UX)
@@ -1454,8 +1501,8 @@ Hệ thống trang bị 2 nút bấm vật lý với hành vi phân định rõ 
 
 | Nút bấm | Chân GPIO | Hành vi khi chuông báo thức đang kêu | Hành vi khi hoạt động bình thường |
 |---|:---:|---|---|
-| **Nút 1 (`BTN_BOOT`)** | **GPIO 0** | **Nhấn nhanh (< 2s): SNOOZE (+9 phút)**<br>Còi tắt ngay, OLED hiển thị `SNOOZE 9m`, Scheduler tự kích hoạt reo lại sau đúng 9 phút. | **Nhấn giữ ≥ 5s: Reset Wi-Fi SoftAP**<br>Xóa cấu hình Wi-Fi trong NVS và mở lại Captive Portal. (Chỉ cho phép khi chuông KHÔNG kêu). |
-| **Nút 2 (`BTN_SCREEN_NEXT`)** | **GPIO 4** | **Nhấn nhanh (< 500ms): TẮT CHUÔNG NGAY (DISMISS)**<br>Còi tắt ngay lập tức, tắt chuông triệt để, OLED trở về màn hình chính, post `EVT_BUTTON_ALARM_STOP`. | **Nhấn nhanh (< 500ms): Chuyển màn hình OLED**<br>Luân phiên: Đồng hồ ↔ Lịch biểu ↔ Trạng thái Rơ-le ↔ Thông tin hệ thống (Mã Claim). |
+| **Nút 1 (`BTN_BOOT`)** | **GPIO 0** | **Nhấn nhanh (< 2s): SNOOZE (+9 phút)**<br>Còi tắt ngay, OLED hiển thị `SNOOZE 9m`, Scheduler tự kích hoạt reo lại sau đúng 9 phút. (Khóa an toàn: Giữ nút khi chuông reo KHÔNG BAO GIỜ kích hoạt Factory Reset). | **Nhấn giữ ≥ 5s: Factory Reset NVS**<br>Xóa sạch cấu hình Wi-Fi, reset mật khẩu SoftAP về `changeme` và reboot. (Chỉ cho phép khi chuông KHÔNG kêu). |
+| **Nút 2 (`BTN_SCREEN_NEXT`)** | **GPIO 4** | **Nhấn nhanh (< 500ms): TẮT CHUÔNG NGAY (DISMISS)**<br>Còi tắt ngay lập tức, tắt chuông triệt để, OLED trở về màn hình chính, post `EVT_BUTTON_ALARM_STOP`. | **Nhấn nhanh (< 500ms): Chuyển màn hình OLED**<br>Luân phiên: Đồng hồ ↔ Lịch biểu ↔ Trạng thái Rơ-le ↔ Cài đặt Wi-Fi Provisioning. |
 
 > **Ưu điểm thiết kế chống nhầm lẫn:**
 > - Tắt chuông hoàn toàn chỉ cần 1 cú click nhanh (< 500ms) vào Nút 2 (`GPIO 4`), khớp tuyệt đối với tiêu chí nghiệm thu **M13** và **UC-04**.
@@ -1497,23 +1544,48 @@ void display_handle_alarm_button_press(bool is_dismiss) {
 | Buzzer | Passive buzzer | GPIO PWM (LEDC) | Cho báo thức |
 | Nút bấm | Mechanical switch | GPIO + ngắt cạnh xuống | Có debounce phần cứng hoặc software |
 
-#### 4.9.7 Verification Contract — Display & Buttons
+#### 4.9.7 Verification Contracts — Display & User Interaction
 
-**Verification Contract — FR-DISP-01: Phản hồi nút bấm ngắt còi báo thức < 500ms (Direct-to-Task ISR)**
+**Verification Contract — FR-DISP-01: Phản hồi nút bấm ngắt còi báo thức < 500ms & Khóa an toàn nút Reset**
 - **Tier:** target
 - **Preconditions:** Gateway đang trong trạng thái kích hoạt báo thức (`s_alarm_active == true`, còi buzzer kêu ngắt quãng 2.7kHz, màn hình OLED SSD1327 hiển thị overlay `ALARM`).
 - **Stimulus:**
   1. Nhấn Nút 1 (`BTN_BOOT` / GPIO 0) nhanh < 2 giây.
   2. Kích hoạt báo thức lại, sau đó nhấn Nút 2 (`BTN_SCREEN_NEXT` / GPIO 4) nhanh < 500ms.
+  3. Cố tình nhấn giữ Nút 1 (`BTN_BOOT` / GPIO 0) quá 5 giây trong lúc chuông đang reo.
 - **Expected:**
   1. Khi nhấn Nút 1 (GPIO 0): Còi buzzer ngừng kêu ngay lập tức; màn hình OLED hiển thị `SNOOZE 9m`; Scheduler tự động dời chuông sau 9 phút. Cấu hình Wi-Fi NVS không bị xóa.
   2. Khi nhấn Nút 2 (GPIO 4): Direct-to-Task Notification (`vTaskNotifyGiveFromISR`) gửi thẳng đến `display_task`, còi buzzer tắt hoàn toàn trong thời gian $\le 500\text{ms}$; OLED trở về màn hình chính; ghi bản tin nhật ký `alarm_stopped`.
+  3. Khi giữ Nút 1 $\ge 5\text{s}$ lúc chuông đang reo: Cơ chế an toàn chặn hoàn toàn lệnh Factory Reset; chỉ thực hiện Snooze báo thức, bảo vệ an toàn cấu hình Wi-Fi của người dùng.
 - **Timing / tolerance:** Thời gian trễ từ thời điểm nhấn Nút 2 đến khi còi câm $\le 500\text{ms}$ (đáp ứng nghiệm thu M13 và UC-04).
 - **Prohibited:** Nút bấm bị lag/đơ do Event Bus bị đầy; người dùng bấm tắt chuông nhưng vô tình xóa Wi-Fi; còi tiếp tục kêu sau khi bấm nút.
 - **Operator instructions:**
   1. Dùng lệnh CLI đặt báo thức thử: `schedule add 99 alarm 12:00`.
   2. Đặt giờ giả lập hoặc đợi chuông reo: xác nhận còi kêu và OLED hiển thị overlay ALARM.
-  3. Bấm Nút 2 (GPIO 4): Xác nhận còi tắt tức thì, màn hình hiển thị bình thường.
+  3. Khi chuông kêu, nhấn giữ Nút 1 trong 6 giây. Xác nhận còi tắt, vào chế độ Snooze, cấu hình Wi-Fi vẫn nguyên vẹn.
+  4. Bấm Nút 2 (GPIO 4): Xác nhận còi tắt tức thì, màn hình hiển thị bình thường.
+
+**Verification Contract — FR-DISP-02: Màn hình OLED Provisioning & Prompt khi chưa kết nối Wi-Fi**
+- **Tier:** target
+- **Preconditions:** Gateway ở trạng thái chưa cấu hình Wi-Fi (`wifi_provisioning_is_configured() == false`) hoặc mất kết nối Wi-Fi Station (`s_is_connected == false`).
+- **Stimulus:**
+  1. Cấp nguồn Gateway khi NVS chưa có Wi-Fi hoặc sau khi vừa Factory Reset.
+  2. Bấm Nút 2 (`BTN_SCREEN_NEXT` / GPIO 4) để luân chuyển màn hình.
+  3. Nhập Wi-Fi hợp lệ qua Captive Portal để Station kết nối thành công.
+- **Expected:**
+  1. Ngay khi boot chưa có Wi-Fi, màn hình OLED tự động hiển thị trang Provisioning:
+     * Dòng tiêu đề: `WI-FI SETUP`
+     * Thông số SoftAP: SSID `SmartClock-Setup`, Pass `changeme`
+     * Hướng dẫn truy cập: `192.168.4.1`
+  2. Khi bấm Nút 2: Màn hình cho phép chuyển luân phiên sang xem `CLOCK/TEMP` hoặc `DEVICE STATUS`, nhưng biểu tượng mạng hiển thị rõ `◐ AP` (SoftAP đang chờ cấu hình).
+  3. Khi Wi-Fi Station kết nối thành công (`EVT_WIFI_CONNECTED`): Màn hình OLED tự động thoát trang Provisioning, chuyển sang màn hình chính `CLOCK/TEMP` với biểu tượng Wi-Fi sáng `● OK`.
+- **Timing / tolerance:** Thời gian chuyển đổi giao diện khi nhận sự kiện mạng $\le 300\text{ms}$.
+- **Prohibited:** Màn hình để trống (blank screen) khi chưa có mạng; không hiển thị mật khẩu SoftAP khiến người dùng không biết cách kết nối; đơ giao diện khi bấm nút chuyển trang.
+- **Operator instructions:**
+  1. Reset cấu hình Wi-Fi bằng cách giữ nút BOOT 5s.
+  2. Quan sát màn hình OLED SSD1327: xác nhận xuất hiện giao diện `WI-FI SETUP` với đầy đủ SSID, Password `changeme`, IP `192.168.4.1`.
+  3. Bấm Nút 2 để kiểm tra luân chuyển trang mượt mà.
+  4. Kết nối Wi-Fi cho Gateway qua điện thoại và kiểm tra màn hình OLED tự động chuyển sang hiển thị đồng hồ bình thường.
 
 ---
 
@@ -3186,7 +3258,7 @@ Bảng tiêu chí nghiệm thu dưới đây map từng tính năng Must-have (M
 | M06 | Offline-first: hoạt động khi mất mạng | UC-05 | Ngắt Internet → scheduler vẫn trigger đúng giờ, rule engine vẫn đánh giá BLE telemetry, event log và telemetry ghi vào thẻ nhớ SD | Hệ thống treo/reboot khi mất mạng, hoặc scheduler ngừng hoạt động |
 | M07 | RTC giữ giờ khi mất điện | UC-05 | Rút điện 5 phút → cắm lại → OLED hiển thị đúng giờ (± 2 phút, không cần NTP) | Giờ reset về epoch 0 hoặc sai > 5 phút sau khi mất điện |
 | M08 | Cloud Sync: đồng bộ config + event log | UC-06 | Bật Internet → Gateway tự nhận schedule/device_list mới từ MQTT retained config + push dữ liệu bù từ MicroSD qua `gateway/{id}/telemetry/batch`. Backend nhận đủ dữ liệu | Sync không chạy khi có mạng, hoặc config mới không được apply, hoặc dữ liệu bị mất |
-| M09 | Wi-Fi Provisioning: SoftAP + Captive Portal | UC-01 | Bật Gateway mới → xuất hiện AP "SmartClock-Setup" → kết nối → captive portal tự mở → nhập SSID/password → Gateway kết nối Wi-Fi thành công | AP không xuất hiện, captive portal không mở, hoặc Wi-Fi connect fail sau khi nhập đúng credentials |
+| M09 | Wi-Fi Provisioning: SoftAP WPA2 + Captive Portal & One-shot RTC | UC-01 | Bật Gateway mới → OLED hiển thị "WI-FI SETUP" với AP "SmartClock-Setup" và mật khẩu "changeme" → kết nối SoftAP WPA2-PSK → captive portal tự mở → nhập SSID/password → Gateway kết nối Wi-Fi thành công, đồng bộ NTP đúng 1 lần vào RTC DS3231, SoftAP vẫn duy trì phát sóng | AP không xuất hiện, sai mật khẩu mặc định "changeme", captive portal không mở, hoặc Wi-Fi connect fail sau khi nhập đúng credentials |
 | M10 | REST API quản lý device, schedule, rule | UC-02, UC-03, UC-04 | Tất cả endpoint CRUD (GET/POST/PUT/DELETE) cho device, schedule, rule hoạt động đúng. Response 200/201 cho success, 4xx cho lỗi client | Endpoint trả 500 cho request hợp lệ, hoặc không trả response |
 | M11 | Web App: CRUD device, schedule, xem trạng thái | UC-02, UC-03, UC-04 | Web App hiển thị danh sách device/schedule/rule. Thêm/sửa/xóa hoạt động. Trạng thái device (online/offline) cập nhật | UI không load, CRUD fail, hoặc trạng thái không đồng bộ với thực tế |
 | M12 | Personal schedule/alarm: CRUD + kêu chuông | UC-04 | Tạo personal_event "14:00 Họp nhóm" với `date: 2026-08-20` trên Web. Đến ngày giờ đó → OLED hiển thị + buzzer (nếu bật). Tạo alarm lặp T2-T6 → trigger đúng các ngày | Personal event không hiển thị trên OLED, hoặc alarm không trigger đúng ngày lặp |

@@ -17,6 +17,8 @@
 #include "mqtt_adapter.h"
 #include "relay_controller.h"
 #include "scheduler.h"
+#include "rule_engine.h"
+#include "config_manager.h"
 #include "font5x7.h"
 
 static const char *TAG = "DISPLAY";
@@ -400,7 +402,18 @@ void display_render(void)
                     snprintf(buf, sizeof(buf), "R4 Aux:  %s", r4 ? "ON " : "OFF");
                     ssd1327_draw_string(6, 80, buf, r4 ? 0xF : 0x7, 1);
                     ssd1327_draw_hline(0, 98, 128, 0x4);
-                    ssd1327_draw_string(6, 108, "[SCREEN 2/3]", 0x8, 1);
+                    ssd1327_draw_string(6, 108, "[SCREEN 2/4]", 0x8, 1);
+                    break;
+                }
+
+                case DISPLAY_SCREEN_PROVISIONING: {
+                    ssd1327_draw_string(14, 6, "WI-FI SETUP", 0xF, 1);
+                    ssd1327_draw_hline(0, 18, 128, 0x6);
+                    ssd1327_draw_string(6, 32, "AP: SmartClock-Setup", 0xE, 1);
+                    ssd1327_draw_string(6, 52, "IP: 192.168.4.1", 0xF, 1);
+                    ssd1327_draw_hline(0, 74, 128, 0x4);
+                    ssd1327_draw_string(6, 88, "Connect & setup via", 0xA, 1);
+                    ssd1327_draw_string(6, 104, "192.168.4.1 portal", 0x8, 1);
                     break;
                 }
 
@@ -473,6 +486,17 @@ void display_render(void)
             break;
         }
 
+        case DISPLAY_SCREEN_PROVISIONING: {
+            printf("\n┌──────────────────────────────────────────────┐\n");
+            printf("│ [MÀN HÌNH PROVISIONING: THIẾT LẬP WI-FI]      │\n");
+            printf("│ Tiêu đề    : WI-FI SETUP                     │\n");
+            printf("│ SoftAP SSID: SmartClock-Setup                │\n");
+            printf("│ IP truy cập: 192.168.4.1                     │\n");
+            printf("│ Trạng thái : ◐ AP (Đang chờ cấu hình)        │\n");
+            printf("└──────────────────────────────────────────────┘\n");
+            break;
+        }
+
         default:
             s_current_screen = DISPLAY_SCREEN_CLOCK_TEMP;
             break;
@@ -506,19 +530,32 @@ static void display_task(void *pvParameters)
                     ESP_LOGI(TAG, "Button 1 pressed during alarm -> SNOOZE 9m");
                     display_snooze_alarm(9);
                 } else {
-                    // Khi bình thường: kiểm tra nhấn giữ >= 5s để Reset Wi-Fi
+                    // Khi bình thường: kiểm tra nhấn giữ >= 5s (5000ms) để Factory Reset toàn diện
                     vTaskDelay(pdMS_TO_TICKS(100));
                     if (gpio_get_level(DISPLAY_BTN_BOOT_GPIO) == 0) {
-                        ESP_LOGI(TAG, "BTN_BOOT pressed. Checking if held for 5s...");
+                        ESP_LOGI(TAG, "BTN_BOOT pressed. Checking if held continuously for 5s...");
                         int count_sec = 0;
                         while (gpio_get_level(DISPLAY_BTN_BOOT_GPIO) == 0 && count_sec < 50) {
                             vTaskDelay(pdMS_TO_TICKS(100));
                             count_sec++;
+                            supervisor_report_heartbeat(TASK_HEARTBEAT_DISPLAY);
                         }
                         if (count_sec >= 50) {
-                            ESP_LOGW(TAG, "BTN_BOOT held >= 5s! Resetting Wi-Fi to SoftAP 'SmartClock-Setup'...");
+                            ESP_LOGW(TAG, "BTN_BOOT held >= 5s! Factory Reset: Wiping all user data, Wi-Fi credentials, rules, and schedules...");
+                            buzzer_start();
+                            vTaskDelay(pdMS_TO_TICKS(400));
+                            buzzer_stop();
+
+                            rule_engine_clear_rules();
+                            scheduler_clear_entries();
                             wifi_provisioning_force_reset();
+
+                            s_current_screen = DISPLAY_SCREEN_PROVISIONING;
+                            display_render();
                             event_bus_post(EVT_WIFI_PROVISIONING_STARTED, NULL, 0, false);
+                            ESP_LOGI(TAG, "[FACTORY_RESET] Completed. All personal data erased. SoftAP OPEN ready.");
+                        } else {
+                            ESP_LOGI(TAG, "BTN_BOOT released early (%d ms). Factory Reset aborted.", count_sec * 100);
                         }
                     }
                 }
@@ -613,6 +650,26 @@ static void on_relay_state_changed(const gateway_event_t *evt)
     }
 }
 
+static void on_wifi_connected_display(const gateway_event_t *evt)
+{
+    (void)evt;
+    if (s_current_screen == DISPLAY_SCREEN_PROVISIONING) {
+        ESP_LOGI(TAG, "Wi-Fi Station connected -> Auto-transitioning from Provisioning to Clock/Temp screen (FR-DISP-02)");
+        s_current_screen = DISPLAY_SCREEN_CLOCK_TEMP;
+        display_render();
+    }
+}
+
+static void on_wifi_credentials_received_display(const gateway_event_t *evt)
+{
+    (void)evt;
+    if (s_current_screen == DISPLAY_SCREEN_PROVISIONING) {
+        ESP_LOGI(TAG, "Wi-Fi credentials / password configured -> Auto-transitioning to Clock screen");
+        s_current_screen = DISPLAY_SCREEN_CLOCK_TEMP;
+        display_render();
+    }
+}
+
 void display_init(void)
 {
     ESP_LOGI(TAG, "Initializing Display Subsystem (SSD1327 OLED + Buzzer + Buttons)...");
@@ -682,8 +739,19 @@ void display_init(void)
     event_bus_register_handler(EVT_DISPLAY_UPDATE_REQUEST, on_display_update_request);
     event_bus_register_handler(EVT_BLE_DEVICE_DATA, on_ble_device_data);
     event_bus_register_handler(EVT_RELAY_STATE_CHANGED, on_relay_state_changed);
+    event_bus_register_handler(EVT_WIFI_CONNECTED, on_wifi_connected_display);
+    event_bus_register_handler(EVT_WIFI_CREDENTIALS_RECEIVED, on_wifi_credentials_received_display);
 
-    // 5. Đạt chuẩn KPI-BOOT-01: Vẽ màn hình đồng hồ ngay lập tức (<1.5s độc lập mạng)
+    // FSD v1.7 §4.9 DI-07 & FR-DISP-02: Nếu chưa kết nối Wi-Fi Station và chưa có mật khẩu/cấu hình, mặc định hiển thị trang Provisioning
+    const gateway_config_t *cfg = config_manager_get();
+    bool has_creds = (cfg && (cfg->softap_password[0] != '\0' || cfg->wifi_ssid[0] != '\0' || cfg->saved_wifi_count > 0));
+    if (!wifi_provisioning_is_connected() && !has_creds) {
+        s_current_screen = DISPLAY_SCREEN_PROVISIONING;
+    } else {
+        s_current_screen = DISPLAY_SCREEN_CLOCK_TEMP;
+    }
+
+    // 5. Đạt chuẩn KPI-BOOT-01: Vẽ màn hình ngay lập tức (<1.5s độc lập mạng)
     display_render();
 
     // 6. Tạo Task Display trên Core 0, Priority 3, Stack 4096 (FSD §4.9.4 & §4.14)

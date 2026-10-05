@@ -312,6 +312,11 @@ static int ble_gap_event(struct ble_gap_event *event, void *arg)
 
 static void ble_gap_start_disc(void)
 {
+    if (!s_scanning_enabled) {
+        ESP_LOGI(TAG, "BLE scan is currently paused for Wi-Fi provisioning");
+        return;
+    }
+
     uint8_t own_addr_type;
     int rc = ble_hs_id_infer_auto(0, &own_addr_type);
     if (rc != 0) {
@@ -323,8 +328,10 @@ static void ble_gap_start_disc(void)
     memset(&disc_params, 0, sizeof(disc_params));
     disc_params.filter_duplicates = 0; // Receive repeated beacon packets
     disc_params.passive = 1;           // Passive scan
-    disc_params.itvl = 0;
-    disc_params.window = 0;
+    // 30% duty cycle for Wi-Fi/BLE Software Coexistence:
+    // Unit is 0.625 ms: 160 * 0.625ms = 100ms interval, 48 * 0.625ms = 30ms window
+    disc_params.itvl = 160;
+    disc_params.window = 48;
     disc_params.filter_policy = 0;
     disc_params.limited = 0;
 
@@ -334,7 +341,7 @@ static void ble_gap_start_disc(void)
         s_scan_active = false;
     } else {
         s_scan_active = true;
-        ESP_LOGI(TAG, "GAP passive scanner active (Continuous)");
+        ESP_LOGI(TAG, "GAP passive scanner active (Coexistence: 30%% Duty Cycle, itvl=100ms, win=30ms)");
     }
 }
 
@@ -419,6 +426,25 @@ void ble_adapter_stop_scan(void)
         ble_gap_disc_cancel();
         s_scan_active = false;
         ESP_LOGI(TAG, "GAP discovery stopped");
+    }
+}
+
+void ble_adapter_pause_scan(void)
+{
+    s_scanning_enabled = false;
+    if (s_scan_active) {
+        ble_gap_disc_cancel();
+        s_scan_active = false;
+        ESP_LOGI(TAG, "[COEX] BLE scan paused to prioritize Wi-Fi provisioning");
+    }
+}
+
+void ble_adapter_resume_scan(void)
+{
+    s_scanning_enabled = true;
+    if (!s_scan_active) {
+        ESP_LOGI(TAG, "[COEX] Resuming BLE scan (30%% Duty Cycle)");
+        ble_gap_start_disc();
     }
 }
 

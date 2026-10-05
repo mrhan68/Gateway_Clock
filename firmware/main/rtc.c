@@ -119,6 +119,12 @@ static void time_sync_notification_cb(struct timeval *tv)
         ds3231_write_time(&timeinfo);
         ESP_LOGI(TAG, "[RTC] Saved NTP synchronized time into DS3231 battery-backed registers.");
     }
+
+    // FSD v1.7 §4.2 & FR-RTC-01: Ngắt hoàn toàn SNTP client sau lần đồng bộ đầu tiên
+    // Triệt tiêu lưu lượng UDP NTP dư thừa, giải phóng socket, để DS3231 chạy độc lập
+    esp_sntp_stop();
+    s_ntp_initialized = false;
+    ESP_LOGI(TAG, "[RTC] One-shot SNTP stopped. Hardware RTC now running independently");
 }
 
 static void on_wifi_connected(const gateway_event_t *evt)

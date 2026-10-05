@@ -4,11 +4,18 @@ Bare-Board Hardware Automated Test Battery for Smart Clock Industrial Edge Gatew
 Tests executed directly on ESP32-S3 over USB Serial (/dev/ttyACM0).
 """
 
+import os
 import sys
 import time
 import serial
 
-PORT = "/dev/ttyACM0"
+if hasattr(sys.stdout, 'reconfigure'):
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
+
+PORT = sys.argv[1] if len(sys.argv) > 1 else os.environ.get("GATEWAY_PORT", "COM9" if sys.platform == "win32" else "/dev/ttyACM0")
 BAUD = 115200
 
 def run_suite():

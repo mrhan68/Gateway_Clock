@@ -23,11 +23,12 @@ extern "C" {
 #define DISPLAY_TASK_PRIO       3
 #define DISPLAY_TASK_CORE       0
 
-// Danh mục các trang màn hình luân phiên (FSD §4.9.3)
+// Danh mục các trang màn hình luân phiên (FSD §4.9.3 & DI-07)
 typedef enum {
     DISPLAY_SCREEN_CLOCK_TEMP = 0,
     DISPLAY_SCREEN_UPCOMING_EVENT,
     DISPLAY_SCREEN_DEVICE_STATUS,
+    DISPLAY_SCREEN_PROVISIONING,
     DISPLAY_SCREEN_COUNT
 } display_screen_index_t;
 

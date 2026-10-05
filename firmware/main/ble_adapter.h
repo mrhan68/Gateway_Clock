@@ -42,6 +42,16 @@ void ble_adapter_start_scan(void);
 void ble_adapter_stop_scan(void);
 
 /**
+ * @brief Pause GAP scan to prioritize Wi-Fi provisioning radio time
+ */
+void ble_adapter_pause_scan(void);
+
+/**
+ * @brief Resume GAP scan with standard coexistence duty cycle (30%)
+ */
+void ble_adapter_resume_scan(void);
+
+/**
  * @brief Print status of BLE adapter, known devices, and telemetry statistics
  */
 void ble_adapter_print_status(void);

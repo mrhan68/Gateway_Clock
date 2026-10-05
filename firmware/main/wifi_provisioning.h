@@ -58,6 +58,11 @@ void wifi_provisioning_scan_and_print(void);
 int wifi_provisioning_scan_to_json(char *json_buf, size_t max_len);
 
 /**
+ * @brief Buộc thực hiện quét mới và làm mới bộ đệm Wi-Fi
+ */
+uint16_t wifi_provisioning_rescan(void);
+
+/**
  * @brief Lấy SSID của mạng theo số thứ tự (1-based index) từ lần quét gần nhất
  */
 bool wifi_provisioning_get_scanned_ssid(int index, char *out_ssid, size_t max_len);

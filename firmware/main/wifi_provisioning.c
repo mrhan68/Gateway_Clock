@@ -13,6 +13,8 @@
 #include "config_manager.h"
 #include "event_bus.h"
 #include "web_server.h"
+#include "ble_adapter.h"
+#include "esp_timer.h"
 
 static const char *TAG = "WIFI_PROV";
 
@@ -87,28 +89,59 @@ static void dns_server_task(void *pvParameters)
             continue;
         }
 
+        dns_header_t *req = (dns_header_t *)rx_buffer;
         dns_header_t *resp = (dns_header_t *)tx_buffer;
-        memcpy(tx_buffer, rx_buffer, len);
-        resp->flags = htons(0x8180);
-        resp->ancount = htons(1);
 
-        int offset = len;
-        tx_buffer[offset++] = 0xC0;
-        tx_buffer[offset++] = 0x0C;
-        tx_buffer[offset++] = 0x00;
-        tx_buffer[offset++] = 0x01;
-        tx_buffer[offset++] = 0x00;
-        tx_buffer[offset++] = 0x01;
-        tx_buffer[offset++] = 0x00;
-        tx_buffer[offset++] = 0x00;
-        tx_buffer[offset++] = 0x00;
-        tx_buffer[offset++] = 0x3C;
-        tx_buffer[offset++] = 0x00;
-        tx_buffer[offset++] = 0x04;
-        tx_buffer[offset++] = 192;
-        tx_buffer[offset++] = 168;
-        tx_buffer[offset++] = 4;
-        tx_buffer[offset++] = 1;
+        // Parse Question section to find end of question
+        int q_pos = sizeof(dns_header_t);
+        while (q_pos < len && rx_buffer[q_pos] != 0) {
+            q_pos += 1 + rx_buffer[q_pos];
+        }
+        q_pos += 1; // Skip null terminator
+        if (q_pos + 4 > len) {
+            continue;
+        }
+
+        uint16_t qtype = ((uint8_t)rx_buffer[q_pos] << 8) | (uint8_t)rx_buffer[q_pos + 1];
+        q_pos += 4; // Skip QTYPE (2) + QCLASS (2)
+
+        if (q_pos > len || q_pos + 16 > (int)sizeof(tx_buffer)) {
+            continue;
+        }
+
+        // Copy Header and Question
+        memcpy(tx_buffer, rx_buffer, q_pos);
+
+        // Standard response header: QR=1, AA=1, RA=1, RCODE=0
+        resp->flags = htons(0x8180);
+        resp->qdcount = req->qdcount;
+        resp->nscount = 0;
+        resp->arcount = 0; // Strip EDNS0 / additional records
+
+        int offset = q_pos;
+        if (qtype == 0x0001 || qtype == 0x00FF) {
+            // Type A (IPv4) or ANY: return 192.168.4.1
+            resp->ancount = htons(1);
+            tx_buffer[offset++] = 0xC0;
+            tx_buffer[offset++] = 0x0C; // Pointer to QNAME at byte 12
+            tx_buffer[offset++] = 0x00;
+            tx_buffer[offset++] = 0x01; // Type A
+            tx_buffer[offset++] = 0x00;
+            tx_buffer[offset++] = 0x01; // Class IN
+            tx_buffer[offset++] = 0x00;
+            tx_buffer[offset++] = 0x00;
+            tx_buffer[offset++] = 0x00;
+            tx_buffer[offset++] = 0x3C; // TTL 60s
+            tx_buffer[offset++] = 0x00;
+            tx_buffer[offset++] = 0x04; // Length 4
+            tx_buffer[offset++] = 192;
+            tx_buffer[offset++] = 168;
+            tx_buffer[offset++] = 4;
+            tx_buffer[offset++] = 1;
+        } else {
+            // Non-A query (e.g. Type AAAA IPv6): return NOERROR with 0 answer records
+            resp->ancount = 0;
+        }
 
         sendto(s_dns_sock, tx_buffer, offset, 0, (struct sockaddr *)&client_addr, client_addr_len);
     }
@@ -131,30 +164,54 @@ static const char* authmode_to_str(uint8_t authmode)
     }
 }
 
-static uint16_t perform_wifi_scan(void)
+static int64_t s_last_scan_time_ms = 0;
+static bool s_is_scanning = false;
+
+static uint16_t perform_wifi_scan_internal(bool force)
 {
+    int64_t now_ms = esp_timer_get_time() / 1000;
+    if (!force && s_scanned_count > 0 && (now_ms - s_last_scan_time_ms) < 30000) {
+        ESP_LOGI(TAG, "Returning %u cached Wi-Fi APs (age: %lld ms)", s_scanned_count, (long long)(now_ms - s_last_scan_time_ms));
+        return s_scanned_count;
+    }
+
+    if (s_is_scanning) {
+        ESP_LOGI(TAG, "Wi-Fi scan already in progress, returning %u existing APs", s_scanned_count);
+        return s_scanned_count;
+    }
+
+    s_is_scanning = true;
+
     wifi_scan_config_t scan_config = {
         .ssid = NULL,
         .bssid = NULL,
         .channel = 0,
-        .show_hidden = true,
+        .show_hidden = false,
         .scan_type = WIFI_SCAN_TYPE_ACTIVE,
         .scan_time.active.min = 0,
         .scan_time.active.max = 0,
     };
 
+    ESP_LOGI(TAG, "Starting Wi-Fi scan...");
     esp_err_t err = esp_wifi_scan_start(&scan_config, true);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "esp_wifi_scan_start failed: 0x%x", err);
-        return 0;
+        s_is_scanning = false;
+        return s_scanned_count;
     }
 
     uint16_t ap_count = 0;
     esp_wifi_scan_get_ap_num(&ap_count);
-    if (ap_count == 0) return 0;
+    if (ap_count == 0) {
+        s_is_scanning = false;
+        return 0;
+    }
 
     wifi_ap_record_t *records = malloc(ap_count * sizeof(wifi_ap_record_t));
-    if (!records) return 0;
+    if (!records) {
+        s_is_scanning = false;
+        return s_scanned_count;
+    }
 
     esp_wifi_scan_get_ap_records(&ap_count, records);
 
@@ -172,6 +229,7 @@ static uint16_t perform_wifi_scan(void)
         if (duplicate) continue;
 
         strncpy(s_scanned_aps[s_scanned_count].ssid, (char *)records[i].ssid, sizeof(s_scanned_aps[0].ssid) - 1);
+        s_scanned_aps[s_scanned_count].ssid[sizeof(s_scanned_aps[0].ssid) - 1] = '\0';
         s_scanned_aps[s_scanned_count].rssi = records[i].rssi;
         s_scanned_aps[s_scanned_count].authmode = records[i].authmode;
         s_scanned_aps[s_scanned_count].channel = records[i].primary;
@@ -179,13 +237,32 @@ static uint16_t perform_wifi_scan(void)
     }
 
     free(records);
+    s_last_scan_time_ms = esp_timer_get_time() / 1000;
+    s_is_scanning = false;
+    ESP_LOGI(TAG, "Wi-Fi scan finished: found %u valid unique APs", s_scanned_count);
     return s_scanned_count;
+}
+
+static void escape_json_string(const char *in, char *out, size_t max_out)
+{
+    size_t o = 0;
+    for (size_t i = 0; in[i] != '\0' && o < max_out - 6; i++) {
+        unsigned char c = (unsigned char)in[i];
+        if (c < 32 || c == 127) {
+            continue; // Bỏ qua ký tự điều khiển để JSON không bị lỗi parse trên trình duyệt điện thoại
+        }
+        if (c == '"' || c == '\\') {
+            out[o++] = '\\';
+        }
+        out[o++] = c;
+    }
+    out[o] = '\0';
 }
 
 void wifi_provisioning_scan_and_print(void)
 {
-    printf("Scanning nearby Wi-Fi networks (2-3 seconds)...\n");
-    uint16_t found = perform_wifi_scan();
+    printf("Scanning nearby Wi-Fi networks (fast scan)...\n");
+    uint16_t found = perform_wifi_scan_internal(true);
     if (found == 0) {
         printf("No Wi-Fi networks found.\n");
         return;
@@ -208,14 +285,17 @@ void wifi_provisioning_scan_and_print(void)
 
 int wifi_provisioning_scan_to_json(char *json_buf, size_t max_len)
 {
-    uint16_t found = perform_wifi_scan();
+    uint16_t found = perform_wifi_scan_internal(false);
     int offset = snprintf(json_buf, max_len, "[");
 
     for (int i = 0; i < found; i++) {
+        char esc_ssid[68];
+        escape_json_string(s_scanned_aps[i].ssid, esc_ssid, sizeof(esc_ssid));
+
         int written = snprintf(json_buf + offset, max_len - offset,
                                "%s{\"ssid\":\"%s\",\"rssi\":%d,\"auth\":%d}",
                                (i > 0) ? "," : "",
-                               s_scanned_aps[i].ssid,
+                               esc_ssid,
                                s_scanned_aps[i].rssi,
                                (int)s_scanned_aps[i].authmode);
         if (written > 0) offset += written;
@@ -224,6 +304,11 @@ int wifi_provisioning_scan_to_json(char *json_buf, size_t max_len)
 
     offset += snprintf(json_buf + offset, max_len - offset, "]");
     return offset;
+}
+
+uint16_t wifi_provisioning_rescan(void)
+{
+    return perform_wifi_scan_internal(true);
 }
 
 bool wifi_provisioning_get_scanned_ssid(int index, char *out_ssid, size_t max_len)
@@ -254,32 +339,68 @@ static void stop_dns_task(void *pv)
     vTaskDelete(NULL);
 }
 
+static void background_scan_task(void *pv)
+{
+    vTaskDelay(pdMS_TO_TICKS(1000));
+    ESP_LOGI(TAG, "[WIFI_PRESCAN] Performing initial background Wi-Fi scan...");
+    perform_wifi_scan_internal(true);
+    ESP_LOGI(TAG, "[WIFI_PRESCAN] Background scan complete: %u APs found", s_scanned_count);
+    vTaskDelete(NULL);
+}
+
 static void start_softap_internal(void)
 {
     if (s_in_softap_mode) return;
     s_in_softap_mode = true;
+
+    const gateway_config_t *sys_cfg = config_manager_get();
+    bool has_custom_pass = (sys_cfg && sys_cfg->softap_password[0] != '\0');
 
     wifi_config_t ap_config = {
         .ap = {
             .ssid = SOFTAP_SSID,
             .ssid_len = strlen(SOFTAP_SSID),
             .channel = 1,
-            .password = "",
+            .beacon_interval = 100, // 100 TU = 102.4ms (Required for phone compatibility)
+            .dtim_period = 2,       // DTIM period 2
             .max_connection = SOFTAP_MAX_CONN,
-            .authmode = WIFI_AUTH_OPEN
+            .authmode = has_custom_pass ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN,
+            .pairwise_cipher = has_custom_pass ? WIFI_CIPHER_TYPE_CCMP : WIFI_CIPHER_TYPE_NONE,
+            .pmf_cfg = {
+                .required = false,
+                .capable = false
+            }
         },
     };
+    if (has_custom_pass) {
+        strncpy((char *)ap_config.ap.password, sys_cfg->softap_password, sizeof(ap_config.ap.password) - 1);
+    } else {
+        ap_config.ap.password[0] = '\0';
+    }
 
     esp_wifi_set_mode(WIFI_MODE_APSTA);
     esp_wifi_set_config(WIFI_IF_AP, &ap_config);
+    esp_wifi_set_bandwidth(WIFI_IF_AP, WIFI_BW_HT20);
+    esp_wifi_set_protocol(WIFI_IF_AP, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N);
     esp_wifi_start();
+    esp_wifi_set_max_tx_power(80); // Maximum RF transmit power (20dBm)
+    esp_wifi_set_ps(WIFI_PS_NONE); // Disable modem sleep so SoftAP never drops beacons
 
     stop_dns_only();
-    xTaskCreate(dns_server_task, "dns_task", 4096, NULL, 5, &s_dns_task_handle);
+    if (!s_is_connected) {
+        xTaskCreate(dns_server_task, "dns_task", 4096, NULL, 5, &s_dns_task_handle);
+        // WP-09: Tạm dừng BLE scanner để nhường 100% tài nguyên RF cho SoftAP bắt tay điện thoại
+        ble_adapter_pause_scan();
+        xTaskCreate(background_scan_task, "bg_scan_task", 4096, NULL, 3, NULL);
+    }
     web_server_start();
 
     event_bus_post(EVT_WIFI_PROVISIONING_STARTED, NULL, 0, false);
-    ESP_LOGI(TAG, "[PROVISIONING] SoftAP active. Connect to '%s' (IP: 192.168.4.1)", SOFTAP_SSID);
+    if (has_custom_pass) {
+        ESP_LOGI(TAG, "[PROVISIONING] SoftAP active (WPA2). Connect to '%s' (IP: 192.168.4.1)", SOFTAP_SSID);
+    } else {
+        ESP_LOGI(TAG, "[PROVISIONING] SoftAP active (OPEN). Connect to '%s' (No Password, IP: 192.168.4.1)", SOFTAP_SSID);
+    }
 }
 
 static void wifi_event_handler(void *arg, esp_event_base_t event_base,
@@ -321,10 +442,14 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
 
         event_bus_post(EVT_WIFI_CONNECTED, NULL, 0, false);
 
-        if (s_in_softap_mode) {
-            s_in_softap_mode = false;
+        // WP-08 & FR-WIFI-01: SoftAP duy trì liên tục (Concurrent AP+STA)
+        // Chỉ dừng DNS redirect để giải phóng port 53 khi đã có IP Station
+        if (s_dns_sock >= 0) {
             xTaskCreate(stop_dns_task, "stop_dns_task", 3072, NULL, 3, NULL);
         }
+
+        // BA-02 & WP-09: Wi-Fi đã kết nối ổn định -> Kích hoạt lại BLE scanner với 30% duty cycle
+        ble_adapter_resume_scan();
     }
 }
 
@@ -344,16 +469,18 @@ void wifi_provisioning_init(void)
     ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL, NULL));
     ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, NULL, NULL));
 
-    // Web Server khoi dong san sang phuc vu ca SoftAP va Station
+    // Web Server khởi động sẵn sàng phục vụ cả SoftAP và Station
     web_server_start();
+
+    // FSD v1.7 §4.4 WP-08 & FR-WIFI-01: SoftAP luôn bật (Concurrent AP+STA)
+    start_softap_internal();
 
     const gateway_config_t *sys_cfg = config_manager_get();
     if (sys_cfg != NULL && strlen(sys_cfg->wifi_ssid) > 0) {
         ESP_LOGI(TAG, "Found stored Wi-Fi credentials: SSID='%s'", sys_cfg->wifi_ssid);
         wifi_provisioning_connect(sys_cfg->wifi_ssid, sys_cfg->wifi_password);
     } else {
-        ESP_LOGI(TAG, "No Wi-Fi credentials (Volatile RAM mode). Starting SoftAP '%s'...", SOFTAP_SSID);
-        start_softap_internal();
+        ESP_LOGI(TAG, "No Wi-Fi credentials (Volatile RAM mode). SoftAP '%s' ready for setup.", SOFTAP_SSID);
     }
 }
 
@@ -365,12 +492,12 @@ bool wifi_provisioning_is_configured(void)
 
 void wifi_provisioning_force_reset(void)
 {
-    ESP_LOGW(TAG, "Force reset Wi-Fi!");
-    config_manager_set_wifi("", "");
-    config_manager_save();
+    ESP_LOGW(TAG, "[FACTORY_RESET] Force reset Wi-Fi & restoring SoftAP credentials...");
+    config_manager_factory_reset();
 
     esp_wifi_disconnect();
-    esp_wifi_stop();
+    s_is_connected = false;
+    strcpy(s_current_ip, "0.0.0.0");
 
     s_in_softap_mode = false;
     start_softap_internal();
@@ -386,10 +513,10 @@ esp_err_t wifi_provisioning_connect(const char *ssid, const char *password)
     }
 
     ESP_LOGI(TAG, "Setting Wi-Fi Station to SSID='%s'", ssid);
-    esp_wifi_stop();
-    ESP_ERROR_CHECK(esp_wifi_set_mode(s_in_softap_mode ? WIFI_MODE_APSTA : WIFI_MODE_STA));
+    start_softap_internal();
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
-    ESP_ERROR_CHECK(esp_wifi_start());
+    esp_wifi_connect();
 
     return ESP_OK;
 }
@@ -401,7 +528,7 @@ bool wifi_provisioning_is_connected(void)
 
 bool wifi_provisioning_is_softap(void)
 {
-    return s_in_softap_mode;
+    return true; // FSD v1.7 WP-08: SoftAP duy trì liên tục
 }
 
 const char* wifi_provisioning_get_ip(void)
@@ -409,8 +536,5 @@ const char* wifi_provisioning_get_ip(void)
     if (s_is_connected) {
         return s_current_ip;
     }
-    if (s_in_softap_mode) {
-        return "192.168.4.1";
-    }
-    return "0.0.0.0";
+    return "192.168.4.1";
 }

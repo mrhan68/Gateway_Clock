@@ -9,13 +9,23 @@
 extern "C" {
 #endif
 
+#define MAX_SAVED_WIFI 5
+
+typedef struct {
+    char ssid[32];
+    char password[64];
+} wifi_profile_t;
+
 typedef struct {
     char gateway_id[32];
     char timezone[16];
     char wifi_ssid[32];
     char wifi_password[64];
+    char softap_password[64];
     char mqtt_broker_uri[128];
     uint16_t mqtt_telemetry_interval_s;
+    uint8_t saved_wifi_count;
+    wifi_profile_t saved_wifi[MAX_SAVED_WIFI];
 } gateway_config_t;
 
 /**
@@ -32,6 +42,36 @@ const gateway_config_t* config_manager_get(void);
  * @brief Cập nhật thông tin Wi-Fi
  */
 esp_err_t config_manager_set_wifi(const char *ssid, const char *password);
+
+/**
+ * @brief Lấy số lượng mạng Wi-Fi đã lưu trong NVS
+ */
+uint8_t config_manager_get_saved_wifi_count(void);
+
+/**
+ * @brief Lấy thông tin mạng Wi-Fi đã lưu theo chỉ số (0..count-1)
+ */
+bool config_manager_get_saved_wifi(uint8_t index, char *out_ssid, size_t ssid_len, char *out_pass, size_t pass_len);
+
+/**
+ * @brief Thêm mới hoặc cập nhật mật khẩu mạng Wi-Fi vào danh sách NVS
+ */
+esp_err_t config_manager_add_or_update_wifi(const char *ssid, const char *password);
+
+/**
+ * @brief Xóa mạng Wi-Fi khỏi danh sách đã lưu trong NVS
+ */
+esp_err_t config_manager_delete_wifi(const char *ssid);
+
+/**
+ * @brief Cập nhật mật khẩu WPA2-PSK cho SoftAP (FSD §4.4.6, mặc định "changeme")
+ */
+esp_err_t config_manager_set_softap_password(const char *password);
+
+/**
+ * @brief Factory Reset: Xóa sạch Wi-Fi credentials trong NVS, đặt lại SoftAP pass về "changeme" (FSD §4.4 WP-07)
+ */
+esp_err_t config_manager_factory_reset(void);
 
 /**
  * @brief Cập nhật thông tin MQTT Broker
