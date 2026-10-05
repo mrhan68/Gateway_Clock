@@ -5,6 +5,8 @@
 #include <stddef.h>
 #include "esp_err.h"
 
+void wifi_provisioning_apply_softap_config(void);
+
 #ifdef __cplusplus
 extern "C" {
 #endif

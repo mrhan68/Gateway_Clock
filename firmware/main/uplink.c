@@ -53,11 +53,13 @@ void uplink_init(void)
 {
     const gateway_config_t *cfg = config_manager_get();
     const char *broker_uri = (cfg != NULL && strlen(cfg->mqtt_broker_uri) > 0) ?
-                             cfg->mqtt_broker_uri : "mqtt://broker.emqx.io:1883";
+                             cfg->mqtt_broker_uri : "mqtts://hivemq.cloud:8883";
+    const char *mqtt_user = cfg ? cfg->mqtt_username : NULL;
+    const char *mqtt_pass = cfg ? cfg->mqtt_password : NULL;
     const char *gateway_id = (cfg != NULL && strlen(cfg->gateway_id) > 0) ?
                              cfg->gateway_id : "gw_esp32_01";
 
-    mqtt_adapter_init(broker_uri, gateway_id);
+    mqtt_adapter_init(broker_uri, gateway_id, mqtt_user, mqtt_pass);
 
     xTaskCreatePinnedToCore(uplink_task,
                             "uplink_task",

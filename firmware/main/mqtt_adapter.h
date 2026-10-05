@@ -13,7 +13,7 @@ extern C {
  * @param broker_uri Dia chi broker MQTT (VD: mqtt://broker.emqx.io:1883)
  * @param gateway_id ID dinh danh duy nhat cua Gateway
  */
-void mqtt_adapter_init(const char *broker_uri, const char *gateway_id);
+void mqtt_adapter_init(const char *broker_uri, const char *gateway_id, const char *username, const char *password);
 
 /**
  * @brief Publish mot message len MQTT Broker

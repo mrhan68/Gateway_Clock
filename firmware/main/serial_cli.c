@@ -92,7 +92,7 @@ static void print_help(void)
     printf("  cmd send <target_id> <command>       - Dispatch command to device\n");
     printf("  test freeze event_bus                - Test hook: simulate frozen event_bus task (FR-SUP-02)\n");
     printf("  test burst [count]                   - Test hook: burst events into event bus queue (FSD §4.1.6)\n");
-    printf("  system factory-reset                 - Wipe Wi-Fi NVS credentials & restore SoftAP pass to 'changeme'\n");
+    printf("  system factory-reset                 - Wipe Wi-Fi NVS credentials & restore SoftAP pass to empty (OPEN)\n");
     printf("  reboot                               - Reboot the ESP32 gateway\n\n");
 }
 
@@ -723,7 +723,7 @@ static void handle_command(char *cmd_line)
             printf("Usage: pin <gpio_num> <0|1> (e.g. pin 2 1 or pin 48 0)\n");
         }
     } else if (strcmp(cmd_line, "system factory-reset") == 0 || strcmp(cmd_line, "factory-reset") == 0) {
-        printf("[FACTORY_RESET] Erasing NVS credentials and restoring SoftAP password to 'changeme'...\n");
+        printf("[FACTORY_RESET] Erasing NVS credentials and restoring SoftAP password to empty (OPEN)...\n");
         config_manager_factory_reset();
         vTaskDelay(pdMS_TO_TICKS(500));
         esp_restart();

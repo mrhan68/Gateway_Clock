@@ -29,6 +29,17 @@ static bool s_is_connected = false;
 static char s_current_ip[16] = "0.0.0.0";
 static bool s_in_softap_mode = false;
 static int s_dns_sock = -1;
+static esp_timer_handle_t s_ble_resume_timer = NULL;
+
+static void ble_resume_timer_cb(void *arg)
+{
+    ESP_LOGI(TAG, "BLE scan resume timer expired. Resuming scan...");
+    ble_adapter_resume_scan();
+        if (s_ble_resume_timer) {
+            esp_timer_stop(s_ble_resume_timer);
+        }
+}
+
 
 #define MAX_SCANNED_APS    16
 typedef struct {
@@ -348,9 +359,9 @@ static void background_scan_task(void *pv)
     vTaskDelete(NULL);
 }
 
-static void start_softap_internal(void)
+static void start_softap_internal(bool force_reconfig)
 {
-    if (s_in_softap_mode) return;
+    if (s_in_softap_mode && !force_reconfig) return;
     s_in_softap_mode = true;
 
     const gateway_config_t *sys_cfg = config_manager_get();
@@ -391,6 +402,14 @@ static void start_softap_internal(void)
         xTaskCreate(dns_server_task, "dns_task", 4096, NULL, 5, &s_dns_task_handle);
         // WP-09: Tạm dừng BLE scanner để nhường 100% tài nguyên RF cho SoftAP bắt tay điện thoại
         ble_adapter_pause_scan();
+        if (s_ble_resume_timer == NULL) {
+            esp_timer_create_args_t timer_args = {
+                .callback = &ble_resume_timer_cb,
+                .name = "ble_res_tmr"
+            };
+            esp_timer_create(&timer_args, &s_ble_resume_timer);
+        }
+        esp_timer_start_once(s_ble_resume_timer, 60000000ULL); // 60 seconds
         xTaskCreate(background_scan_task, "bg_scan_task", 4096, NULL, 3, NULL);
     }
     web_server_start();
@@ -425,7 +444,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
         s_sta_retry_count++;
         if (s_sta_retry_count >= 3 && !s_in_softap_mode) {
             ESP_LOGW(TAG, "STA connection failed (%d retries). Starting SoftAP fallback...", s_sta_retry_count);
-            start_softap_internal();
+            start_softap_internal(false);
         }
 
         if (wifi_provisioning_is_configured()) {
@@ -450,6 +469,9 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
 
         // BA-02 & WP-09: Wi-Fi đã kết nối ổn định -> Kích hoạt lại BLE scanner với 30% duty cycle
         ble_adapter_resume_scan();
+        if (s_ble_resume_timer) {
+            esp_timer_stop(s_ble_resume_timer);
+        }
     }
 }
 
@@ -473,7 +495,7 @@ void wifi_provisioning_init(void)
     web_server_start();
 
     // FSD v1.7 §4.4 WP-08 & FR-WIFI-01: SoftAP luôn bật (Concurrent AP+STA)
-    start_softap_internal();
+    start_softap_internal(false);
 
     const gateway_config_t *sys_cfg = config_manager_get();
     if (sys_cfg != NULL && strlen(sys_cfg->wifi_ssid) > 0) {
@@ -500,7 +522,7 @@ void wifi_provisioning_force_reset(void)
     strcpy(s_current_ip, "0.0.0.0");
 
     s_in_softap_mode = false;
-    start_softap_internal();
+    start_softap_internal(false);
 }
 
 esp_err_t wifi_provisioning_connect(const char *ssid, const char *password)
@@ -513,7 +535,7 @@ esp_err_t wifi_provisioning_connect(const char *ssid, const char *password)
     }
 
     ESP_LOGI(TAG, "Setting Wi-Fi Station to SSID='%s'", ssid);
-    start_softap_internal();
+    start_softap_internal(false);
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
     esp_wifi_connect();
@@ -537,4 +559,9 @@ const char* wifi_provisioning_get_ip(void)
         return s_current_ip;
     }
     return "192.168.4.1";
+}
+
+void wifi_provisioning_apply_softap_config(void)
+{
+    start_softap_internal(true);
 }

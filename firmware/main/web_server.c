@@ -865,8 +865,10 @@ static esp_err_t post_save_handler(httpd_req_t *req)
     if (strlen(softap_pass) >= 8) {
         config_manager_set_softap_password(softap_pass);
         ESP_LOGI(TAG, "Configured new SoftAP password (length: %zu)", strlen(softap_pass));
+        wifi_provisioning_apply_softap_config();
     } else if (strlen(softap_pass) == 0) {
-        config_manager_set_softap_password("changeme");
+        config_manager_set_softap_password("");
+        wifi_provisioning_apply_softap_config();
     }
     config_manager_save();
 
@@ -915,7 +917,9 @@ static esp_err_t post_softap_set_password_handler(httpd_req_t *req)
             char *end = strchr(p_pass, '&');
             int len = end ? (end - p_pass) : strlen(p_pass);
             if (len > 64) len = 64;
-            strncpy(password, p_pass, len);
+            char raw_pass[128] = {0};
+            strncpy(raw_pass, p_pass, len);
+            url_decode(password, raw_pass, sizeof(password));
         }
     }
 
@@ -926,6 +930,7 @@ static esp_err_t post_softap_set_password_handler(httpd_req_t *req)
 
     config_manager_set_softap_password(password);
     ESP_LOGI(TAG, "Configured new SoftAP password (length: %zu)", strlen(password));
+    wifi_provisioning_apply_softap_config();
 
     // Reset màn hình OLED về màn đồng hồ ngay sau khi cài mật khẩu thành công
     display_set_screen(DISPLAY_SCREEN_CLOCK_TEMP);
@@ -996,14 +1001,18 @@ static esp_err_t post_wifi_save_handler(httpd_req_t *req)
             char *end = strchr(p_ssid, '&');
             int len = end ? (end - p_ssid) : strlen(p_ssid);
             if (len > 32) len = 32;
-            strncpy(ssid, p_ssid, len);
+            char raw_ssid[33] = {0};
+            strncpy(raw_ssid, p_ssid, len);
+            url_decode(ssid, raw_ssid, sizeof(ssid));
         }
         if (p_pass) {
             p_pass += 9;
             char *end = strchr(p_pass, '&');
             int len = end ? (end - p_pass) : strlen(p_pass);
             if (len > 64) len = 64;
-            strncpy(password, p_pass, len);
+            char raw_pass[128] = {0};
+            strncpy(raw_pass, p_pass, len);
+            url_decode(password, raw_pass, sizeof(password));
         }
     }
 
@@ -1051,7 +1060,9 @@ static esp_err_t post_wifi_delete_handler(httpd_req_t *req)
             char *end = strchr(p_ssid, '&');
             int len = end ? (end - p_ssid) : strlen(p_ssid);
             if (len > 32) len = 32;
-            strncpy(ssid, p_ssid, len);
+            char raw_ssid[33] = {0};
+            strncpy(raw_ssid, p_ssid, len);
+            url_decode(ssid, raw_ssid, sizeof(ssid));
         }
     }
 
@@ -1088,7 +1099,9 @@ static esp_err_t post_wifi_connect_handler(httpd_req_t *req)
             char *end = strchr(p_ssid, '&');
             int len = end ? (end - p_ssid) : strlen(p_ssid);
             if (len > 32) len = 32;
-            strncpy(ssid, p_ssid, len);
+            char raw_ssid[33] = {0};
+            strncpy(raw_ssid, p_ssid, len);
+            url_decode(ssid, raw_ssid, sizeof(ssid));
         }
     }
 

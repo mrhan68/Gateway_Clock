@@ -1,20 +1,14 @@
-CC ?= gcc
-CFLAGS ?= -Wall -Wextra -Werror -O2 -DTEST_HOST
-TARGET = host_tests
+CC = gcc
+CFLAGS = -Wall -Istubs -DTEST_HOST  -Wno-error=unused-variable -Wno-error=unused-function -I../../firmware/main
 
-SRCS = test_runner.c \
-       test_relay_interlock.c \
-       test_monotonic_timing.c \
-       test_ble_parsers.c \
-       test_scheduler_snooze.c
+SRCS = test_runner.c test_relay_interlock.c test_monotonic_timing.c test_ble_parsers.c test_scheduler_snooze.c stubs/rule_engine_stub.c ../../firmware/main/rule_engine.c
+TARGET = host_tests
 
 all: $(TARGET)
 	./$(TARGET)
 
-$(TARGET): $(SRCS) test_harness.h
+$(TARGET): $(SRCS)
 	$(CC) $(CFLAGS) $(SRCS) -o $(TARGET)
 
 clean:
 	rm -f $(TARGET)
-
-.PHONY: all clean

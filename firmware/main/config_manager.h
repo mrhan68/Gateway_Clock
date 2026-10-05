@@ -23,6 +23,8 @@ typedef struct {
     char wifi_password[64];
     char softap_password[64];
     char mqtt_broker_uri[128];
+    char mqtt_username[64];
+    char mqtt_password[64];
     uint16_t mqtt_telemetry_interval_s;
     uint8_t saved_wifi_count;
     wifi_profile_t saved_wifi[MAX_SAVED_WIFI];
@@ -64,12 +66,12 @@ esp_err_t config_manager_add_or_update_wifi(const char *ssid, const char *passwo
 esp_err_t config_manager_delete_wifi(const char *ssid);
 
 /**
- * @brief Cập nhật mật khẩu WPA2-PSK cho SoftAP (FSD §4.4.6, mặc định "changeme")
+ * @brief Cập nhật mật khẩu WPA2-PSK cho SoftAP (FSD §4.4.6, mặc định "")
  */
 esp_err_t config_manager_set_softap_password(const char *password);
 
 /**
- * @brief Factory Reset: Xóa sạch Wi-Fi credentials trong NVS, đặt lại SoftAP pass về "changeme" (FSD §4.4 WP-07)
+ * @brief Factory Reset: Xóa sạch Wi-Fi credentials trong NVS, đặt lại SoftAP pass về "" (FSD §4.4 WP-07)
  */
 esp_err_t config_manager_factory_reset(void);
 

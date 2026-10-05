@@ -21,7 +21,9 @@ static void set_default_config(void)
     strncpy(s_active_config.wifi_ssid, "", sizeof(s_active_config.wifi_ssid) - 1);
     strncpy(s_active_config.wifi_password, "", sizeof(s_active_config.wifi_password) - 1);
     s_active_config.softap_password[0] = '\0';
-    strncpy(s_active_config.mqtt_broker_uri, "mqtt://broker.emqx.io:1883", sizeof(s_active_config.mqtt_broker_uri) - 1);
+    strncpy(s_active_config.mqtt_broker_uri, "mqtts://16a4e3...hivemq.cloud:8883", sizeof(s_active_config.mqtt_broker_uri) - 1);
+    strncpy(s_active_config.mqtt_username, "gw_client", sizeof(s_active_config.mqtt_username) - 1);
+    strncpy(s_active_config.mqtt_password, "your_mqtt_password", sizeof(s_active_config.mqtt_password) - 1);
     s_active_config.mqtt_telemetry_interval_s = 10;
     s_active_config.saved_wifi_count = 0;
     memset(s_active_config.saved_wifi, 0, sizeof(s_active_config.saved_wifi));
@@ -200,7 +202,7 @@ esp_err_t config_manager_init(void)
     // Đọc SoftAP Password (mặc định "" (OPEN) theo Adaptive SoftAP Security WP-04 / FR-WIFI-01)
     len = sizeof(s_active_config.softap_password);
     if (nvs_get_str(handle, "softap_pass", s_active_config.softap_password, &len) != ESP_OK ||
-        strcmp(s_active_config.softap_password, "changeme") == 0 ||
+        strcmp(s_active_config.softap_password, "") == 0 ||
         (s_active_config.wifi_ssid[0] == '\0' && s_active_config.saved_wifi_count == 0)) {
         s_active_config.softap_password[0] = '\0';
     }
@@ -209,7 +211,9 @@ esp_err_t config_manager_init(void)
     len = sizeof(s_active_config.mqtt_broker_uri);
     nvs_get_str(handle, "mqtt_uri", s_active_config.mqtt_broker_uri, &len);
     if (strcmp(s_active_config.mqtt_broker_uri, "mqtt://192.168.1.100:1883") == 0) {
-        strncpy(s_active_config.mqtt_broker_uri, "mqtt://broker.emqx.io:1883", sizeof(s_active_config.mqtt_broker_uri) - 1);
+        strncpy(s_active_config.mqtt_broker_uri, "mqtts://16a4e3...hivemq.cloud:8883", sizeof(s_active_config.mqtt_broker_uri) - 1);
+    strncpy(s_active_config.mqtt_username, "gw_client", sizeof(s_active_config.mqtt_username) - 1);
+    strncpy(s_active_config.mqtt_password, "your_mqtt_password", sizeof(s_active_config.mqtt_password) - 1);
     }
 
     nvs_get_u16(handle, "mqtt_interval", &s_active_config.mqtt_telemetry_interval_s);

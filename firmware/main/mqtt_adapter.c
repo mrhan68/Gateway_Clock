@@ -12,7 +12,9 @@ static const char *TAG = "MQTT_ADAPTER";
 static esp_mqtt_client_handle_t s_client = NULL;
 static bool s_is_connected = false;
 static char s_gateway_id[32] = "gw_default";
-static char s_broker_uri[128] = "mqtt://broker.emqx.io:1883";
+static char s_broker_uri[128] = "mqtts://hivemq.cloud:8883";
+static char s_mqtt_username[64] = {0};
+static char s_mqtt_password[64] = {0};
 static char s_status_topic[64] = {0};
 static char s_cmd_sub_topic[64] = {0};
 static char s_sched_sub_topic[64] = {0};
@@ -88,7 +90,7 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
     }
 }
 
-void mqtt_adapter_init(const char *broker_uri, const char *gateway_id)
+void mqtt_adapter_init(const char *broker_uri, const char *gateway_id, const char *username, const char *password)
 {
     if (gateway_id != NULL && strlen(gateway_id) > 0) {
         strncpy(s_gateway_id, gateway_id, sizeof(s_gateway_id) - 1);
@@ -96,6 +98,8 @@ void mqtt_adapter_init(const char *broker_uri, const char *gateway_id)
     if (broker_uri != NULL && strlen(broker_uri) > 0) {
         strncpy(s_broker_uri, broker_uri, sizeof(s_broker_uri) - 1);
     }
+    if (username != NULL) strncpy(s_mqtt_username, username, sizeof(s_mqtt_username) - 1);
+    if (password != NULL) strncpy(s_mqtt_password, password, sizeof(s_mqtt_password) - 1);
 
     snprintf(s_status_topic, sizeof(s_status_topic), "gateway/%s/status", s_gateway_id);
     snprintf(s_cmd_sub_topic, sizeof(s_cmd_sub_topic), "gateway/%s/device/+/command", s_gateway_id);
@@ -105,6 +109,12 @@ void mqtt_adapter_init(const char *broker_uri, const char *gateway_id)
         .broker = {
             .address = {
                 .uri = s_broker_uri,
+            },
+        },
+        .credentials = {
+            .username = s_mqtt_username[0] ? s_mqtt_username : NULL,
+            .authentication = {
+                .password = s_mqtt_password[0] ? s_mqtt_password : NULL,
             },
         },
         .session = {
