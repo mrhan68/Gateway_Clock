@@ -18,6 +18,19 @@
 #include "display.h"
 
 static const char *TAG = "WEB_SERVER";
+
+static bool check_api_auth(httpd_req_t *req) {
+    char auth_header[128];
+    if (httpd_req_get_hdr_value_str(req, "Authorization", auth_header, sizeof(auth_header)) == ESP_OK) {
+        // Ponytail: simple static token for now. In real prod, this reads from NVS.
+        if (strstr(auth_header, "Bearer gateway-lan-secret-123")) {
+            return true;
+        }
+    }
+    httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Missing or invalid Authorization header");
+    return false;
+}
+
 static httpd_handle_t s_server = NULL;
 
 static const char SET_PASSWORD_HTML[] =
@@ -629,6 +642,7 @@ static esp_err_t get_telemetry_handler(httpd_req_t *req)
 
 static esp_err_t post_relay_handler(httpd_req_t *req)
 {
+    if (!check_api_auth(req)) return ESP_OK;
     char buf[128];
     int ret = httpd_req_recv(req, buf, sizeof(buf) - 1);
     if (ret <= 0) {
@@ -695,6 +709,7 @@ static esp_err_t get_rules_handler(httpd_req_t *req)
 
 static esp_err_t post_rules_handler(httpd_req_t *req)
 {
+    if (!check_api_auth(req)) return ESP_OK;
     char buf[256];
     int ret = httpd_req_recv(req, buf, sizeof(buf) - 1);
     if (ret <= 0) {
@@ -747,6 +762,7 @@ static esp_err_t post_rules_handler(httpd_req_t *req)
 
 static esp_err_t delete_rules_handler(httpd_req_t *req)
 {
+    if (!check_api_auth(req)) return ESP_OK;
     char query[64] = {0};
     int query_len = httpd_req_get_url_query_len(req);
 
@@ -894,6 +910,7 @@ static esp_err_t post_save_handler(httpd_req_t *req)
 
 static esp_err_t post_softap_set_password_handler(httpd_req_t *req)
 {
+    if (!check_api_auth(req)) return ESP_OK;
     char buf[128];
     int ret = httpd_req_recv(req, buf, sizeof(buf) - 1);
     if (ret <= 0) {
@@ -972,6 +989,7 @@ static esp_err_t get_wifi_saved_handler(httpd_req_t *req)
 
 static esp_err_t post_wifi_save_handler(httpd_req_t *req)
 {
+    if (!check_api_auth(req)) return ESP_OK;
     char buf[256];
     int ret = httpd_req_recv(req, buf, sizeof(buf) - 1);
     if (ret <= 0) {
@@ -1039,6 +1057,7 @@ static esp_err_t post_wifi_save_handler(httpd_req_t *req)
 
 static esp_err_t post_wifi_delete_handler(httpd_req_t *req)
 {
+    if (!check_api_auth(req)) return ESP_OK;
     char buf[128];
     int ret = httpd_req_recv(req, buf, sizeof(buf) - 1);
     if (ret <= 0) {
@@ -1078,6 +1097,7 @@ static esp_err_t post_wifi_delete_handler(httpd_req_t *req)
 
 static esp_err_t post_wifi_connect_handler(httpd_req_t *req)
 {
+    if (!check_api_auth(req)) return ESP_OK;
     char buf[128];
     int ret = httpd_req_recv(req, buf, sizeof(buf) - 1);
     if (ret <= 0) {
@@ -1138,6 +1158,7 @@ static void delayed_reboot_task(void *pv)
 
 static esp_err_t post_system_reboot_handler(httpd_req_t *req)
 {
+    if (!check_api_auth(req)) return ESP_OK;
     set_common_headers(req, "application/json");
     httpd_resp_send(req, "{\"status\":\"ok\"}", HTTPD_RESP_USE_STRLEN);
     xTaskCreate(delayed_reboot_task, "reboot_task", 2048, NULL, 5, NULL);
@@ -1146,6 +1167,7 @@ static esp_err_t post_system_reboot_handler(httpd_req_t *req)
 
 static esp_err_t post_system_factory_reset_handler(httpd_req_t *req)
 {
+    if (!check_api_auth(req)) return ESP_OK;
     set_common_headers(req, "application/json");
     httpd_resp_send(req, "{\"status\":\"ok\"}", HTTPD_RESP_USE_STRLEN);
     config_manager_factory_reset();

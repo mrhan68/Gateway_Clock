@@ -10,6 +10,8 @@
  * Database: Aiven PostgreSQL
  */
 const express = require('express');
+const cookieParser = require('cookie-parser');
+const { authenticate } = require('./middleware/auth');
 const cors = require('cors');
 const http = require('http');
 const config = require('./config');
@@ -28,11 +30,15 @@ const app = express();
 
 // ─── Middleware ───
 app.use(cors({
-  origin: true, // Allow all origins in dev; configure for prod
+  origin: process.env.ALLOWED_ORIGIN || 'http://localhost:3000',
   credentials: true
 }));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+app.use(cookieParser());
+
+// Auth routes
+app.use('/auth', require('./routes/auth'));
 
 // Logging (dev only)
 if (config.nodeEnv === 'development') {
@@ -57,12 +63,12 @@ app.get('/health', (req, res) => {
 
 // ─── API Routes ───
 // Web App routes (require JWT in production)
-app.use('/api/v1/gateways', gatewayRoutes);
-app.use('/api/v1/gateways', deviceRoutes);
-app.use('/api/v1/gateways', scheduleRoutes);
-app.use('/api/v1/gateways', ruleRoutes);
-app.use('/api/v1/gateways', eventRoutes);
-app.use('/api/v1/gateways', telemetryRoutes);
+app.use('/api/v1/gateways', authenticate, gatewayRoutes);
+app.use('/api/v1/gateways', authenticate, deviceRoutes);
+app.use('/api/v1/gateways', authenticate, scheduleRoutes);
+app.use('/api/v1/gateways', authenticate, ruleRoutes);
+app.use('/api/v1/gateways', authenticate, eventRoutes);
+app.use('/api/v1/gateways', authenticate, telemetryRoutes);
 
 // ─── Error handler (must be last) ───
 app.use(errorHandler);
