@@ -7,6 +7,7 @@
 #include "nvs.h"
 #include "cJSON.h"
 #include "ble_adapter.h"
+#include "esp_random.h"
 
 static const char *TAG = "CONFIG_MGR";
 static const char *NVS_NAMESPACE = "sys_cfg";
@@ -27,6 +28,7 @@ static void set_default_config(void)
     s_active_config.mqtt_telemetry_interval_s = 10;
     s_active_config.saved_wifi_count = 0;
     memset(s_active_config.saved_wifi, 0, sizeof(s_active_config.saved_wifi));
+    s_active_config.api_key[0] = '\0';
 }
 
 esp_err_t config_manager_load_from_file(const char *filepath)
@@ -218,6 +220,17 @@ esp_err_t config_manager_init(void)
 
     nvs_get_u16(handle, "mqtt_interval", &s_active_config.mqtt_telemetry_interval_s);
 
+    // Đọc API Key (FR-SEC-02)
+    len = sizeof(s_active_config.api_key);
+    if (nvs_get_str(handle, "api_key", s_active_config.api_key, &len) != ESP_OK || s_active_config.api_key[0] == '\0') {
+        uint32_t r1 = esp_random();
+        uint32_t r2 = esp_random();
+        snprintf(s_active_config.api_key, sizeof(s_active_config.api_key), "%08lx%08lx", (unsigned long)r1, (unsigned long)r2);
+        nvs_set_str(handle, "api_key", s_active_config.api_key);
+        nvs_commit(handle);
+        ESP_LOGW(TAG, "Local API key generated: %s (change via: config set apikey <key>)", s_active_config.api_key);
+    }
+
     nvs_close(handle);
 
     // Nạp tệp cấu hình /spiffs/config.json nếu tồn tại (FSD §4.12.2 & FR-CFG-01)
@@ -388,6 +401,16 @@ esp_err_t config_manager_set_timezone(const char *tz)
     return config_manager_save();
 }
 
+esp_err_t config_manager_set_api_key(const char *key)
+{
+    if (!key || strlen(key) == 0 || strlen(key) >= sizeof(s_active_config.api_key)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    strncpy(s_active_config.api_key, key, sizeof(s_active_config.api_key) - 1);
+    s_active_config.api_key[sizeof(s_active_config.api_key) - 1] = '\0';
+    return config_manager_save();
+}
+
 esp_err_t config_manager_save(void)
 {
     nvs_handle_t handle;
@@ -426,6 +449,12 @@ esp_err_t config_manager_save(void)
     nvs_set_str(handle, "mqtt_uri", s_active_config.mqtt_broker_uri);
     nvs_set_u16(handle, "mqtt_interval", s_active_config.mqtt_telemetry_interval_s);
 
+    if (s_active_config.api_key[0] != '\0') {
+        nvs_set_str(handle, "api_key", s_active_config.api_key);
+    } else {
+        nvs_erase_key(handle, "api_key");
+    }
+
     ret = nvs_commit(handle);
     nvs_close(handle);
 
@@ -447,5 +476,6 @@ void config_manager_print(void)
     printf("SoftAP Password  : %s\n", s_active_config.softap_password[0] ? "********" : "(None - Open)");
     printf("MQTT Broker URI  : %s\n", s_active_config.mqtt_broker_uri);
     printf("MQTT Interval    : %u s\n", s_active_config.mqtt_telemetry_interval_s);
+    printf("API Key          : %s\n", s_active_config.api_key[0] ? s_active_config.api_key : "(none)");
     printf("=========================================\n\n");
 }

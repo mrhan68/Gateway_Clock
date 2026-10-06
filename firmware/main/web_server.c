@@ -20,14 +20,14 @@
 static const char *TAG = "WEB_SERVER";
 
 static bool check_api_auth(httpd_req_t *req) {
-    char auth_header[128];
-    if (httpd_req_get_hdr_value_str(req, "Authorization", auth_header, sizeof(auth_header)) == ESP_OK) {
-        // Ponytail: simple static token for now. In real prod, this reads from NVS.
-        if (strstr(auth_header, "Bearer gateway-lan-secret-123")) {
+    char key_hdr[40];
+    if (httpd_req_get_hdr_value_str(req, "X-API-Key", key_hdr, sizeof(key_hdr)) == ESP_OK) {
+        const gateway_config_t *cfg = config_manager_get();
+        if (cfg && cfg->api_key[0] != '\0' && strcmp(key_hdr, cfg->api_key) == 0) {
             return true;
         }
     }
-    httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Missing or invalid Authorization header");
+    httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Missing or invalid X-API-Key header");
     return false;
 }
 
@@ -303,6 +303,7 @@ static const char DASHBOARD_HTML[] =
 "</div>"
 "</div>"
 "<script>"
+"function api(u,o){o=o||{};o.headers=Object.assign({},o.headers,{'X-API-Key':localStorage.k||''});return fetch(u,o).then(r=>{if(r.status==401){var k=prompt('API key (serial: config show)');if(k){localStorage.k=k;return api(u,o);}}return r;});}"
 "var s_relays = [0, 0, 0, 0];"
 "function switchTab(id, btn) {"
 "  document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));"
@@ -354,7 +355,7 @@ static const char DASHBOARD_HTML[] =
 "}"
 "function toggleRelay(target, idx) {"
 "  var nextCmd = s_relays[idx] ? 'OFF' : 'ON';"
-"  fetch('/api/relay', {"
+"  api('/api/relay', {"
 "    method: 'POST',"
 "    headers: {'Content-Type': 'application/json'},"
 "    body: JSON.stringify({ target: target, command: nextCmd })"
@@ -396,7 +397,7 @@ static const char DASHBOARD_HTML[] =
 "    action: document.getElementById('new-rule-cmd').value,"
 "    enabled: true"
 "  };"
-"  fetch('/api/rules', {"
+"  api('/api/rules', {"
 "    method: 'POST',"
 "    headers: {'Content-Type': 'application/json'},"
 "    body: JSON.stringify(payload)"
@@ -408,13 +409,13 @@ static const char DASHBOARD_HTML[] =
 "}"
 "function deleteRule(id) {"
 "  if (!confirm('Bạn có chắc muốn xóa Quy tắc #' + id + '?')) return;"
-"  fetch('/api/rules?id=' + id, { method: 'DELETE' }).then(r => r.json()).then(() => {"
+"  api('/api/rules?id=' + id, { method: 'DELETE' }).then(r => r.json()).then(() => {"
 "    fetchRules();"
 "  }).catch(e => alert('Lỗi xóa: ' + e));"
 "}"
 "function clearAllRules() {"
 "  if (!confirm('Xóa TẤT CẢ quy tắc tự động?')) return;"
-"  fetch('/api/rules', { method: 'DELETE' }).then(r => r.json()).then(() => {"
+"  api('/api/rules', { method: 'DELETE' }).then(r => r.json()).then(() => {"
 "    fetchRules();"
 "  }).catch(e => alert('Lỗi: ' + e));"
 "}"
@@ -451,7 +452,7 @@ static const char DASHBOARD_HTML[] =
 "}"
 "function connectWifi(ssid) {"
 "  if (!confirm('Chuyển sang kết nối mạng \"' + ssid + '\"?')) return;"
-"  fetch('/api/wifi/connect', {"
+"  api('/api/wifi/connect', {"
 "    method: 'POST',"
 "    headers: {'Content-Type': 'application/json'},"
 "    body: JSON.stringify({ssid: ssid})"
@@ -463,7 +464,7 @@ static const char DASHBOARD_HTML[] =
 "function editWifiPass(ssid) {"
 "  var newPass = prompt('Nhập mật khẩu mới cho mạng \"' + ssid + '\":');"
 "  if (newPass === null) return;"
-"  fetch('/api/wifi/save', {"
+"  api('/api/wifi/save', {"
 "    method: 'POST',"
 "    headers: {'Content-Type': 'application/json'},"
 "    body: JSON.stringify({ssid: ssid, password: newPass, connect: false})"
@@ -474,7 +475,7 @@ static const char DASHBOARD_HTML[] =
 "}"
 "function deleteSavedWifi(ssid) {"
 "  if (!confirm('Bạn có chắc muốn xóa mạng \"' + ssid + '\" khỏi danh sách đã lưu?')) return;"
-"  fetch('/api/wifi/delete', {"
+"  api('/api/wifi/delete', {"
 "    method: 'POST',"
 "    headers: {'Content-Type': 'application/json'},"
 "    body: JSON.stringify({ssid: ssid})"
@@ -490,7 +491,7 @@ static const char DASHBOARD_HTML[] =
 "  var pass = document.getElementById('wifi-password').value;"
 "  var conn = document.getElementById('wifi-connect-now').checked;"
 "  if (!ssid) { alert('Vui lòng chọn hoặc nhập tên SSID!'); return; }"
-"  fetch('/api/wifi/save', {"
+"  api('/api/wifi/save', {"
 "    method: 'POST',"
 "    headers: {'Content-Type': 'application/json'},"
 "    body: JSON.stringify({ssid: ssid, password: pass, connect: conn})"
@@ -504,7 +505,7 @@ static const char DASHBOARD_HTML[] =
 "  e.preventDefault();"
 "  var p = document.getElementById('sys-new-softap-pass').value;"
 "  if (p.length < 8) { alert('Mật khẩu SoftAP phải từ 8 ký tự trở lên!'); return; }"
-"  fetch('/api/softap/set_password', {"
+"  api('/api/softap/set_password', {"
 "    method: 'POST',"
 "    headers: {'Content-Type': 'application/x-www-form-urlencoded'},"
 "    body: 'password=' + encodeURIComponent(p)"
@@ -515,13 +516,13 @@ static const char DASHBOARD_HTML[] =
 "}"
 "function rebootGateway() {"
 "  if (!confirm('Khởi động lại Gateway?')) return;"
-"  fetch('/api/system/reboot', { method: 'POST' }).then(() => {"
+"  api('/api/system/reboot', { method: 'POST' }).then(() => {"
 "    alert('Gateway đang khởi động lại...');"
 "  }).catch(() => alert('Gateway đang khởi động lại...'));"
 "}"
 "function factoryResetGateway() {"
 "  if (!confirm('CẢNH BÁO: Xóa sạch toàn bộ cấu hình Wi-Fi và đưa SoftAP về chế độ OPEN?')) return;"
-"  fetch('/api/system/factory_reset', { method: 'POST' }).then(() => {"
+"  api('/api/system/factory_reset', { method: 'POST' }).then(() => {"
 "    alert('Đã xóa cấu hình! Thiết bị đang khởi động lại ở chế độ OPEN...');"
 "  }).catch(() => alert('Thiết bị đang khởi động lại...'));"
 "}"

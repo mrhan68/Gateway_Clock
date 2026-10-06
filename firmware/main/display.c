@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
+#include <sys/time.h>
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "driver/gpio.h"
@@ -200,9 +201,14 @@ static void ssd1327_flush(void)
     ssd1327_send_cmd(0x00);
     ssd1327_send_cmd(0x7F);
 
-    // Gửi 128 dòng dữ liệu, mỗi dòng 64 bytes
-    for (int row = 0; row < SSD1327_HEIGHT; row++) {
-        ssd1327_send_data(&s_oled_buffer[row * SSD1327_BYTES_PER_ROW], SSD1327_BYTES_PER_ROW);
+    // Gửi dữ liệu theo các khối 512 bytes (8 dòng) để tối ưu bus I2C, giảm thời gian chiếm dụng
+    size_t remaining = sizeof(s_oled_buffer);
+    size_t offset = 0;
+    while (remaining > 0) {
+        size_t chunk = (remaining > 512) ? 512 : remaining;
+        ssd1327_send_data(&s_oled_buffer[offset], chunk);
+        offset += chunk;
+        remaining -= chunk;
     }
 }
 
@@ -514,8 +520,17 @@ static void display_task(void *pvParameters)
     uint64_t last_btn_screen_time = 0;
 
     while (1) {
-        // Chờ nhận Direct Notification từ ISR nút bấm hoặc timeout 1000ms (1 FPS)
-        BaseType_t notified = xTaskNotifyWait(0, ULONG_MAX, &notify_val, pdMS_TO_TICKS(1000));
+        // Đồng bộ thời gian thức dậy chính xác theo microsecond của đồng hồ thực tế (Wall-Clock Phase Locking)
+        struct timeval tv;
+        gettimeofday(&tv, NULL);
+        uint32_t cur_ms_in_sec = (uint32_t)(tv.tv_usec / 1000);
+        uint32_t wait_ms = (cur_ms_in_sec < 1000) ? (1000 - cur_ms_in_sec + 20) : 1000;
+        if (wait_ms < 30) {
+            wait_ms += 1000;
+        }
+
+        // Chờ nhận Direct Notification từ ISR nút bấm hoặc timeout đến đúng đầu giây tiếp theo
+        BaseType_t notified = xTaskNotifyWait(0, ULONG_MAX, &notify_val, pdMS_TO_TICKS(wait_ms));
         uint64_t now_ms = esp_timer_get_time() / 1000ULL;
 
         // Báo cáo nhịp tim định kỳ tới Task Supervisor (FSD §4.13.2)
@@ -574,7 +589,6 @@ static void display_task(void *pvParameters)
                     s_current_screen = (display_screen_index_t)((s_current_screen + 1) % DISPLAY_SCREEN_COUNT);
                     ESP_LOGI(TAG, "Button 2 pressed -> Switched to Screen %d", s_current_screen);
                     event_bus_post(EVT_BUTTON_SCREEN_NEXT, NULL, 0, false);
-                    display_render();
                 }
             }
         }

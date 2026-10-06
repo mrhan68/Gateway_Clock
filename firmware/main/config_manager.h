@@ -28,6 +28,7 @@ typedef struct {
     uint16_t mqtt_telemetry_interval_s;
     uint8_t saved_wifi_count;
     wifi_profile_t saved_wifi[MAX_SAVED_WIFI];
+    char api_key[33];
 } gateway_config_t;
 
 /**
@@ -84,6 +85,11 @@ esp_err_t config_manager_set_mqtt(const char *uri, uint16_t interval_s);
  * @brief Cập nhật chuỗi POSIX Timezone (VD: "ICT-7")
  */
 esp_err_t config_manager_set_timezone(const char *tz);
+
+/**
+ * @brief Cập nhật Local REST API key (8..32 ký tự)
+ */
+esp_err_t config_manager_set_api_key(const char *key);
 
 /**
  * @brief Nạp cấu hình từ tệp JSON trên hệ thống tệp (LittleFS / SD card)

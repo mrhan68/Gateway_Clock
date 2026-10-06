@@ -73,6 +73,7 @@ static void print_help(void)
     printf("  config show                          - Print active configuration\n");
     printf("  config set wifi <ssid> <pass>        - Save Wi-Fi SSID and password to NVS\n");
     printf("  config set mqtt <uri> [interval_s]   - Save MQTT Broker URI and publish interval\n");
+    printf("  config set apikey <key>              - Set REST API key (8..32 characters)\n");
     printf("  rule list                            - List active automation rules\n");
     printf("  rule add <id> <sensor> <GT|LT> <thr> <target> <cmd> - Add or update rule\n");
     printf("  rule test <sensor_id> <val> [valid]  - Test telemetry against rules (valid=1/0)\n");
@@ -232,6 +233,23 @@ static void handle_command(char *cmd_line)
             printf("OK: MQTT updated: URI='%s', interval=%u s\n", uri, interval);
         } else {
             printf("Error: Usage: config set mqtt <uri> [interval_s]\n");
+        }
+    } else if (strncmp(cmd_line, "config set apikey", 17) == 0) {
+        char key[64] = {0};
+        char extra[64] = {0};
+        int parsed = sscanf(cmd_line + 17, "%63s %63s", key, extra);
+        size_t klen = strlen(key);
+        bool valid = (parsed == 1 && klen >= 8 && klen <= 32);
+        for (size_t i = 0; i < klen && valid; i++) {
+            if (key[i] < 33 || key[i] > 126) {
+                valid = false;
+            }
+        }
+        if (valid) {
+            config_manager_set_api_key(key);
+            printf("OK: API key updated: '%s'\n", key);
+        } else {
+            printf("Error: Usage: config set apikey <key> (8..32 printable non-space characters)\n");
         }
     } else if (strcmp(cmd_line, "status") == 0) {
         uint32_t active, alive, heap;

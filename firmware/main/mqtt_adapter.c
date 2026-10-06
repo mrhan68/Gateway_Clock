@@ -6,6 +6,7 @@
 #include "mqtt_client.h"
 #include "event_bus.h"
 #include "config_manager.h"
+#include "esp_crt_bundle.h"
 
 static const char *TAG = "MQTT_ADAPTER";
 
@@ -109,6 +110,9 @@ void mqtt_adapter_init(const char *broker_uri, const char *gateway_id, const cha
         .broker = {
             .address = {
                 .uri = s_broker_uri,
+            },
+            .verification = {
+                .crt_bundle_attach = esp_crt_bundle_attach,
             },
         },
         .credentials = {
