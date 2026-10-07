@@ -17,3 +17,9 @@ services:
         generateValue: true
       - key: GATEWAY_KEY
         generateValue: true
+      - key: MQTT_URI
+        sync: false
+      - key: MQTT_USER
+        sync: false
+      - key: MQTT_PASS
+        sync: false

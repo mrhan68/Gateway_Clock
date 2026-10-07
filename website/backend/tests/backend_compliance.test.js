@@ -1,16 +1,30 @@
-jest.mock('aedes', () => {
+jest.mock('mqtt', () => {
   const { EventEmitter } = require('events');
   return {
-    Aedes: jest.fn().mockImplementation(() => {
-      const emitter = new EventEmitter();
-      emitter.listen = jest.fn().mockResolvedValue();
-      emitter.handle = jest.fn();
-      emitter.publish = jest.fn((packet, cb) => cb && cb(null));
-      emitter.close = jest.fn((cb) => cb && cb());
-      return emitter;
+    connect: jest.fn().mockImplementation(() => {
+      const client = new EventEmitter();
+      client.connected = true;
+      client.subscribe = jest.fn();
+      client.publish = jest.fn((topic, message, opts, cb) => {
+        if (typeof opts === 'function') opts(null);
+        else if (cb) cb(null);
+      });
+      client.end = jest.fn((force, cb) => {
+        if (typeof force === 'function') force();
+        else if (cb) cb();
+      });
+      return client;
     })
   };
 });
+
+// Mock auth middleware for compliance route tests
+jest.mock('../src/middleware/auth', () => ({
+  authenticate: (req, res, next) => {
+    req.user = { id: 'usr_test', email: 'test@example.com' };
+    next();
+  }
+}));
 
 // Mock PrismaClient to test logic without live DB
 jest.mock('@prisma/client', () => {
@@ -113,6 +127,13 @@ const broker = require('../src/mqtt/broker');
 const { createError, errorHandler, ApiError } = require('../src/middleware/errorHandler');
 
 describe('FSD Backend Compliance Tests', () => {
+  beforeAll(async () => {
+    await broker.startBroker();
+  });
+
+  afterAll(async () => {
+    await broker.stopBroker();
+  });
 
   describe('1. Health Check & Error Handling (§8.9)', () => {
     test('GET /health returns 200 with status ok and timestamp', async () => {
@@ -303,7 +324,6 @@ describe('FSD Backend Compliance Tests', () => {
       expect(typeof broker.publishDeviceCommand).toBe('function');
       expect(typeof broker.publishScheduleConfig).toBe('function');
       expect(typeof broker.isGatewayOnline).toBe('function');
-      expect(broker.aedes).toBeDefined();
     });
 
     test('startBroker and stopBroker lifecycle works cleanly', async () => {

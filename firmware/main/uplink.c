@@ -53,7 +53,7 @@ void uplink_init(void)
 {
     const gateway_config_t *cfg = config_manager_get();
     const char *broker_uri = (cfg != NULL && strlen(cfg->mqtt_broker_uri) > 0) ?
-                             cfg->mqtt_broker_uri : "mqtts://hivemq.cloud:8883";
+                             cfg->mqtt_broker_uri : "mqtts://your-emqx-broker.emqxsl.com:8883";
     const char *mqtt_user = cfg ? cfg->mqtt_username : NULL;
     const char *mqtt_pass = cfg ? cfg->mqtt_password : NULL;
     const char *gateway_id = (cfg != NULL && strlen(cfg->gateway_id) > 0) ?

@@ -8,9 +8,9 @@ let isRunning = false;
 
 async function startBroker() {
   if (isRunning) return;
-  const brokerUri = process.env.MQTT_URI || 'mqtts://hivemq.cloud:8883';
+  const brokerUri = process.env.MQTT_URI || 'mqtts://your-emqx-broker.emqxsl.com:8883';
   const username = process.env.MQTT_USER || 'gw_client';
-  const password = process.env.MQTT_PASS || 'your_mqtt_password';
+  const password = process.env.MQTT_PASS || 'your_mqtt_password ';
   
   console.log(`[MQTT] Connecting to external broker: ${brokerUri}`);
   

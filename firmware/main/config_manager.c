@@ -22,9 +22,9 @@ static void set_default_config(void)
     strncpy(s_active_config.wifi_ssid, "", sizeof(s_active_config.wifi_ssid) - 1);
     strncpy(s_active_config.wifi_password, "", sizeof(s_active_config.wifi_password) - 1);
     s_active_config.softap_password[0] = '\0';
-    strncpy(s_active_config.mqtt_broker_uri, "mqtts://16a4e3...hivemq.cloud:8883", sizeof(s_active_config.mqtt_broker_uri) - 1);
+    strncpy(s_active_config.mqtt_broker_uri, "mqtts://your-emqx-broker.emqxsl.com:8883", sizeof(s_active_config.mqtt_broker_uri) - 1);
     strncpy(s_active_config.mqtt_username, "gw_client", sizeof(s_active_config.mqtt_username) - 1);
-    strncpy(s_active_config.mqtt_password, "your_mqtt_password", sizeof(s_active_config.mqtt_password) - 1);
+    strncpy(s_active_config.mqtt_password, "your_mqtt_password ", sizeof(s_active_config.mqtt_password) - 1);
     s_active_config.mqtt_telemetry_interval_s = 10;
     s_active_config.saved_wifi_count = 0;
     memset(s_active_config.saved_wifi, 0, sizeof(s_active_config.saved_wifi));
@@ -212,10 +212,11 @@ esp_err_t config_manager_init(void)
     // Đọc MQTT Broker
     len = sizeof(s_active_config.mqtt_broker_uri);
     nvs_get_str(handle, "mqtt_uri", s_active_config.mqtt_broker_uri, &len);
-    if (strcmp(s_active_config.mqtt_broker_uri, "mqtt://192.168.1.100:1883") == 0) {
-        strncpy(s_active_config.mqtt_broker_uri, "mqtts://16a4e3...hivemq.cloud:8883", sizeof(s_active_config.mqtt_broker_uri) - 1);
-    strncpy(s_active_config.mqtt_username, "gw_client", sizeof(s_active_config.mqtt_username) - 1);
-    strncpy(s_active_config.mqtt_password, "your_mqtt_password", sizeof(s_active_config.mqtt_password) - 1);
+    if (strcmp(s_active_config.mqtt_broker_uri, "mqtt://192.168.1.100:1883") == 0 ||
+        strstr(s_active_config.mqtt_broker_uri, "hivemq") != NULL) {
+        strncpy(s_active_config.mqtt_broker_uri, "mqtts://your-emqx-broker.emqxsl.com:8883", sizeof(s_active_config.mqtt_broker_uri) - 1);
+        strncpy(s_active_config.mqtt_username, "gw_client", sizeof(s_active_config.mqtt_username) - 1);
+        strncpy(s_active_config.mqtt_password, "your_mqtt_password ", sizeof(s_active_config.mqtt_password) - 1);
     }
 
     nvs_get_u16(handle, "mqtt_interval", &s_active_config.mqtt_telemetry_interval_s);
