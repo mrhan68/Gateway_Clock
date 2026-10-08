@@ -606,7 +606,7 @@ function Devices() {
                   name="capabilities"
                   type="text"
                   placeholder='["temperature", "humidity"]'
-                  defaultValue={editDevice?.capabilities || ''}
+                  defaultValue={Array.isArray(editDevice?.capabilities) ? JSON.stringify(editDevice.capabilities) : (editDevice?.capabilities || '')}
                   className="w-full px-3 py-2 text-xs bg-zinc-950 border border-zinc-800 rounded-lg text-zinc-100 font-mono placeholder-zinc-600 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500"
                   spellCheck={false}
                 />

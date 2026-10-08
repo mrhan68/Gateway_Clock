@@ -16,6 +16,20 @@ function safeParseJson(str, fallback = []) {
   }
 }
 
+function formatCapabilitiesForDb(caps) {
+  if (!caps) return null;
+  if (typeof caps === 'string') {
+    try {
+      const parsed = JSON.parse(caps);
+      return JSON.stringify(parsed);
+    } catch {
+      const arr = caps.split(',').map(s => s.trim()).filter(Boolean);
+      return JSON.stringify(arr);
+    }
+  }
+  return JSON.stringify(caps);
+}
+
 /**
  * GET /gateways/{gateway_id}/devices
  */
@@ -130,7 +144,7 @@ async function createDevice(req, res, next) {
         protocol,
         macAddress: mac_address || null,
         mqttTopic: mqtt_topic || null,
-        capabilities: capabilities ? JSON.stringify(capabilities) : null
+        capabilities: formatCapabilitiesForDb(capabilities)
       }
     });
 
@@ -165,7 +179,7 @@ async function updateDevice(req, res, next) {
         protocol: protocol ?? undefined,
         macAddress: mac_address ?? undefined,
         mqttTopic: mqtt_topic ?? undefined,
-        capabilities: capabilities ? JSON.stringify(capabilities) : undefined
+        capabilities: capabilities !== undefined ? formatCapabilitiesForDb(capabilities) : undefined
       }
     });
 
