@@ -433,7 +433,7 @@ static const char DASHBOARD_HTML[] =
 "  }).catch(e => alert('Lỗi: ' + e));"
 "}"
 "function loadSavedWifi() {"
-"  fetch('/api/wifi/saved').then(r => r.json()).then(data => {"
+"  api('/api/wifi/saved').then(r => r.json()).then(data => {"
 "    var tbody = document.getElementById('saved-wifi-body');"
 "    tbody.innerHTML = '';"
 "    var actSSID = data.active_ssid || '';"
@@ -974,6 +974,7 @@ static esp_err_t post_softap_set_password_handler(httpd_req_t *req)
 
 static esp_err_t get_wifi_saved_handler(httpd_req_t *req)
 {
+    if (!check_api_auth(req)) return ESP_OK;
     const gateway_config_t *cfg = config_manager_get();
     cJSON *root = cJSON_CreateObject();
     cJSON_AddStringToObject(root, "active_ssid", cfg ? cfg->wifi_ssid : "");
