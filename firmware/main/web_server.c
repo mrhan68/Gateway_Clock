@@ -643,57 +643,6 @@ static esp_err_t get_telemetry_handler(httpd_req_t *req)
     return ret;
 }
 
-static esp_err_t post_sensor_test_handler(httpd_req_t *req)
-{
-    char buf[128];
-    int ret = httpd_req_recv(req, buf, sizeof(buf) - 1);
-    if (ret <= 0) {
-        httpd_resp_send_500(req);
-        return ESP_FAIL;
-    }
-    buf[ret] = '\0';
-
-    cJSON *json = cJSON_Parse(buf);
-    if (!json) {
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
-        return ESP_FAIL;
-    }
-
-    float temp = 28.5f;
-    float hum = 60.0f;
-    char dev_id[32] = "sensor_temp_01";
-
-    cJSON *j_temp = cJSON_GetObjectItem(json, "temp");
-    if (!j_temp) j_temp = cJSON_GetObjectItem(json, "temperature");
-    if (j_temp && cJSON_IsNumber(j_temp)) temp = (float)j_temp->valuedouble;
-
-    cJSON *j_hum = cJSON_GetObjectItem(json, "hum");
-    if (!j_hum) j_hum = cJSON_GetObjectItem(json, "humidity");
-    if (j_hum && cJSON_IsNumber(j_hum)) hum = (float)j_hum->valuedouble;
-
-    cJSON *j_dev = cJSON_GetObjectItem(json, "device_id");
-    if (j_dev && cJSON_IsString(j_dev)) strncpy(dev_id, j_dev->valuestring, sizeof(dev_id) - 1);
-
-    cJSON_Delete(json);
-
-    ble_adapter_inject_test_packet(dev_id, temp, hum);
-
-    cJSON *resp = cJSON_CreateObject();
-    cJSON_AddBoolToObject(resp, "success", true);
-    cJSON_AddNumberToObject(resp, "temp", temp);
-    cJSON_AddNumberToObject(resp, "hum", hum);
-    cJSON_AddStringToObject(resp, "device_id", dev_id);
-    cJSON_AddStringToObject(resp, "message", "Synthetic telemetry injected into Gateway Event Bus");
-
-    char *resp_str = cJSON_PrintUnformatted(resp);
-    cJSON_Delete(resp);
-
-    set_common_headers(req, "application/json");
-    esp_err_t r = httpd_resp_send(req, resp_str, strlen(resp_str));
-    free(resp_str);
-    return r;
-}
-
 static esp_err_t post_relay_handler(httpd_req_t *req)
 {
     if (!check_api_auth(req)) return ESP_OK;
@@ -1299,9 +1248,6 @@ esp_err_t web_server_start(void)
 
     httpd_uri_t uri_telemetry = { .uri = "/api/telemetry", .method = HTTP_GET, .handler = get_telemetry_handler };
     httpd_register_uri_handler(s_server, &uri_telemetry);
-
-    httpd_uri_t uri_test_sensor = { .uri = "/api/test/sensor", .method = HTTP_POST, .handler = post_sensor_test_handler };
-    httpd_register_uri_handler(s_server, &uri_test_sensor);
 
     httpd_uri_t uri_relay = { .uri = "/api/relay", .method = HTTP_POST, .handler = post_relay_handler };
     httpd_register_uri_handler(s_server, &uri_relay);

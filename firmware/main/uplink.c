@@ -52,13 +52,18 @@ static void uplink_task(void *pvParameters)
                 uint64_t uptime_s = esp_timer_get_time() / 1000000ULL;
                 uint32_t free_heap = esp_get_free_heap_size();
                 const char *ip = wifi_provisioning_get_ip();
-                float cur_temp = display_get_latest_temp();
-                float cur_hum = display_get_latest_hum();
-
                 char payload[160];
-                snprintf(payload, sizeof(payload),
-                         "{\"uptime_s\":%llu,\"free_heap\":%lu,\"ip\":\"%s\",\"temperature\":%.1f,\"humidity\":%.1f}",
-                         uptime_s, (unsigned long)free_heap, ip, cur_temp, cur_hum);
+                if (display_get_latest_valid()) {
+                    float cur_temp = display_get_latest_temp();
+                    float cur_hum = display_get_latest_hum();
+                    snprintf(payload, sizeof(payload),
+                             "{\"uptime_s\":%llu,\"free_heap\":%lu,\"ip\":\"%s\",\"temperature\":%.1f,\"humidity\":%.1f}",
+                             uptime_s, (unsigned long)free_heap, ip, cur_temp, cur_hum);
+                } else {
+                    snprintf(payload, sizeof(payload),
+                             "{\"uptime_s\":%llu,\"free_heap\":%lu,\"ip\":\"%s\"}",
+                             uptime_s, (unsigned long)free_heap, ip);
+                }
 
                 mqtt_adapter_publish("telemetry", payload);
                 ESP_LOGD(TAG, "Uplink telemetry published: %s", payload);
