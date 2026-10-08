@@ -40,14 +40,17 @@ async function updateGateway(req, res, next) {
     const { gateway_id } = req.params;
     const { name, timezone, firmware_version } = req.body;
 
-    // Check existence first
+    // Check existence and ownership
     const existing = await prisma.gateway.findUnique({
       where: { id: gateway_id },
-      select: { id: true }
+      select: { id: true, userId: true }
     });
     if (!existing) {
       throw createError('GATEWAY_NOT_FOUND',
         `Gateway '${gateway_id}' not found`);
+    }
+    if (req.user?.id && existing.userId && existing.userId !== req.user.id) {
+      throw createError('FORBIDDEN', 'Access to this gateway is denied');
     }
 
     const updated = await prisma.gateway.update({
@@ -114,7 +117,9 @@ async function createGateway(req, res, next) {
  */
 async function listGateways(req, res, next) {
   try {
+    const where = req.user?.id ? { userId: req.user.id } : {};
     const gateways = await prisma.gateway.findMany({
+      where,
       orderBy: { createdAt: 'desc' },
       select: {
         id: true,
@@ -236,6 +241,7 @@ async function claimGateway(req, res, next) {
       where: { id: gateway.id },
       data: {
         name: name || gateway.name,
+        userId: req.user?.id || gateway.userId,
         status: 'active',
         claimCode: null,
         claimExpiresAt: null,
