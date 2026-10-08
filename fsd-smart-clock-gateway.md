@@ -95,11 +95,11 @@ Smart Clock không phải là một IoT device đơn lẻ, mà là một **Gatew
 │                                                                                        │
 │  ┌──────────────┐          REST API / WS          ┌─────────────────────────────────┐  │
 │  │   Web App    │◄───────────────────────────────►│             Backend             │  │
-│  │ (React/Vite) │                                 │ (Node.js/Express + Aedes MQTT)  │  │
+│  │ (React/Vite) │                                 │        (Node.js/Express)        │  │
 │  └──────────────┘                                 └────────────────┬────────────────┘  │
 │                                                                    │                   │
-│                                                       Wi-Fi / MQTT │ Uplink & Commands │
-│                                                                    ▼                   │
+│                                                      Wi-Fi / MQTTS │ Uplink & Commands │
+│                                                        (TLS 8883)  ▼                   │
 │                                                   ┌─────────────────────────────────┐  │
 │                                                   │    Smart Clock Edge Gateway     │  │
 │                                                   │        (ESP32-S3 Firmware)      │  │
@@ -115,7 +115,7 @@ Smart Clock không phải là một IoT device đơn lẻ, mà là một **Gatew
 │  - Flash NVS: Wi-Fi credentials, Broker URI, Gateway ID, Timezone (POSIX ICT-7)        │
 │  - Task Supervisor: TWDT + Heartbeat bitmask (0x7F) giám sát 7 task FreeRTOS, hang 15s │
 │  - Cấu hình tại chỗ: Web Dashboard (Port 80) + Serial CLI tương tác (UART0 115200 baud)│
-│  - Broker MQTT: Embedded Aedes (Backend port 1883) hoặc Mosquitto bảo mật TLS (8883)   │
+│  - Broker MQTT: Cloud MQTTS TLS (8883 - EMQX / Mosquitto / HiveMQ) xác thực X.509 + Acc│
 └────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -332,7 +332,7 @@ Luồng dữ liệu chính:
         │                                │
         └──────────────┬─────────────────┘
                        ▼
-             [EVT_COMMAND_RESPONSE] ──► uplink_task (phản hồi ACK về topic gateway/{gateway_id}/device/{device_id}/command/ack)
+             [EVT_COMMAND_RESPONSE] ──► uplink_task (phản hồi ACK về topic gateway/{gateway_id}/device/{device_id}/command_ack)
                                     ──► sd_log_task (ghi audit log)
 
   Luồng 3 — Khôi phục kết nối & Đồng bộ bù (Backfill):
@@ -1036,21 +1036,22 @@ Protocol Adapter phía MQTT — giao tiếp với Backend và các thiết bị 
 | MA-01 | Kết nối MQTT broker | esp-mqtt client kết nối broker với Retained LWT ("offline", QoS 1) |
 | MA-02 | Subscribe topics | Subscribe các topic: `gateway/{id}/device/+/command`, `gateway/{id}/config/#` |
 | MA-03 | Enqueue Config Downlink | Khi nhận `gateway/{id}/config/{type}`, chuyển tiếp ngay vào Storage Worker Queue |
-| MA-04 | Publish telemetry/status | `mqtt_adapter_publish()` gửi dữ liệu telemetry, status, events, command/ack với QoS 1 |
+| MA-04 | Publish telemetry/status | `mqtt_adapter_publish()` gửi dữ liệu telemetry, status, events, command_ack với QoS 1 |
 | MA-05 | Post events lên bus | `EVT_MQTT_CONNECTED`, `EVT_MQTT_DISCONNECTED`, `EVT_MQTT_MESSAGE_RECEIVED` |
 | MA-06 | Forward lệnh từ Web App | Nhận MQTT command → post `EVT_DEVICE_COMMAND_REQUEST` → `relay_controller` tiếp nhận |
 
 #### 4.6.3 API
 
 ```c
-void mqtt_adapter_init(const char *broker_uri, const char *gateway_id);
-// Hành vi: Init esp-mqtt client với LWT (QoS 1)
-//          Register handler EVT_RULE_ACTION_REQUEST
-//          Register handler EVT_COMMAND_RESPONSE
+void mqtt_adapter_init(const char *broker_uri, const char *gateway_id, const char *username, const char *password);
+// Hành vi: Init esp-mqtt client với TLS (esp_crt_bundle_attach) và LWT ("offline", QoS 1 retained)
+//          Đăng ký handlers: EVT_RULE_ACTION_REQUEST, EVT_COMMAND_RESPONSE
 
-bool mqtt_adapter_publish(const char *topic_suffix, const char *payload_json, int qos);
-// Hành vi: Publish tới "gateway/{id}/{topic_suffix}" với QoS chỉ định (mặc định QoS 1)
-// QUAN TRỌNG: Khi gọi từ dispatcher handler, sử dụng timeout=0 (non-blocking outbox enqueue).
+bool mqtt_adapter_publish(const char *topic_suffix, const char *payload_json);
+// Hành vi: Publish tới "gateway/{id}/{topic_suffix}" với QoS 1 mặc định (non-blocking outbox enqueue)
+
+bool mqtt_adapter_is_connected(void);
+// Hành vi: Kiểm tra trạng thái kết nối socket MQTT Client
 ```
 
 #### 4.6.4 MQTT Topics (Hợp nhất Chuẩn hóa Toàn Hệ Thống)
@@ -1060,7 +1061,7 @@ bool mqtt_adapter_publish(const char *topic_suffix, const char *payload_json, in
 | `gateway/{id}/status` | Publish | 1 | Yes | "online" lúc kết nối / "offline" qua LWT |
 | `gateway/{id}/device/{did}/telemetry` | Publish | 1 | No | Telemetry thời gian thực từ cảm biến (BLE / MQTT) |
 | `gateway/{id}/device/{did}/command` | Subscribe | 1 | No | Lệnh điều khiển rơ-le/thiết bị từ Backend/Web App |
-| `gateway/{id}/device/{did}/command/ack` | Publish | 1 | No | Phản hồi kết quả thực thi lệnh kèm command_id, mã lỗi |
+| `gateway/{id}/device/{did}/command_ack` | Publish | 1 | No | Phản hồi kết quả thực thi lệnh kèm command_id, mã lỗi |
 | `gateway/{id}/config/#` | Subscribe | 1 | Yes | Backend đẩy cấu hình xuống (`schedule`, `rules`, `devices`) |
 | `gateway/{id}/events` | Publish | 1 | No | Nhật ký sự kiện thời gian thực (báo thức, cutoff, rule trigger) |
 | `gateway/{id}/telemetry/batch` | Publish | 1 | No | Đồng bộ bù (Backfill) dữ liệu từ thẻ nhớ SD khi có mạng lại |
@@ -1093,7 +1094,8 @@ Web App                Backend              MQTT Broker          Gateway (mqtt_a
   │  {"command":"ON"}    │── publish ──────────►│                      │                              │
   │                      │  gateway/{id}/device/                      │                              │
   │                      │  relay_1/command    │── deliver ──────────►│                              │
-  │                      │                     │                      │                              │
+  │                      │  {"command_id":"..",│                      │                              │
+  │                      │   "command":"ON"}   │                      │                              │
   │                      │                     │   on_mqtt_command_recv():                           │
   │                      │                     │   ├── malloc(device_command_req_t)                  │
   │                      │                     │   └── post EVT_DEVICE_COMMAND_REQUEST ─────────────►│
@@ -1104,9 +1106,9 @@ Web App                Backend              MQTT Broker          Gateway (mqtt_a
   │                      │                     │                      │   └── post EVT_COMMAND_RESP ─┤
   │                      │                     │                      │◄─────────────────────────────┘
   │                      │                     │   on_command_response():                            │
-  │                      │                     │   └── publish(topic: .../command/ack, QoS 1)        │
+  │                      │                     │   └── publish(topic: .../command_ack, QoS 1)        │
   │                      │◄── deliver ─────────│◄─────────────────────┤                              │
-  │                      │  (command/ack)      │                      │                              │
+  │                      │  (command_ack)      │                      │                              │
   │◄── SSE / WebSocket ──┤                     │                      │                              │
   │    (Cập nhật UI)     │                     │                      │                              │
 ```
@@ -1257,6 +1259,11 @@ typedef struct {
 4. **Fail-Safe Phản hồi Mất Cảm Biến (`EVT_DEVICE_OFFLINE_ALERT`):**
    - Khi nhận `EVT_DEVICE_OFFLINE_ALERT`, Rule Engine kiểm tra các quy tắc liên kết với `alert->device_id`.
    - Nếu quy tắc điều khiển tải nhiệt (Heater / `relay_2`): Lập tức gán `current_state = false`, thiết lập `lockout_until_mono_us = esp_timer_get_time() + 300000000ULL` (300s), đồng thời phát ngay `EVT_RULE_ACTION_REQUEST` (`target: "relay_2"`, `command: "OFF"`, `reason: "SENSOR_OFFLINE"`) và `EVT_SENSOR_VALUE_INVALID` để cưỡng chế ngắt thanh sưởi tức khắc (0ms trễ).
+
+5. **Điều hướng Chỉ số Đo lường (Multi-Metric Routing - Nhiệt độ / Độ ẩm):**
+   - Đối với các cảm biến môi trường phát đồng thời cả nhiệt độ và độ ẩm (như cảm biến BLE 0x181A hoặc BTHome v2):
+   - Rule Engine tự động chọn giá trị `val = telem->humidity` để so khớp ngưỡng kích hoạt khi: `rule.device_id` chứa `"hum"`, HOẶC `rule.target_device_id` trỏ tới `"relay_3"` (kênh máy hút ẩm), HOẶC `rule.target_device_id` chứa `"dehum"` (và cảm biến có `humidity > 0.0f`).
+   - Mặc định các quy tắc còn lại (làm mát quạt `relay_1`, sưởi ấm `relay_2`): Sử dụng `val = telem->value` (nhiệt độ).
 
 #### 4.7.6 Luồng đánh giá Telemetry tổng thể
 
@@ -1651,6 +1658,12 @@ esp_err_t relay_controller_set_state(const char *target_id, bool state, const ch
 //          Ghi GPIO vật lý, cập nhật monotonic timestamp đếm thời gian bật liên tục
 //          Phát EVT_COMMAND_RESPONSE gửi ACK về Cloud/MQTT
 
+esp_err_t relay_controller_process_command(const device_command_req_t *cmd);
+// Hành vi: Xử lý chuỗi lệnh điều khiển; hỗ trợ đầy đủ các bí danh (aliases):
+//          - BẬT: "ON", "TURN_ON" -> state = true
+//          - TẮT: "OFF", "TURN_OFF" -> state = false
+//          - ĐẢO: "TOGGLE" -> state = !current_state
+
 bool relay_controller_get_state(int relay_id);
 // Hành vi: Đọc mức logic hiện tại của rơ-le (1..4)
 
@@ -1791,13 +1804,16 @@ Chịu trách nhiệm lưu trữ, quản lý và cập nhật toàn bộ tham s�
 {
   "gateway_id": "gw_smartclock_01",
   "timezone": "ICT-7",
+  "api_key": "sec_demo_api_key_12345",
   "wifi": {
     "ssid": "Home_Net_2.4G",
     "password": "SecretPassword123"
   },
   "mqtt": {
-    "broker_uri": "mqtt://backend.local:1883",
+    "broker_uri": "mqtts://your-emqx-broker.emqxsl.com:8883",
     "client_id": "gw_01",
+    "username": "emqx_user",
+    "password": "emqx_password",
     "telemetry_interval_s": 10
   },
   "ble_sensors": [
@@ -1833,7 +1849,36 @@ Chịu trách nhiệm lưu trữ, quản lý và cập nhật toàn bộ tham s�
 | `schedule list` / `add` | `schedule add [id] <alarm\|auto> <HH:MM>` | Thêm/xem lịch báo thức và lịch tự động hóa |
 | `reboot` | `reboot` | Khởi động lại Gateway an toàn |
 
-#### 4.12.4 Verification Contracts — Config Manager
+#### 4.12.4 Web Dashboard Cục bộ & Tập Endpoint Local REST API (Port 80)
+
+Gateway tích hợp HTTP Web Server (`web_server.c`, Port 80) phục vụ giao diện cấu hình Dark Mode và API điều khiển cục bộ khi mất kết nối Cloud hoặc hoạt động trong mạng LAN:
+
+| Nhóm chức năng | Phương thức & Đường dẫn | Xác thực `X-API-Key` | Chức năng chi tiết |
+|---|---|:---:|---|
+| **Portal & UI** | `GET /` | Không | Giao diện điều khiển Dark Mode Dashboard (HTML/CSS/JS nhúng) |
+| | `GET /hotspot-detect.html`, `/generate_204`, v.v. | Không | Captive Portal redirect về trang cấu hình khi kết nối SoftAP |
+| **Wi-Fi Provisioning** | `GET /scan` | Không | Quét danh sách các mạng Wi-Fi lân cận kèm RSSI và Auth Mode |
+| | `POST /save` | Không | Lưu thông tin kết nối Wi-Fi ban đầu (`ssid`, `password`) |
+| | `POST /api/softap/set_password` | **Bắt buộc** | Cập nhật mật khẩu mạng SoftAP cục bộ (tối thiểu 8 ký tự) |
+| **Quản lý Wi-Fi** | `GET /api/wifi/saved` | **Bắt buộc** | Lấy SSID đang kết nối và danh sách mạng đã lưu (Bảo vệ thông tin LAN) |
+| | `POST /api/wifi/save` | **Bắt buộc** | Thêm mạng Wi-Fi vào danh sách lưu trữ |
+| | `POST /api/wifi/delete` | **Bắt buộc** | Xóa một mạng Wi-Fi đã lưu |
+| | `POST /api/wifi/connect` | **Bắt buộc** | Kích hoạt kết nối sang SSID đã chọn |
+| **Giám sát & Dữ liệu** | `GET /api/status` | Không | Trạng thái hệ thống: Uptime, Free Heap, Wi-Fi, MQTT, Task Health |
+| | `GET /api/telemetry` | Không | Dữ liệu telemetry mới nhất từ các cảm biến môi trường |
+| **Điều khiển & Tự động**| `POST /api/relay` | **Bắt buộc** | Đóng/ngắt Relay onboard cục bộ (`{"channel": 1, "state": true}`) |
+| | `GET /api/rules` | Không | Lấy danh sách quy tắc tự động hóa IF-THEN trong RAM |
+| | `POST /api/rules` | **Bắt buộc** | Thêm mới hoặc cập nhật quy tắc tự động hóa tại chỗ |
+| | `DELETE /api/rules` | **Bắt buộc** | Xóa quy tắc tự động hóa theo ID (`?id=<rule_id>`) |
+| **Hệ thống** | `POST /api/system/reboot` | **Bắt buộc** | Khởi động lại Gateway một cách an toàn |
+| | `POST /api/system/factory_reset` | **Bắt buộc** | Khôi phục toàn bộ cài đặt gốc NVS và xóa file cấu hình |
+
+> **Bảo vệ An Toàn Mạng LAN (Anti-Timing Attack & Header Authentication):**
+> - Các endpoint có yêu cầu xác thực bắt buộc truyền header `X-API-Key: <api_key>`.
+> - Gateway thi hành hàm so sánh chuỗi ở thời gian hằng số `constant_time_eq()` để đối soát API Key, triệt tiêu nguy cơ suy đoán khóa bằng phân tích thời gian phản hồi (Timing Side-Channel Attack).
+> - Request thiếu hoặc sai API Key đều nhận mã lỗi `HTTP 401 Unauthorized`.
+
+#### 4.12.5 Verification Contracts — Config Manager & Local Web Server
 
 **Verification Contract — FR-CFG-01: Nạp cấu hình tự động từ bộ nhớ lưu trữ**
 - **Tier:** target
@@ -2528,12 +2573,22 @@ Xóa thiết bị (cascade xóa rule liên quan).
 
 #### POST /gateways/{gateway_id}/devices/{device_id}/command
 
-Gửi lệnh điều khiển thiết bị (qua MQTT → Gateway).
+Gửi lệnh điều khiển thiết bị (chuyển tiếp qua MQTT Downlink → Gateway).
 
 **Request Body:**
 ```json
 {
-  "command": "ON"
+  "command": "ON",
+  "ttl_seconds": 60
+}
+```
+
+**Response 202 Accepted:**
+```json
+{
+  "command_id": "550e8400-e29b-41d4-a716-446655440000",
+  "status": "QUEUED",
+  "message": "Command queued for gateway 'gw_smartclock_01'"
 }
 ```
 
@@ -2818,7 +2873,7 @@ gateway/{gateway_id}/                           ← prefix chung
     device/{device_id}/
         telemetry                                ← Gateway → Backend (QoS 1)
         command                                  ← Backend → Gateway (QoS 1, có command_id & ttl)
-        command/ack                              ← Gateway → Backend (QoS 1, phản hồi kết quả thực thi)
+        command_ack                              ← Gateway → Backend (QoS 1, phản hồi kết quả thực thi)
     telemetry/
         batch                                    ← Gateway → Backend (QoS 1, backfill khi mạng phục hồi)
     config/
@@ -2848,6 +2903,7 @@ Tất cả payload dùng JSON.
   "command_id": "550e8400-e29b-41d4-a716-446655440000",
   "target_device_id": "relay_1",
   "command": "ON",
+  "action": "ON",
   "ttl_seconds": 60,
   "source": "web_app",
   "timestamp": 1723621234
@@ -2855,15 +2911,14 @@ Tất cả payload dùng JSON.
 ```
 
 #### Command ACK Uplink (Gateway → Backend)
+Topic: `gateway/{gateway_id}/device/{device_id}/command_ack`
 ```json
 {
   "command_id": "550e8400-e29b-41d4-a716-446655440000",
-  "target_device_id": "relay_1",
   "success": true,
   "error_code": 0,
   "message": "Relay 1 turned ON successfully",
-  "execution_time_ms": 45,
-  "timestamp": 1723621235
+  "executed_at": 1723621235
 }
 ```
 
@@ -2878,14 +2933,14 @@ hoặc LWT:
 
 ### 9.3 QoS & Triển Khai MQTT Broker
 
-> **Triển khai Broker:** Sử dụng Broker công cộng có TLS (ví dụ: HiveMQ Cloud, port 8883) thay thế cho broker.emqx.io. Gateway bắt buộc kết nối qua `mqtts://` sử dụng xác thực: **Client ID**, **Username**, và **Password**.
+> **Triển khai Broker:** Sử dụng Cloud MQTTS Broker có TLS 1.2/1.3 (ví dụ: EMQX Serverless / HiveMQ Cloud / Eclipse Mosquitto, port 8883). Gateway và Backend bắt buộc kết nối qua `mqtts://` sử dụng xác thực: **Client ID**, **Username**, và **Password**, cùng chứng chỉ Root CA X.509 (`esp_crt_bundle_attach`).
 
 | Topic | QoS | Hướng | Lý do |
 |---|:---:|:---:|---|
 | `gateway/{id}/device/{dev}/telemetry` | 1 | Uplink | Đảm bảo dữ liệu cảm biến đo lường không bị thất lạc |
 | `gateway/{id}/telemetry/batch` | 1 | Uplink | Dữ liệu lưu đệm ngoại tuyến (Store-and-Forward) cần đối soát đủ |
 | `gateway/{id}/device/{dev}/command` | 1 | Downlink | Lệnh điều khiển bắt buộc phải đến đích (At-least once) |
-| `gateway/{id}/device/{dev}/command/ack` | 1 | Uplink | Báo cáo kết quả thực thi lệnh về Backend để cập nhật UI |
+| `gateway/{id}/device/{dev}/command_ack` | 1 | Uplink | Báo cáo kết quả thực thi lệnh về Backend để cập nhật UI |
 | `gateway/{id}/config/schedule` | 1 | Downlink | Cấu hình lịch biểu và luật tự động hóa, retained |
 | `gateway/{id}/config/devices` | 1 | Downlink | Danh sách cảm biến, parser_type và bindkey, retained |
 | `gateway/{id}/status` | 1 | Uplink | Retained Last Will & Testament (LWT) |
@@ -2899,7 +2954,7 @@ hoặc LWT:
   3. Mạng bị ngắt đột ngột trong khi Gateway đang gửi hoặc nhận bản tin QoS 1.
 - **Expected:**
   1. Toàn bộ bản tin truyền thông qua Broker đều nhận PUBACK xác nhận theo chuẩn QoS 1.
-  2. Gateway phản hồi `command/ack` trong $\le 100\text{ms}$ kể từ khi relay chấp hành xong.
+  2. Gateway phản hồi `command_ack` trong $\le 100\text{ms}$ kể từ khi relay chấp hành xong.
   3. Khi mất kết nối giữa chừng, bản tin chưa nhận PUBACK được gửi lại (retransmitted) ngay sau khi kết nối phục hồi mà không làm mất dữ liệu.
   4. Topic LWT tự động chuyển sang `offline` trên Broker khi phát hiện kết nối TCP đứt gãy sau khoảng thời gian KeepAlive (30s).
 - **Timing/Tolerance:** Thời gian xử lý lệnh từ Downlink đến ACK Uplink $\le 200\text{ms}$; backfill rate kiểm soát từ 20 đến 50 bản tin/giây.
@@ -2908,8 +2963,8 @@ hoặc LWT:
 - **Operator Instructions:** Sử dụng Wireshark hoặc Mosquitto Sub giám sát toàn bộ luồng topic `gateway/#`, kiểm tra trường QoS flag trong header gói tin MQTT bắt buộc phải bằng 1.
 
 > **Khuyến nghị môi trường Broker (Bảo mật & Ổn định):**
-> - **Triển khai Production:** Sử dụng **Embedded Aedes MQTT Broker** tích hợp sẵn trên Cloud Backend (cổng 1883 nội bộ Docker) hoặc cài đặt cụm **Eclipse Mosquitto** độc lập có xác thực chứng chỉ TLS/SSL (cổng 8883) và bảo vệ bằng mật khẩu (Username/Password per-gateway).
-> - **Cảnh báo Broker công cộng:** Tùy chọn `mqtt://broker.emqx.io:1883` chỉ được dùng làm môi trường thử nghiệm nhanh (Sandbox/Dev Test). Tuyệt đối không dùng cho vận hành thực tế vì bất kỳ ai cũng có thể đọc/ghi đè lệnh điều khiển thiết bị trong nhà.
+> - **Triển khai Production:** Sử dụng **Cloud MQTTS Broker** có chứng thực TLS (cổng 8883) như EMQX Serverless hoặc cụm Mosquitto riêng có cấp phát chứng chỉ X.509 bundle và tài khoản xác thực riêng biệt từng Gateway.
+> - **Cảnh báo Broker không mã hóa:** Tuyệt đối không dùng các giao thức MQTT Plaintext qua cổng 1883 không mã hóa trên môi trường mạng công cộng để tránh rủi ro nghe lén và chiếm quyền điều khiển thiết bị trong nhà.
 
 ## 10. Use Cases
 
@@ -3146,22 +3201,25 @@ Cảm biến mất tín hiệu / Hỏng (valid = false hoặc Timeout > 60s)
 
 Hệ thống bảo mật ở 3 cấp độ: Backend API, MQTT Broker, và ESP32 Local API.
 
-**1. Backend Express / Web App (JWT & CORS):**
-- **JWT:** Web App login thành công sẽ nhận JWT (access token). Token này được lưu trữ an toàn trong `httpOnly` cookie hoặc bộ nhớ (memory) của trình duyệt để chống XSS.
-- **CORS:** Middleware Backend chỉ allow (chấp nhận) các request từ origins hợp lệ (VD: domain hoặc IP cụ thể của Web App). Tuyệt đối loại bỏ `*`.
-- **Authorization:** Tất cả các endpoint `/api/v1/...` (ngoại trừ login/public) đều yêu cầu header `Authorization: Bearer <token>`.
+**1. Backend Express / Web App (JWT, CORS, BOLA & Salted Password):**
+- **JWT & Khóa ký:** Web App login thành công nhận JWT. Nghiêm cấm sử dụng fallback default secret trong môi trường Production (`NODE_ENV === 'production'`).
+- **Băm mật khẩu (Salted Password Hashing):** Sử dụng thuật toán băm muối an toàn `scrypt` (`crypto.scryptSync(password, salt, 64)`) kèm so sánh thời gian hằng số `crypto.timingSafeEqual()`, triệt tiêu lỗ hổng lưu mật khẩu dạng plaintext và Timing Attack.
+- **Kiểm soát quyền sở hữu (BOLA / IDOR Protection):** Mọi request quản lý Gateway, Device, Schedule, Rule đều kiểm tra `gateway.userId === req.user.id`, ngăn ngừa triệt để người dùng truy cập trái phép thiết bị của người dùng khác.
+- **CORS:** Middleware Backend chỉ cho phép các origins hợp lệ của Web App, nghiêm cấm wildcard `*`.
+- **Authorization:** Tất cả các endpoint `/api/v1/...` (ngoại trừ auth/public) đều yêu cầu header `Authorization: Bearer <token>`.
 
 **2. MQTT Gateway (MQTTS & Credentials):**
-- **Broker:** Sử dụng Public Broker có hỗ trợ TLS 1.2/1.3 (ví dụ HiveMQ Cloud) qua port 8883. Tuyệt đối không dùng broker unencrypted qua port 1883.
-- **Authentication:** Gateway bắt buộc cung cấp **Client ID**, **Username** và **Password** khi gửi gói `CONNECT`. Không cho phép Anonymous connection.
+- **Broker:** Sử dụng Cloud MQTTS Broker hỗ trợ TLS 1.2/1.3 (như EMQX Serverless / HiveMQ Cloud / Mosquitto TLS) qua port 8883. Tuyệt đối không dùng broker unencrypted qua port 1883 trên môi trường Internet.
+- **Authentication:** Gateway bắt buộc cung cấp **Client ID**, **Username** và **Password** khi gửi gói `CONNECT`, xác thực chứng chỉ Root CA qua `esp_crt_bundle_attach`. Không cho phép Anonymous connection.
 
-**3. Local REST trên ESP32 (LAN Protection):**
-- Ngăn chặn kẻ tấn công trên cùng LAN tự ý gửi request điều khiển rơ-le (Local Device Control).
-- Bổ sung kiểm tra **API Key** (truyền qua Header như `X-API-Key`) hoặc **Basic Auth** cho các request HTTP POST/PUT gọi tới server Web cục bộ của ESP32. Nếu sai hoặc không có header này, trả về mã 401 Unauthorized.
+**3. Local REST trên ESP32 (LAN Protection & Anti-Timing Attack):**
+- Ngăn chặn kẻ tấn công trên cùng mạng LAN tự ý gửi request điều khiển rơ-le hoặc đọc trộm danh sách SSID Wi-Fi đã lưu.
+- Bắt buộc kiểm tra **API Key** qua Header `X-API-Key` cho các endpoint nhạy cảm (`POST /api/relay`, `GET /api/wifi/saved`, `POST /api/rules`, `POST /api/system/*`).
+- Toàn bộ so sánh chuỗi API Key được thực hiện bằng hàm thời gian hằng số `constant_time_eq()`. Request thiếu hoặc sai header đều nhận mã lỗi `HTTP 401 Unauthorized`.
 
 **Verification Contract — FR-SEC-01: MQTTS TLS & Authenticated Connection**
 - **Tier:** target / manual
-- **Preconditions:** Gateway đã có Wi-Fi internet. Broker HiveMQ Cloud TLS đã cấp phát credentials (Client ID, User, Pass).
+- **Preconditions:** Gateway đã có Wi-Fi internet. Broker Cloud TLS (port 8883) đã cấp phát credentials (Client ID, User, Pass).
 - **Stimulus:** Khởi động Gateway.
 - **Expected:** Gói tin TLS Handshake thành công. Nhận CONNACK. Sau Handshake, các gói MQTT Control Packet đều được mã hóa.
 - **Operator Instructions:**
@@ -3171,15 +3229,21 @@ Hệ thống bảo mật ở 3 cấp độ: Backend API, MQTT Broker, và ESP32 
   4. Xác nhận trong Serial Terminal log có dòng `MQTT_EVENT_CONNECTED`.
   5. Cố gắng kết nối bằng MQTT client khác (VD: MQTTX) tới cùng port 8883 nhưng nhập sai Password, xác nhận không thể kết nối.
 
-**Verification Contract — FR-SEC-02: ESP32 Local REST API Authorization**
+**Verification Contract — FR-SEC-02: ESP32 Local REST API Authorization & Constant-Time Validation**
 - **Tier:** target / manual
-- **Preconditions:** Gateway đang hoạt động và cung cấp API nội bộ điều khiển rơ-le tại LAN (ví dụ POST `/local/relay`). Đã cấu hình Local API Key hợp lệ.
-- **Stimulus:** Từ PC/điện thoại trong cùng LAN, gửi lệnh điều khiển rơ-le (1) không có Header Auth hợp lệ và (2) kèm Header Auth hợp lệ.
-- **Expected:** Trường hợp (1) trả về mã lỗi HTTP 401, rơ-le không chuyển trạng thái. Trường hợp (2) trả về HTTP 200 OK và rơ-le chuyển trạng thái.
+- **Preconditions:** Gateway đang hoạt động và cung cấp API nội bộ điều khiển rơ-le và quản lý mạng tại LAN. Đã cấu hình Local API Key hợp lệ trong `config.json`.
+- **Stimulus:** Từ PC/điện thoại trong cùng LAN:
+  1. Gửi lệnh điều khiển rơ-le không có Header `X-API-Key`: `POST /api/relay`.
+  2. Gửi request đọc danh sách Wi-Fi đã lưu không có Header `X-API-Key`: `GET /api/wifi/saved`.
+  3. Gửi lệnh điều khiển rơ-le kèm Header `X-API-Key` hợp lệ: `POST /api/relay`.
+- **Expected:**
+  1. Yêu cầu 1 và 2 bị từ chối ngay lập tức với mã lỗi HTTP 401 Unauthorized, rơ-le không đổi trạng thái, danh sách SSID được bảo vệ.
+  2. Yêu cầu 3 trả về HTTP 200 OK, rơ-le chuyển trạng thái thành công.
 - **Operator Instructions:**
-  1. Kết nối PC vào cùng mạng Wi-Fi với Gateway. Lấy IP Gateway (VD: `192.168.1.50`).
-  2. Gửi lệnh cURL: `curl -X POST http://192.168.1.50/local/relay -d '{"state":"ON"}'`. Xác nhận HTTP status code 401. Rơ-le không kêu.
-  3. Gửi lệnh cURL: `curl -X POST http://192.168.1.50/local/relay -H 'X-API-Key: <SECRET>' -d '{"state":"ON"}'`. Xác nhận HTTP 200 OK. Rơ-le kêu tách và đèn báo đổi trạng thái.
+  1. Kết nối PC vào cùng mạng Wi-Fi với Gateway. Lấy IP Gateway (VD: `192.168.1.199`).
+  2. Gửi lệnh cURL: `curl -s -o /dev/null -w "%{http_code}" -X POST http://192.168.1.199/api/relay -d '{"channel":1,"state":true}'`. Xác nhận in ra `401`. Rơ-le không đóng.
+  3. Gửi lệnh cURL: `curl -s -o /dev/null -w "%{http_code}" -X GET http://192.168.1.199/api/wifi/saved`. Xác nhận in ra `401`.
+  4. Gửi lệnh cURL: `curl -s -o /dev/null -w "%{http_code}" -X POST http://192.168.1.199/api/relay -H 'X-API-Key: <SECRET>' -d '{"channel":1,"state":true}'`. Xác nhận in ra `200`. Rơ-le 1 đóng tiếp điểm thành công.
 
 #### 12.4.2 NVS Encryption — Cảnh báo độ phức tạp
 
