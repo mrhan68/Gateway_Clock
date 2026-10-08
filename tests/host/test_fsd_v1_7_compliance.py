@@ -7,7 +7,6 @@ Verifies:
   - FR-DISP-02: OLED Provisioning & Prompt Screen State Transitions
 """
 
-import pytest
 
 
 class MockConfigManager:

@@ -1,4 +1,3 @@
-import os
 
 with open('firmware/main/web_server.c', 'r') as f:
     code = f.read()

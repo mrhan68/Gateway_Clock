@@ -1,4 +1,3 @@
-import os
 
 with open('website/backend/src/app.js', 'r') as f:
     code = f.read()

@@ -6,7 +6,6 @@ Verifies:
   - WP-07: Real-time Relay & System Maintenance Control
 """
 
-import pytest
 
 
 class WifiProfile:
