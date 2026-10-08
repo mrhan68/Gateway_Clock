@@ -59,9 +59,10 @@ void ble_adapter_print_status(void);
 /**
  * @brief Inject synthetic telemetry data into Event Bus (test harness & CLI hook)
  * @param device_id Target device ID
- * @param value Telemetry value
+ * @param temp Temperature value (°C)
+ * @param hum Humidity value (%RH)
  */
-void ble_adapter_inject_test_packet(const char *device_id, float value);
+void ble_adapter_inject_test_packet(const char *device_id, float temp, float hum);
 
 #ifdef __cplusplus
 }

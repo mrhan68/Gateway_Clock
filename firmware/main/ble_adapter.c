@@ -285,6 +285,7 @@ static int parse_advertisement_data(const struct ble_gap_disc_desc *disc)
         strncpy(telem->device_id, entry->device_id, sizeof(telem->device_id) - 1);
         telem->device_id[sizeof(telem->device_id) - 1] = '\0';
         telem->value = temp_val;
+        telem->humidity = has_hum ? hum_val : 60.0f;
         telem->valid = true;
         telem->timestamp = (uint32_t)time(NULL);
         event_bus_post(EVT_BLE_DEVICE_DATA, telem, sizeof(sensor_telemetry_t), false);
@@ -472,10 +473,11 @@ void ble_adapter_print_status(void)
     unlock_devices();
 }
 
-void ble_adapter_inject_test_packet(const char *device_id, float value)
+void ble_adapter_inject_test_packet(const char *device_id, float temp, float hum)
 {
     const char *dev = (device_id != NULL && device_id[0] != '\0') ? device_id : "sensor_temp_01";
-    printf("\n[BLE] Injecting synthetic test telemetry: Dev='%s', Val=%.2f\n", dev, value);
+    float actual_hum = (hum > 0.0f) ? hum : 60.0f;
+    printf("\n[BLE] Injecting synthetic test telemetry: Dev='%s', Temp=%.2f C, Hum=%.2f %%\n", dev, temp, actual_hum);
     fflush(stdout);
 
     sensor_telemetry_t *telem = (sensor_telemetry_t *)malloc(sizeof(sensor_telemetry_t));
@@ -483,7 +485,8 @@ void ble_adapter_inject_test_packet(const char *device_id, float value)
         memset(telem, 0, sizeof(sensor_telemetry_t));
         strncpy(telem->device_id, dev, sizeof(telem->device_id) - 1);
         telem->device_id[sizeof(telem->device_id) - 1] = '\0';
-        telem->value = value;
+        telem->temperature = temp;
+        telem->humidity = actual_hum;
         telem->valid = true;
         telem->timestamp = (uint32_t)time(NULL);
         event_bus_post(EVT_BLE_DEVICE_DATA, telem, sizeof(sensor_telemetry_t), false);

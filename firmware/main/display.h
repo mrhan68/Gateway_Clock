@@ -70,6 +70,13 @@ void display_snooze_alarm(uint8_t minutes);
  */
 bool display_is_alarm_active(void);
 
+/**
+ * @brief Doc gia tri nhiet do, do am hien tai da luu tren man hinh
+ */
+float display_get_latest_temp(void);
+float display_get_latest_hum(void);
+bool  display_get_latest_valid(void);
+
 #ifdef __cplusplus
 }
 #endif

@@ -781,3 +781,19 @@ void display_init(void)
 
     ESP_LOGI(TAG, "Display Subsystem initialized successfully (Physical OLED + Direct Notification enabled)");
 }
+
+float display_get_latest_temp(void)
+{
+    return s_latest_temp;
+}
+
+float display_get_latest_hum(void)
+{
+    return s_latest_hum;
+}
+
+bool display_get_latest_valid(void)
+{
+    return s_temp_valid;
+}
+

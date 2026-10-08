@@ -71,6 +71,64 @@ async function handleTelemetry(gatewayId, payload) {
         ipAddress: ip
       }
     });
+
+    const devId = data.device_id || 'sensor_temp_01';
+    const temp = data.temperature !== undefined ? data.temperature : data.temp;
+    const hum = data.humidity !== undefined ? data.humidity : data.hum;
+
+    if (temp !== undefined || hum !== undefined) {
+      const existing = await prisma.device.findFirst({
+        where: { gatewayId, deviceId: devId }
+      });
+      if (!existing) {
+        await prisma.device.create({
+          data: {
+            deviceId: devId,
+            gatewayId,
+            name: 'Cảm Biến BTHome Môi Trường',
+            deviceType: 'sensor',
+            protocol: 'ble',
+            macAddress: 'AA:BB:CC:DD:EE:01',
+            capabilities: JSON.stringify(['temperature', 'humidity']),
+            status: 'online',
+            lastSeen: now,
+            lastValue: temp !== undefined ? temp : hum
+          }
+        });
+      } else {
+        await prisma.device.update({
+          where: { id: existing.id },
+          data: {
+            status: 'online',
+            lastSeen: now,
+            lastValue: temp !== undefined ? temp : hum
+          }
+        });
+      }
+
+      if (temp !== undefined) {
+        await prisma.telemetryLog.create({
+          data: {
+            gatewayId,
+            deviceId: devId,
+            value: typeof temp === 'number' ? temp : parseFloat(temp),
+            unit: '°C',
+            recordedAt: now
+          }
+        });
+      }
+      if (hum !== undefined) {
+        await prisma.telemetryLog.create({
+          data: {
+            gatewayId,
+            deviceId: devId,
+            value: typeof hum === 'number' ? hum : parseFloat(hum),
+            unit: '%',
+            recordedAt: new Date(now.getTime() + 200)
+          }
+        });
+      }
+    }
   } catch (err) {
     console.error('[MQTT] Failed to process telemetry:', err.message);
   }
@@ -85,7 +143,19 @@ async function handleTelemetryBatch(gatewayId, payload) {
 }
 
 async function handleEvents(gatewayId, payload) {
-  console.log(`[MQTT] Event from ${gatewayId}`);
+  try {
+    const data = typeof payload === 'string' ? JSON.parse(payload) : payload;
+    console.log(`[MQTT] Event from ${gatewayId}:`, data);
+    await prisma.eventLog.create({
+      data: {
+        gatewayId,
+        eventType: data.event || data.reason || 'relay_event',
+        payload: typeof payload === 'string' ? payload : JSON.stringify(data)
+      }
+    });
+  } catch (err) {
+    console.error('[MQTT] Failed to process event:', err.message);
+  }
 }
 
 async function handleGatewayStatus(gatewayId, payload) {

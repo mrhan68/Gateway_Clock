@@ -151,22 +151,30 @@ static void handle_command(char *cmd_line)
             printf("Usage: ble reg <device_id> [mac_address]\n");
         }
     } else if (strncmp(cmd_line, "ble test", 8) == 0) {
-        char arg1[32] = {0};
-        float val = 32.50f;
+        char arg1[32] = {0}, arg2[32] = {0};
+        float temp = 32.50f;
+        float hum = 65.00f;
         char dev[32] = "sensor_temp_01";
-        int parsed = sscanf(cmd_line + 8, "%31s %f", arg1, &val);
+        int parsed = sscanf(cmd_line + 8, "%31s %31s %f", arg1, arg2, &hum);
         if (parsed == 1) {
             if ((arg1[0] >= '0' && arg1[0] <= '9') || arg1[0] == '-') {
-                val = strtof(arg1, NULL);
-                strcpy(dev, "sensor_temp_01");
+                temp = strtof(arg1, NULL);
             } else {
                 strncpy(dev, arg1, sizeof(dev) - 1);
-                val = 32.50f;
             }
-        } else if (parsed >= 2) {
+        } else if (parsed == 2) {
+            if ((arg1[0] >= '0' && arg1[0] <= '9') || arg1[0] == '-') {
+                temp = strtof(arg1, NULL);
+                hum = strtof(arg2, NULL);
+            } else {
+                strncpy(dev, arg1, sizeof(dev) - 1);
+                temp = strtof(arg2, NULL);
+            }
+        } else if (parsed >= 3) {
             strncpy(dev, arg1, sizeof(dev) - 1);
+            temp = strtof(arg2, NULL);
         }
-        ble_adapter_inject_test_packet(dev, val);
+        ble_adapter_inject_test_packet(dev, temp, hum);
     } else if (strcmp(cmd_line, "wifi status") == 0) {
         bool connected = wifi_provisioning_is_connected();
         printf("Wi-Fi Status: %s\n", connected ? "CONNECTED" : "DISCONNECTED / SOFTAP");
