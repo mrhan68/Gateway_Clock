@@ -66,9 +66,7 @@ async function handleTelemetry(gatewayId, payload) {
       where: { id: gatewayId },
       data: {
         lastSeen: now,
-        status: 'online',
-        uptimeSeconds: uptime,
-        ipAddress: ip
+        status: 'online'
       }
     });
 
