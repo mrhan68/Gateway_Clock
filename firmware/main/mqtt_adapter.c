@@ -7,6 +7,8 @@
 #include "event_bus.h"
 #include "config_manager.h"
 #include "esp_crt_bundle.h"
+#include "esp_timer.h"
+#include "cJSON.h"
 
 static const char *TAG = "MQTT_ADAPTER";
 
@@ -73,12 +75,71 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
         break;
 
     case MQTT_EVENT_DATA:
-        if (event != NULL) {
-            ESP_LOGI(TAG, "[MQTT RX] Topic: %.*s, Data: %.*s",
-                     event->topic_len, event->topic,
-                     event->data_len, event->data);
-            // Post remote command len event bus
-            event_bus_post(EVT_REMOTE_COMMAND_REQUEST, NULL, 0, false);
+        if (event != NULL && event->topic_len > 0 && event->data_len > 0) {
+            char topic[128] = {0};
+            char data[256] = {0};
+            size_t tlen = event->topic_len < (sizeof(topic) - 1) ? event->topic_len : (sizeof(topic) - 1);
+            size_t dlen = event->data_len < (sizeof(data) - 1) ? event->data_len : (sizeof(data) - 1);
+            memcpy(topic, event->topic, tlen);
+            memcpy(data, event->data, dlen);
+
+            ESP_LOGI(TAG, "[MQTT RX] Topic: %s, Data: %s", topic, data);
+
+            // Parse device command: gateway/<gw_id>/device/<dev_id>/command
+            char *p_dev = strstr(topic, "/device/");
+            char *p_cmd = strstr(topic, "/command");
+            if (p_dev != NULL && p_cmd != NULL && p_cmd > p_dev) {
+                p_dev += 8;
+                char target_dev[32] = {0};
+                size_t dev_len = (size_t)(p_cmd - p_dev);
+                if (dev_len > 0 && dev_len < sizeof(target_dev)) {
+                    strncpy(target_dev, p_dev, dev_len);
+                }
+
+                device_command_req_t *req = (device_command_req_t *)malloc(sizeof(device_command_req_t));
+                if (req != NULL) {
+                    memset(req, 0, sizeof(device_command_req_t));
+                    strncpy(req->target_device_id, target_dev, sizeof(req->target_device_id) - 1);
+                    req->ttl_seconds = 60;
+                    req->timestamp = (uint32_t)(esp_timer_get_time() / 1000000ULL);
+
+                    cJSON *json = cJSON_Parse(data);
+                    if (json != NULL) {
+                        cJSON *j_cmd = cJSON_GetObjectItem(json, "command");
+                        cJSON *j_act = cJSON_GetObjectItem(json, "action");
+                        cJSON *j_id = cJSON_GetObjectItem(json, "command_id");
+                        cJSON *j_target = cJSON_GetObjectItem(json, "target_device_id");
+                        cJSON *j_ttl = cJSON_GetObjectItem(json, "ttl_seconds");
+
+                        if (j_cmd && cJSON_IsString(j_cmd)) {
+                            strncpy(req->action, j_cmd->valuestring, sizeof(req->action) - 1);
+                        } else if (j_act && cJSON_IsString(j_act)) {
+                            strncpy(req->action, j_act->valuestring, sizeof(req->action) - 1);
+                        }
+                        if (j_id && cJSON_IsString(j_id)) {
+                            strncpy(req->command_id, j_id->valuestring, sizeof(req->command_id) - 1);
+                        }
+                        if (j_target && cJSON_IsString(j_target)) {
+                            strncpy(req->target_device_id, j_target->valuestring, sizeof(req->target_device_id) - 1);
+                        }
+                        if (j_ttl && cJSON_IsNumber(j_ttl)) {
+                            req->ttl_seconds = (uint32_t)j_ttl->valueint;
+                        }
+                        cJSON_Delete(json);
+                    } else {
+                        strncpy(req->action, data, sizeof(req->action) - 1);
+                        snprintf(req->command_id, sizeof(req->command_id), "cmd_%lu", (unsigned long)req->timestamp);
+                    }
+
+                    if (req->action[0] != '\0') {
+                        event_bus_post(EVT_DEVICE_COMMAND_REQUEST, req, sizeof(device_command_req_t), false);
+                        ESP_LOGI(TAG, "Dispatched device command: target='%s', action='%s', cmd_id='%s'",
+                                 req->target_device_id, req->action, req->command_id);
+                    } else {
+                        free(req);
+                    }
+                }
+            }
         }
         break;
 
@@ -88,6 +149,29 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
 
     default:
         break;
+    }
+}
+
+static void on_command_response(const gateway_event_t *evt)
+{
+    if (evt != NULL && evt->data != NULL && evt->len >= sizeof(command_ack_t)) {
+        const command_ack_t *ack = (const command_ack_t *)evt->data;
+        char sub_topic[128];
+        snprintf(sub_topic, sizeof(sub_topic), "device/%s/command_ack", ack->target_device_id);
+        cJSON *root = cJSON_CreateObject();
+        if (root != NULL) {
+            cJSON_AddStringToObject(root, "command_id", ack->command_id);
+            cJSON_AddBoolToObject(root, "success", ack->success);
+            cJSON_AddNumberToObject(root, "error_code", ack->error_code);
+            cJSON_AddStringToObject(root, "message", ack->message);
+            cJSON_AddNumberToObject(root, "executed_at", (double)ack->executed_at);
+            char *str = cJSON_PrintUnformatted(root);
+            cJSON_Delete(root);
+            if (str != NULL) {
+                mqtt_adapter_publish(sub_topic, str);
+                free(str);
+            }
+        }
     }
 }
 
@@ -145,6 +229,7 @@ void mqtt_adapter_init(const char *broker_uri, const char *gateway_id, const cha
     // Dang ky Event Bus handlers de tu dong bat/tat khi co/mat Wi-Fi
     event_bus_register_handler(EVT_WIFI_CONNECTED, on_wifi_connected);
     event_bus_register_handler(EVT_WIFI_LOST, on_wifi_lost);
+    event_bus_register_handler(EVT_COMMAND_RESPONSE, on_command_response);
 }
 
 bool mqtt_adapter_publish(const char *topic_suffix, const char *payload_json)
