@@ -96,13 +96,11 @@ void ble_adapter_register_device(const char *device_id, const char *mac_address)
     unlock_devices();
 }
 
-static ble_device_entry_t* find_or_add_device(const char *mac, const char *name)
+static ble_device_entry_t* find_or_add_device_locked(const char *mac, const char *name)
 {
-    lock_devices();
     // 1. Try to find by MAC address
     for (int i = 0; i < s_device_count; i++) {
         if (s_devices[i].mac_address[0] != '\0' && strcasecmp(s_devices[i].mac_address, mac) == 0) {
-            unlock_devices();
             return &s_devices[i];
         }
     }
@@ -114,7 +112,6 @@ static ble_device_entry_t* find_or_add_device(const char *mac, const char *name)
                 // Associate discovered MAC with registered device
                 strncpy(s_devices[i].mac_address, mac, sizeof(s_devices[i].mac_address) - 1);
                 s_devices[i].mac_address[sizeof(s_devices[i].mac_address) - 1] = '\0';
-                unlock_devices();
                 return &s_devices[i];
             }
         }
@@ -133,11 +130,9 @@ static ble_device_entry_t* find_or_add_device(const char *mac, const char *name)
         strncpy(entry->mac_address, mac, sizeof(entry->mac_address) - 1);
         entry->mac_address[sizeof(entry->mac_address) - 1] = '\0';
         entry->registered = false;
-        unlock_devices();
         return entry;
     }
 
-    unlock_devices();
     return NULL;
 }
 
@@ -253,8 +248,10 @@ static int parse_advertisement_data(const struct ble_gap_disc_desc *disc)
         return 0;
     }
 
-    ble_device_entry_t *entry = find_or_add_device(mac_str, name_str);
+    lock_devices();
+    ble_device_entry_t *entry = find_or_add_device_locked(mac_str, name_str);
     if (entry == NULL) {
+        unlock_devices();
         return 0;
     }
 
@@ -262,19 +259,24 @@ static int parse_advertisement_data(const struct ble_gap_disc_desc *disc)
     // Rate limit: Max 1 event per 2 seconds per device unless value changes significantly
     if ((now - entry->last_seen_tick < pdMS_TO_TICKS(2000)) && (fabsf(temp_val - entry->last_value) < 0.2f)) {
         entry->packet_count++;
+        unlock_devices();
         return 0;
     }
 
     entry->last_seen_tick = now;
     entry->last_value = temp_val;
     entry->packet_count++;
+    char dev_id_buf[32];
+    strncpy(dev_id_buf, entry->device_id, sizeof(dev_id_buf) - 1);
+    dev_id_buf[sizeof(dev_id_buf) - 1] = '\0';
+    unlock_devices();
 
     if (has_hum) {
         printf("\n[BLE] Discovered sensor '%s' (MAC: %s, RSSI: %d dBm) -> Temp=%.2f C, Hum=%.2f %%\n",
-               entry->device_id, mac_str, disc->rssi, temp_val, hum_val);
+               dev_id_buf, mac_str, disc->rssi, temp_val, hum_val);
     } else {
         printf("\n[BLE] Discovered sensor '%s' (MAC: %s, RSSI: %d dBm) -> Temp=%.2f C\n",
-               entry->device_id, mac_str, disc->rssi, temp_val);
+               dev_id_buf, mac_str, disc->rssi, temp_val);
     }
     fflush(stdout);
 
@@ -282,7 +284,7 @@ static int parse_advertisement_data(const struct ble_gap_disc_desc *disc)
     sensor_telemetry_t *telem = (sensor_telemetry_t *)malloc(sizeof(sensor_telemetry_t));
     if (telem != NULL) {
         memset(telem, 0, sizeof(sensor_telemetry_t));
-        strncpy(telem->device_id, entry->device_id, sizeof(telem->device_id) - 1);
+        strncpy(telem->device_id, dev_id_buf, sizeof(telem->device_id) - 1);
         telem->device_id[sizeof(telem->device_id) - 1] = '\0';
         telem->value = temp_val;
         telem->humidity = has_hum ? hum_val : 60.0f;

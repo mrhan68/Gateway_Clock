@@ -20,11 +20,23 @@
 
 static const char *TAG = "WEB_SERVER";
 
+static bool constant_time_eq(const char *a, const char *b) {
+    if (!a || !b) return false;
+    size_t la = strlen(a);
+    size_t lb = strlen(b);
+    if (la != lb) return false;
+    unsigned char diff = 0;
+    for (size_t i = 0; i < la; i++) {
+        diff |= (unsigned char)(a[i] ^ b[i]);
+    }
+    return (diff == 0);
+}
+
 static bool check_api_auth(httpd_req_t *req) {
     char key_hdr[40];
     if (httpd_req_get_hdr_value_str(req, "X-API-Key", key_hdr, sizeof(key_hdr)) == ESP_OK) {
         const gateway_config_t *cfg = config_manager_get();
-        if (cfg && cfg->api_key[0] != '\0' && strcmp(key_hdr, cfg->api_key) == 0) {
+        if (cfg && cfg->api_key[0] != '\0' && constant_time_eq(key_hdr, cfg->api_key)) {
             return true;
         }
     }
