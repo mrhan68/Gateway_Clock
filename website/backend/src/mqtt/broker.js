@@ -70,11 +70,11 @@ async function handleTelemetry(gatewayId, payload) {
       }
     });
 
-    const devId = data.device_id || 'sensor_temp_01';
+    const devId = data.device_id;
     const temp = data.temperature !== undefined ? data.temperature : data.temp;
     const hum = data.humidity !== undefined ? data.humidity : data.hum;
 
-    if (temp !== undefined || hum !== undefined) {
+    if (devId && (temp !== undefined || hum !== undefined)) {
       const existing = await prisma.device.findFirst({
         where: { gatewayId, deviceId: devId }
       });
@@ -83,10 +83,10 @@ async function handleTelemetry(gatewayId, payload) {
           data: {
             deviceId: devId,
             gatewayId,
-            name: 'Cảm Biến BTHome Môi Trường',
+            name: data.device_name || 'Cảm Biến BTHome Môi Trường',
             deviceType: 'sensor',
             protocol: 'ble',
-            macAddress: 'AA:BB:CC:DD:EE:01',
+            macAddress: data.mac_address || null,
             capabilities: JSON.stringify(['temperature', 'humidity']),
             status: 'online',
             lastSeen: now,

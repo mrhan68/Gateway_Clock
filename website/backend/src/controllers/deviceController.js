@@ -7,6 +7,15 @@ const { createError } = require('../middleware/errorHandler');
 const relay = require('../mqtt/relay');
 const crypto = require('crypto');
 
+function safeParseJson(str, fallback = []) {
+  if (!str) return fallback;
+  try {
+    return JSON.parse(str);
+  } catch {
+    return fallback;
+  }
+}
+
 /**
  * GET /gateways/{gateway_id}/devices
  */
@@ -52,7 +61,7 @@ async function listDevices(req, res, next) {
       protocol: d.protocol,
       mac_address: d.macAddress,
       mqtt_topic: d.mqttTopic,
-      capabilities: d.capabilities ? JSON.parse(d.capabilities) : [],
+      capabilities: safeParseJson(d.capabilities, []),
       status: d.status,
       last_seen: d.lastSeen,
       last_value: d.lastValue,

@@ -29,7 +29,7 @@ async function listSchedules(req, res, next) {
 
     const where = {
       gatewayId: gateway_id,
-      ...(type ? { type: type.toUpperCase() } : {})
+      ...(type ? { type: type.toLowerCase() } : {})
     };
 
     const schedules = await prisma.schedule.findMany({

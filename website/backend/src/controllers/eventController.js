@@ -40,15 +40,25 @@ async function listEvents(req, res, next) {
       take: parseInt(limit)
     });
 
-    const formatted = events.map(e => ({
-      id: e.id,
-      gateway_id: e.gatewayId,
-      event_type: e.eventType,
-      device_id: e.deviceId,
-      payload: e.payload ? JSON.parse(e.payload) : null,
-      occurred_at: e.occurredAt,
-      synced_at: e.syncedAt
-    }));
+    const formatted = events.map(e => {
+      let payload = null;
+      if (e.payload) {
+        try {
+          payload = JSON.parse(e.payload);
+        } catch {
+          payload = e.payload;
+        }
+      }
+      return {
+        id: e.id,
+        gateway_id: e.gatewayId,
+        event_type: e.eventType,
+        device_id: e.deviceId,
+        payload,
+        occurred_at: e.occurredAt,
+        synced_at: e.syncedAt
+      };
+    });
 
     res.json(formatted);
   } catch (err) {
