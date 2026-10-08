@@ -271,9 +271,9 @@ static void on_device_command_request(const gateway_event_t *evt)
     }
 
     bool new_state = false;
-    if (strcasecmp(req->action, "ON") == 0) {
+    if (strcasecmp(req->action, "ON") == 0 || strcasecmp(req->action, "TURN_ON") == 0) {
         new_state = true;
-    } else if (strcasecmp(req->action, "OFF") == 0) {
+    } else if (strcasecmp(req->action, "OFF") == 0 || strcasecmp(req->action, "TURN_OFF") == 0) {
         new_state = false;
     } else if (strcasecmp(req->action, "TOGGLE") == 0) {
         new_state = !relay_controller_get_state(relay_id);
@@ -300,9 +300,9 @@ static void on_rule_action_request(const gateway_event_t *evt)
     }
 
     bool new_state = false;
-    if (strcasecmp(act->command, "ON") == 0) {
+    if (strcasecmp(act->command, "ON") == 0 || strcasecmp(act->command, "TURN_ON") == 0) {
         new_state = true;
-    } else if (strcasecmp(act->command, "OFF") == 0) {
+    } else if (strcasecmp(act->command, "OFF") == 0 || strcasecmp(act->command, "TURN_OFF") == 0) {
         new_state = false;
     } else if (strcasecmp(act->command, "TOGGLE") == 0) {
         new_state = !relay_controller_get_state(relay_id);
