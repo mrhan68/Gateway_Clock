@@ -408,7 +408,9 @@ int rule_engine_evaluate_telemetry(const sensor_telemetry_t *telem)
         }
 
         float val = telem->value;
-        if (strstr(r->device_id, "hum") != NULL && telem->humidity > 0.0f) {
+        if ((strstr(r->device_id, "hum") != NULL ||
+             strstr(r->target_device_id, "relay_3") != NULL ||
+             strstr(r->target_device_id, "dehum") != NULL) && telem->humidity > 0.0f) {
             val = telem->humidity;
         }
 
