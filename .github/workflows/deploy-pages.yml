@@ -37,6 +37,8 @@ jobs:
 
       - name: Build Web App
         working-directory: website/web-app
+        env:
+          VITE_API_URL: https://smartclock-backend.onrender.com
         run: npm run build
 
       - name: Deploy to gh-pages branch

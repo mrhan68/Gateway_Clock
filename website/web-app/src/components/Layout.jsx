@@ -252,10 +252,10 @@ function Layout({ children }) {
             </div>
             <button
               onClick={() => {
-                const current = localStorage.getItem('apiBaseUrl') || ''
+                const current = localStorage.getItem('apiBaseUrl') || 'https://smartclock-backend.onrender.com'
                 const url = window.prompt('Nhập URL Backend Render của bạn (vd: https://smartclock-backend.onrender.com):', current)
                 if (url !== null) {
-                  localStorage.setItem('apiBaseUrl', url.trim())
+                  localStorage.setItem('apiBaseUrl', url.trim().replace(/\/+$/, ''))
                   window.location.reload()
                 }
               }}

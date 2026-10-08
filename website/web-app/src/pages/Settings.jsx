@@ -79,11 +79,11 @@ function Settings() {
     }
   }
 
-  const [backendUrl, setBackendUrl] = useState(localStorage.getItem('apiBaseUrl') || '')
+  const [backendUrl, setBackendUrl] = useState(localStorage.getItem('apiBaseUrl') || 'https://smartclock-backend.onrender.com')
 
   const handleSaveBackendUrl = (e) => {
     e.preventDefault()
-    localStorage.setItem('apiBaseUrl', backendUrl.trim())
+    localStorage.setItem('apiBaseUrl', backendUrl.trim().replace(/\/+$/, ''))
     setNotification({ type: 'success', message: 'Đã lưu Backend API URL! Đang kết nối lại...' })
     setTimeout(() => {
       window.location.reload()

@@ -1,7 +1,14 @@
 import axios from 'axios'
 
-// Base URL from localStorage (for GitHub Pages static hosting) or env VITE_API_URL
-const getBaseURL = () => localStorage.getItem('apiBaseUrl') || import.meta.env.VITE_API_URL || ''
+// Base URL from localStorage (for GitHub Pages static hosting) or env VITE_API_URL or default Render backend
+const DEFAULT_API_URL = 'https://smartclock-backend.onrender.com'
+
+export const getBaseURL = () => {
+  const custom = localStorage.getItem('apiBaseUrl')
+  const envUrl = import.meta.env.VITE_API_URL
+  const rawUrl = (custom && custom.trim()) || (envUrl && envUrl.trim()) || DEFAULT_API_URL
+  return rawUrl.replace(/\/+$/, '')
+}
 
 const api = axios.create({
   baseURL: getBaseURL(),

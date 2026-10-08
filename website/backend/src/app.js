@@ -29,8 +29,22 @@ const telemetryRoutes = require('./routes/telemetry');
 const app = express();
 
 // ─── Middleware ───
+const allowedOriginEnv = process.env.ALLOWED_ORIGIN;
+let corsOrigin = true; // Mặc định: phản chiếu request origin (hỗ trợ GitHub Pages https://mrhan68.github.io và Localhost)
+
+if (allowedOriginEnv && allowedOriginEnv !== '*') {
+  const allowedList = allowedOriginEnv.split(',').map(s => s.trim());
+  corsOrigin = (origin, callback) => {
+    if (!origin || allowedList.includes(origin) || origin.endsWith('.github.io') || /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
+      callback(null, true);
+    } else {
+      callback(null, false);
+    }
+  };
+}
+
 app.use(cors({
-  origin: process.env.ALLOWED_ORIGIN || 'http://localhost:3000',
+  origin: corsOrigin,
   credentials: true
 }));
 app.use(express.json({ limit: '10mb' }));
