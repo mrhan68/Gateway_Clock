@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { NavLink } from 'react-router-dom'
+import { NavLink, useNavigate } from 'react-router-dom'
 import {
   ChartBarIcon,
   CpuChipIcon,
@@ -11,8 +11,10 @@ import {
   XMarkIcon,
   Bars3Icon,
   SparklesIcon,
+  UserCircleIcon,
+  ArrowRightOnRectangleIcon,
 } from '@heroicons/react/24/outline'
-import { getActiveGateway, setActiveGateway, healthCheck, gatewaysAPI } from '../api/client'
+import { getActiveGateway, setActiveGateway, healthCheck, gatewaysAPI, authAPI } from '../api/client'
 
 const navItems = [
   { name: 'Dashboard', icon: ChartBarIcon, path: '/dashboard' },
@@ -24,12 +26,19 @@ const navItems = [
 ]
 
 function Layout({ children }) {
+  const navigate = useNavigate()
+  const currentUser = authAPI.getUser()
   const [backendHealthy, setBackendHealthy] = useState(false)
   const [gateways, setGateways] = useState([])
   const [showGatewayModal, setShowGatewayModal] = useState(false)
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
 
   const currentGateway = getActiveGateway()
+
+  const handleLogout = () => {
+    authAPI.logout()
+    navigate('/login', { replace: true })
+  }
 
   useEffect(() => {
     checkHealth()
@@ -199,9 +208,28 @@ function Layout({ children }) {
           })}
         </nav>
 
-        {/* Sidebar Footer: Health Status */}
-        <div className="p-3 border-t border-zinc-800/80 bg-zinc-950/40">
-          <div className="flex items-center justify-between text-[11px] px-1">
+        {/* Sidebar Footer: User Account & Health Status */}
+        <div className="p-3 border-t border-zinc-800/80 bg-zinc-950/40 space-y-2">
+          {currentUser && (
+            <div className="flex items-center justify-between px-1 text-xs">
+              <div className="flex items-center gap-2 truncate">
+                <UserCircleIcon className="w-4 h-4 text-emerald-400 flex-shrink-0" />
+                <span className="truncate font-medium text-zinc-300">
+                  {currentUser.username || 'Admin'}
+                </span>
+              </div>
+              <button
+                onClick={handleLogout}
+                className="text-zinc-500 hover:text-rose-400 transition-colors p-1 rounded"
+                title="Đăng xuất"
+                aria-label="Đăng xuất"
+              >
+                <ArrowRightOnRectangleIcon className="w-4 h-4" />
+              </button>
+            </div>
+          )}
+
+          <div className="flex items-center justify-between text-[11px] px-1 pt-1 border-t border-zinc-800/40">
             <div className="flex items-center gap-2">
               <span
                 className={`w-2 h-2 rounded-full ${
@@ -233,12 +261,24 @@ function Layout({ children }) {
             </button>
             <span className="text-sm font-semibold text-zinc-100">Smart Clock</span>
           </div>
-          <button
-            onClick={() => setShowGatewayModal(true)}
-            className="text-xs px-2.5 py-1 rounded bg-zinc-800 border border-zinc-700 text-zinc-300 font-mono"
-          >
-            {currentGateway ? currentGateway.slice(0, 10) : 'No GW'}
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowGatewayModal(true)}
+              className="text-xs px-2.5 py-1 rounded bg-zinc-800 border border-zinc-700 text-zinc-300 font-mono"
+            >
+              {currentGateway ? currentGateway.slice(0, 10) : 'No GW'}
+            </button>
+            {currentUser && (
+              <button
+                onClick={handleLogout}
+                className="p-1 text-zinc-400 hover:text-rose-400 transition-colors"
+                title="Đăng xuất"
+                aria-label="Đăng xuất"
+              >
+                <ArrowRightOnRectangleIcon className="w-4 h-4" />
+              </button>
+            )}
+          </div>
         </header>
 
         {/* Backend disconnected warning banner */}

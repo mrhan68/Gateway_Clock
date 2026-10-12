@@ -40,15 +40,26 @@ function hashPassword(password) {
   return `${salt}:${derived.toString('hex')}`;
 }
 
-router.post('/login', async (req, res) => {
+const rateLimit = require('express-rate-limit');
+
+// Rate limiting for auth routes: max 20 attempts per 15 minutes per IP
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Quá nhiều lần thử xác thực. Vui lòng thử lại sau 15 phút.' }
+});
+
+router.post('/login', authLimiter, async (req, res) => {
   const { username, password } = req.body;
   if (!username || !password) {
-    return res.status(400).json({ error: 'Username and password required' });
+    return res.status(400).json({ error: 'Yêu cầu tên đăng nhập và mật khẩu' });
   }
 
   const user = await prisma.user.findUnique({ where: { username } });
   if (!user || !verifyPassword(user.passwordHash, password)) {
-    return res.status(401).json({ error: 'Invalid credentials' });
+    return res.status(401).json({ error: 'Tên đăng nhập hoặc mật khẩu không chính xác' });
   }
 
   const jwtSecret = process.env.JWT_SECRET;
@@ -60,9 +71,89 @@ router.post('/login', async (req, res) => {
   }
 
   const secretToUse = jwtSecret || 'fallback_secret';
-  const token = jwt.sign({ id: user.id }, secretToUse, { expiresIn: '15m' });
-  res.cookie('token', token, { httpOnly: true, sameSite: 'strict' });
-  res.json({ access_token: token });
+  const token = jwt.sign(
+    { id: user.id, username: user.username },
+    secretToUse,
+    { expiresIn: process.env.JWT_EXPIRES_IN || '24h' }
+  );
+  res.cookie('token', token, { httpOnly: true, sameSite: 'strict', maxAge: 24 * 60 * 60 * 1000 });
+  res.json({
+    access_token: token,
+    user: {
+      id: user.id,
+      username: user.username,
+      email: user.email || null
+    }
+  });
+});
+
+router.post('/register', authLimiter, async (req, res) => {
+  const { username, password, email } = req.body;
+  if (!username || !password) {
+    return res.status(400).json({ error: 'Yêu cầu tên đăng nhập và mật khẩu' });
+  }
+  if (username.length < 3) {
+    return res.status(400).json({ error: 'Tên đăng nhập tối thiểu 3 ký tự' });
+  }
+  if (password.length < 6) {
+    return res.status(400).json({ error: 'Mật khẩu tối thiểu 6 ký tự' });
+  }
+
+  try {
+    const existing = await prisma.user.findUnique({ where: { username } });
+    if (existing) {
+      return res.status(409).json({ error: 'Tên đăng nhập đã tồn tại' });
+    }
+
+    const passwordHash = hashPassword(password);
+    const user = await prisma.user.create({
+      data: {
+        username: username.trim(),
+        email: email ? email.trim() : null,
+        passwordHash
+      }
+    });
+
+    const jwtSecret = process.env.JWT_SECRET || 'fallback_secret';
+    const token = jwt.sign(
+      { id: user.id, username: user.username },
+      jwtSecret,
+      { expiresIn: process.env.JWT_EXPIRES_IN || '24h' }
+    );
+    res.cookie('token', token, { httpOnly: true, sameSite: 'strict', maxAge: 24 * 60 * 60 * 1000 });
+    return res.status(201).json({
+      access_token: token,
+      user: {
+        id: user.id,
+        username: user.username,
+        email: user.email || null
+      }
+    });
+  } catch (err) {
+    return res.status(500).json({ error: 'Đăng ký thất bại: ' + err.message });
+  }
+});
+
+router.get('/me', async (req, res) => {
+  const token = req.cookies?.token || req.headers.authorization?.split(' ')[1];
+  if (!token) {
+    return res.status(401).json({ error: 'Chưa xác thực' });
+  }
+
+  try {
+    const jwtSecret = process.env.JWT_SECRET || 'fallback_secret';
+    const decoded = jwt.verify(token, jwtSecret);
+    const user = await prisma.user.findUnique({
+      where: { id: decoded.id },
+      select: { id: true, username: true, email: true, createdAt: true }
+    });
+    if (!user) {
+      return res.status(401).json({ error: 'Không tìm thấy người dùng' });
+    }
+    return res.json({ user });
+  } catch {
+    return res.status(401).json({ error: 'Token không hợp lệ hoặc đã hết hạn' });
+  }
 });
 
 module.exports = router;

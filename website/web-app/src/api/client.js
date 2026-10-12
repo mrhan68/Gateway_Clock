@@ -45,19 +45,27 @@ api.interceptors.request.use((config) => {
 })
 
 // --- Response interceptor ---
-// Normalize error responses to FSD §8.9 format
+// Normalize error responses to FSD §8.9 format and redirect to login on 401
 api.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response) {
-      // Server responded with an error status
+      if (error.response.status === 401) {
+        const isAuthEndpoint = error.config?.url?.includes('/auth/login') || error.config?.url?.includes('/auth/register')
+        if (!isAuthEndpoint) {
+          localStorage.removeItem('authToken')
+          localStorage.removeItem('authUser')
+          if (!window.location.hash.includes('/login')) {
+            window.location.hash = '#/login'
+          }
+        }
+      }
       const { data } = error.response
-      const errMsg = data?.error?.message || error.message || 'Unknown error'
+      const errMsg = data?.error?.message || data?.error || error.message || 'Unknown error'
       const errCode = data?.error?.code || 'API_ERROR'
       return Promise.reject({ message: errMsg, code: errCode, status: error.response.status })
     } else if (error.request) {
-      // Request was made but no response received
-      return Promise.reject({ message: 'No response from server — backend may be down', code: 'NETWORK_ERROR', status: 0 })
+      return Promise.reject({ message: 'Không thể kết nối đến máy chủ — Backend có thể đang tắt hoặc mất mạng', code: 'NETWORK_ERROR', status: 0 })
     }
     return Promise.reject({ message: error.message, code: 'UNKNOWN', status: 0 })
   },
@@ -120,5 +128,48 @@ export const telemetryAPI = {
 
 // --- Health check ---
 export const healthCheck = () => api.get('/health')
+
+// ─── Authentication API ───
+export const authAPI = {
+  login: async (username, password) => {
+    const res = await api.post('/auth/login', { username, password })
+    if (res.data?.access_token) {
+      localStorage.setItem('authToken', res.data.access_token)
+      if (res.data.user) {
+        localStorage.setItem('authUser', JSON.stringify(res.data.user))
+      }
+    }
+    return res.data
+  },
+  register: async (username, password, email) => {
+    const res = await api.post('/auth/register', { username, password, email })
+    if (res.data?.access_token) {
+      localStorage.setItem('authToken', res.data.access_token)
+      if (res.data.user) {
+        localStorage.setItem('authUser', JSON.stringify(res.data.user))
+      }
+    }
+    return res.data
+  },
+  me: async () => {
+    const res = await api.get('/auth/me')
+    return res.data
+  },
+  logout: () => {
+    localStorage.removeItem('authToken')
+    localStorage.removeItem('authUser')
+  },
+  isAuthenticated: () => {
+    return Boolean(localStorage.getItem('authToken'))
+  },
+  getUser: () => {
+    try {
+      const u = localStorage.getItem('authUser')
+      return u ? JSON.parse(u) : null
+    } catch {
+      return null
+    }
+  },
+}
 
 export default api

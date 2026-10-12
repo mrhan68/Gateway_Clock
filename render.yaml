@@ -23,3 +23,5 @@ services:
         sync: false
       - key: MQTT_PASS
         sync: false
+      - key: REQUIRE_AUTH
+        value: "true"
