@@ -692,19 +692,24 @@ static void handle_command(char *cmd_line)
         } else if (strncmp(cmd_line, "sd cat", 6) == 0) {
             char path[128] = {0};
             if (sscanf(cmd_line + 6, "%127s", path) == 1) {
-                FILE *f = fopen(path, "r");
-                if (!f) {
-                    printf("Error opening file '%s' (errno=%d: %s)\n", path, errno, strerror(errno));
+                // BẢO MẬT: Chống Path Traversal và chỉ cho phép đọc trong /sdcard/
+                if (strncmp(path, "/sdcard/", 8) != 0 || strstr(path, "..") != NULL) {
+                    printf("Security Error: Access denied. Path must be strictly within /sdcard/ and cannot contain '..'\n");
                 } else {
-                    printf("\n=== File Content: '%s' ===\n", path);
-                    char buf[128];
-                    size_t n;
-                    while ((n = fread(buf, 1, sizeof(buf) - 1, f)) > 0) {
-                        buf[n] = '\0';
-                        printf("%s", buf);
+                    FILE *f = fopen(path, "r");
+                    if (!f) {
+                        printf("Error opening file '%s' (errno=%d: %s)\n", path, errno, strerror(errno));
+                    } else {
+                        printf("\n=== File Content: '%s' ===\n", path);
+                        char buf[128];
+                        size_t n;
+                        while ((n = fread(buf, 1, sizeof(buf) - 1, f)) > 0) {
+                            buf[n] = '\0';
+                            printf("%s", buf);
+                        }
+                        fclose(f);
+                        printf("\n==================================\n\n");
                     }
-                    fclose(f);
-                    printf("\n==================================\n\n");
                 }
             } else {
                 printf("Usage: sd cat <filepath> (e.g. sd cat /sdcard/data/telemetry/2026-09-26.csv)\n");

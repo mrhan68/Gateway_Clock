@@ -116,7 +116,11 @@ esp_err_t relay_controller_set_state(const char *target_id, bool state, const ch
     int idx = relay_id - 1;
 
     if (s_relay_mutex != NULL) {
-        xSemaphoreTake(s_relay_mutex, portMAX_DELAY);
+        // Tránh portMAX_DELAY để không đóng băng task esp_timer khi chạy timer an toàn
+        if (xSemaphoreTake(s_relay_mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
+            ESP_LOGE(TAG, "Cannot set relay state: Timeout waiting for s_relay_mutex! Target: '%s'", target_id);
+            return ESP_ERR_TIMEOUT;
+        }
     }
 
     // 1. Nếu lệnh là TẮT (state == false):

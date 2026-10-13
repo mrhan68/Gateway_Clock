@@ -183,7 +183,7 @@ _Static_assert(sizeof(event_bus_msg_t) <= 48, "event_bus_msg_t size must not exc
 typedef void (*gateway_event_handler_t)(const gateway_event_t *evt);
 
 #define EVENT_BUS_QUEUE_LEN       64
-#define EVENT_BUS_MAX_HANDLERS     4
+#define EVENT_BUS_MAX_HANDLERS     8
 #define EVENT_BUS_DISPATCHER_PRIO  6
 #define EVENT_BUS_DISPATCHER_CORE  0
 

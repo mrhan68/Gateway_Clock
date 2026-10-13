@@ -28,16 +28,26 @@ static TaskHandle_t s_dns_task_handle = NULL;
 static bool s_is_connected = false;
 static char s_current_ip[16] = "0.0.0.0";
 static bool s_in_softap_mode = false;
+static int s_sta_retry_count = 0;
 static int s_dns_sock = -1;
 static esp_timer_handle_t s_ble_resume_timer = NULL;
+static esp_timer_handle_t s_reconnect_timer = NULL;
+
+static void wifi_reconnect_timer_cb(void *arg)
+{
+    if (wifi_provisioning_is_configured() && !s_is_connected) {
+        ESP_LOGI(TAG, "[WIFI] Attempting scheduled reconnect to AP (retry #%d)...", s_sta_retry_count);
+        esp_wifi_connect();
+    }
+}
 
 static void ble_resume_timer_cb(void *arg)
 {
     ESP_LOGI(TAG, "BLE scan resume timer expired. Resuming scan...");
     ble_adapter_resume_scan();
-        if (s_ble_resume_timer) {
-            esp_timer_stop(s_ble_resume_timer);
-        }
+    if (s_ble_resume_timer) {
+        esp_timer_stop(s_ble_resume_timer);
+    }
 }
 
 
@@ -309,11 +319,22 @@ int wifi_provisioning_scan_to_json(char *json_buf, size_t max_len)
                                esc_ssid,
                                s_scanned_aps[i].rssi,
                                (int)s_scanned_aps[i].authmode);
-        if (written > 0) offset += written;
+        if (written > 0 && written < (int)(max_len - offset)) {
+            offset += written;
+        } else {
+            break;
+        }
         if ((size_t)offset >= max_len - 10) break;
     }
 
-    offset += snprintf(json_buf + offset, max_len - offset, "]");
+    if ((size_t)offset < max_len - 1) {
+        json_buf[offset++] = ']';
+        json_buf[offset] = '\0';
+    } else if (max_len > 1) {
+        json_buf[max_len - 2] = ']';
+        json_buf[max_len - 1] = '\0';
+        offset = max_len - 1;
+    }
     return offset;
 }
 
@@ -425,8 +446,6 @@ static void start_softap_internal(bool force_reconfig)
 static void wifi_event_handler(void *arg, esp_event_base_t event_base,
                                int32_t event_id, void *event_data)
 {
-    static int s_sta_retry_count = 0;
-
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
         if (wifi_provisioning_is_configured()) {
             ESP_LOGI(TAG, "Wi-Fi Station started, connecting...");
@@ -448,12 +467,32 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
         }
 
         if (wifi_provisioning_is_configured()) {
-            esp_wifi_connect();
+            // Chống Reconnect Storm: Áp dụng Exponential Backoff (1s, 2s, 4s, 8s, tối đa 30s)
+            uint32_t delay_sec = 1;
+            if (s_sta_retry_count > 1) {
+                delay_sec = 1 << (s_sta_retry_count > 5 ? 5 : (s_sta_retry_count - 1));
+                if (delay_sec > 30) delay_sec = 30;
+            }
+            ESP_LOGI(TAG, "[WIFI] Scheduling reconnect in %lu second(s) (retry #%d)...", (unsigned long)delay_sec, s_sta_retry_count);
+            if (s_reconnect_timer == NULL) {
+                esp_timer_create_args_t timer_args = {
+                    .callback = &wifi_reconnect_timer_cb,
+                    .name = "wifi_reconnect_timer"
+                };
+                esp_timer_create(&timer_args, &s_reconnect_timer);
+            }
+            if (s_reconnect_timer) {
+                esp_timer_stop(s_reconnect_timer);
+                esp_timer_start_once(s_reconnect_timer, (uint64_t)delay_sec * 1000000ULL);
+            }
         }
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
         esp_ip4addr_ntoa(&event->ip_info.ip, s_current_ip, sizeof(s_current_ip));
         s_is_connected = true;
+        if (s_reconnect_timer) {
+            esp_timer_stop(s_reconnect_timer);
+        }
         s_sta_retry_count = 0;
 
         printf("\n[WIFI] Connected, IP: %s\n", s_current_ip);

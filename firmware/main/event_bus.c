@@ -78,13 +78,18 @@ BaseType_t event_bus_post(gateway_event_code_t code, void *data, size_t len, boo
             portYIELD_FROM_ISR();
         }
     } else {
-        result = xQueueSend(s_event_queue, &evt, pdMS_TO_TICKS(100));
+        // Nếu caller chính là dispatcher task, dùng non-blocking (0 ticks) tránh circular self-deadlock
+        TickType_t wait_ticks = (xTaskGetCurrentTaskHandle() == s_dispatcher_task_handle) ? 0 : pdMS_TO_TICKS(100);
+        result = xQueueSend(s_event_queue, &evt, wait_ticks);
     }
 
     if (result != pdTRUE) {
-        ESP_LOGW(TAG, "Event queue full, payload freed! Dropped event %d", code);
-        // FSD §4.1.6: Giai phong bo nho ngay lap tuc neu hang doi day
-        if (data) free(data);
+        if (!from_isr) {
+            ESP_LOGW(TAG, "Event queue full, payload freed! Dropped event %d", code);
+            // FSD §4.1.6: Giai phong bo nho ngay lap tuc neu hang doi day (chi trong task context)
+            if (data) free(data);
+        }
+        // Luu y: Trong ISR tuyet doi khong goi free() hoac ESP_LOG de tranh crash kernel
     }
 
     return result;

@@ -833,6 +833,11 @@ static void url_decode(char *dst, const char *src, size_t max_dst)
 
 static esp_err_t post_save_handler(httpd_req_t *req)
 {
+    // BẢO MẬT: Nếu thiết bị đã hoàn tất Wi-Fi (vận hành trong mạng LAN), bắt buộc có API Key
+    if (wifi_provisioning_is_configured() && !check_api_auth(req)) {
+        return ESP_OK;
+    }
+
     char buf[512];
     int ret = httpd_req_recv(req, buf, sizeof(buf) - 1);
     if (ret <= 0) {
@@ -897,9 +902,8 @@ static esp_err_t post_save_handler(httpd_req_t *req)
         config_manager_set_softap_password(softap_pass);
         ESP_LOGI(TAG, "Configured new SoftAP password (length: %zu)", strlen(softap_pass));
         wifi_provisioning_apply_softap_config();
-    } else if (strlen(softap_pass) == 0) {
-        config_manager_set_softap_password("");
-        wifi_provisioning_apply_softap_config();
+    } else if (strlen(softap_pass) > 0) {
+        ESP_LOGW(TAG, "SoftAP password too short (< 8 chars), keeping current password.");
     }
     config_manager_save();
 
