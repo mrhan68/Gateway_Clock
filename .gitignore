@@ -45,6 +45,7 @@ firmware/sdkconfig.old
 
 # ─── Local Workspace Only (Untracked from Git) ──
 .agents/
+.agent
 .claude/
 AGENTS.md
 CLAUDE.md

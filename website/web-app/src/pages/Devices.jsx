@@ -348,7 +348,7 @@ function Devices() {
                       <span
                         className={`text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full border ${
                           isActuator
-                            ? 'bg-purple-500/10 text-purple-400 border-purple-500/20'
+                            ? 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20'
                             : 'bg-sky-500/10 text-sky-400 border-sky-500/20'
                         }`}
                       >

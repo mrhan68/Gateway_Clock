@@ -6,7 +6,7 @@ module.exports = {
     extend: {
       fontFamily: {
         sans: [
-          'Inter',
+          'system-ui',
           '-apple-system',
           'BlinkMacSystemFont',
           '"Segoe UI"',
@@ -28,6 +28,9 @@ module.exports = {
         warning: '#f59e0b',
         'gateway-online': '#10b981',
         'gateway-offline': '#ef4444',
+        zinc: {
+          750: '#303036',
+        },
         // Dark palette tokens (Linear-style)
         dark: {
           950: '#09090b', // Base background

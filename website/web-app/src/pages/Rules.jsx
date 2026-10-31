@@ -243,8 +243,8 @@ function Rules() {
                     </div>
 
                     {/* Condition & Threshold */}
-                    <div className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-purple-950/40 border border-purple-800/40 text-purple-300 text-xs font-mono font-semibold">
-                      <span className="text-purple-400 text-sm font-bold">{cond.symbol}</span>
+                    <div className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-950/40 border border-amber-800/40 text-amber-300 text-xs font-mono font-semibold">
+                      <span className="text-amber-400 text-sm font-bold">{cond.symbol}</span>
                       <span className="tabular-nums">{rule.threshold}</span>
                     </div>
 

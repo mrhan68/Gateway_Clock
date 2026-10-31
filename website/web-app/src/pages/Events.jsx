@@ -30,12 +30,12 @@ const EVENT_TYPE_CONFIG = {
     icon: CommandLineIcon,
   },
   rule_executed: {
-    color: 'bg-purple-500/10 text-purple-400 border-purple-500/20',
+    color: 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20',
     label: 'Rule Executed',
     icon: BoltIcon,
   },
   rule_trigger: {
-    color: 'bg-purple-500/10 text-purple-400 border-purple-500/20',
+    color: 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20',
     label: 'Rule Trigger',
     icon: BoltIcon,
   },
@@ -315,7 +315,7 @@ function Events() {
         {[
           { id: '', label: 'Tất cả' },
           { id: 'command_ack', label: 'Command ACK', color: 'emerald' },
-          { id: 'rule_executed', label: 'Rule Executions', color: 'purple' },
+          { id: 'rule_executed', label: 'Rule Executions', color: 'cyan' },
           { id: 'schedule_triggered', label: 'Schedules', color: 'blue' },
           { id: 'error', label: 'Errors', color: 'rose' },
         ].map((item) => {

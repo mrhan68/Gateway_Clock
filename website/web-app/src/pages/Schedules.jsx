@@ -24,7 +24,7 @@ const TYPE_CONFIG = {
   },
   automation: {
     label: 'Tự động hóa (Automation)',
-    badge: 'bg-purple-500/10 text-purple-400 border-purple-500/20',
+    badge: 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20',
     icon: BoltIcon,
   },
   personal_event: {
@@ -600,15 +600,15 @@ function Schedules() {
 
               {/* Automation fields */}
               {modalType === 'automation' && (
-                <div className="space-y-3 p-3 bg-purple-950/20 border border-purple-800/30 rounded-xl">
+                <div className="space-y-3 p-3 bg-sky-950/20 border border-sky-800/30 rounded-xl">
                   <div>
-                    <label className="block text-xs font-medium text-purple-300 mb-1">
+                    <label className="block text-xs font-medium text-sky-300 mb-1">
                       Thiết bị chấp hành mục tiêu
                     </label>
                     <select
                       name="target_device_id"
                       defaultValue={editSchedule?.target_device_id || ''}
-                      className="w-full px-3 py-2 text-xs bg-zinc-950 border border-zinc-800 rounded-lg text-zinc-100 focus:outline-none focus:border-purple-500"
+                      className="w-full px-3 py-2 text-xs bg-zinc-950 border border-zinc-800 rounded-lg text-zinc-100 focus:outline-none focus:border-sky-500"
                     >
                       <option value="">-- Chọn rơ-le / thiết bị --</option>
                       {actuators.map((d) => (
@@ -619,7 +619,7 @@ function Schedules() {
                     </select>
                   </div>
                   <div>
-                    <label className="block text-xs font-medium text-purple-300 mb-1">
+                    <label className="block text-xs font-medium text-sky-300 mb-1">
                       Lệnh thực thi
                     </label>
                     <input
@@ -627,7 +627,7 @@ function Schedules() {
                       type="text"
                       placeholder="ON hoặc OFF"
                       defaultValue={editSchedule?.action_command || 'ON'}
-                      className="w-full px-3 py-2 text-xs bg-zinc-950 border border-zinc-800 rounded-lg text-zinc-100 font-mono focus:outline-none focus:border-purple-500"
+                      className="w-full px-3 py-2 text-xs bg-zinc-950 border border-zinc-800 rounded-lg text-zinc-100 font-mono focus:outline-none focus:border-sky-500"
                     />
                   </div>
                 </div>

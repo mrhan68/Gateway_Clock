@@ -8,7 +8,7 @@ import React from 'react'
  * @param {Array} data - Array of telemetry records [{ value, unit, recorded_at }]
  * @param {string} title - Chart title (e.g. 'Temperature Trend')
  * @param {string} unit - Value unit (e.g. '°C' or '%')
- * @param {string} color - Primary stroke color ('blue' | 'purple' | 'emerald' | 'amber')
+ * @param {string} color - Primary stroke color ('blue' | 'indigo' | 'emerald' | 'amber')
  * @param {boolean} loading - Loading indicator
  */
 export default function TelemetryChart({
@@ -88,11 +88,11 @@ export default function TelemetryChart({
       badge: 'bg-sky-500/10 text-sky-400 border-sky-500/20',
       dot: '#38bdf8',
     },
-    purple: {
-      stroke: '#a855f7',
-      fill: 'rgba(168, 85, 247, 0.15)',
-      badge: 'bg-purple-500/10 text-purple-400 border-purple-500/20',
-      dot: '#a855f7',
+    cyan: {
+      stroke: '#06b6d4',
+      fill: 'rgba(6, 182, 212, 0.15)',
+      badge: 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20',
+      dot: '#06b6d4',
     },
     emerald: {
       stroke: '#34d399',

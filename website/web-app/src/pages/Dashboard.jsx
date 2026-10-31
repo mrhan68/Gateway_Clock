@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react'
+import { Link } from 'react-router-dom'
 import {
   ArrowPathIcon,
   BoltIcon,
@@ -379,12 +380,12 @@ function Dashboard() {
           <h2 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">
             Biểu Đồ Đo Đạc Môi Trường Theo Thời Gian
           </h2>
-          <a
-            href="/devices"
+          <Link
+            to="/devices"
             className="text-xs text-emerald-400 hover:text-emerald-300 font-medium transition-colors"
           >
             Quản lý cảm biến →
-          </a>
+          </Link>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -416,12 +417,12 @@ function Dashboard() {
               <h3 className="text-sm font-semibold text-zinc-100">Lịch Biểu & Báo Thức Sắp Đến</h3>
               <p className="text-[11px] text-zinc-500">Đồng bộ tự động từ bộ nhớ Flash LittleFS</p>
             </div>
-            <a
-              href="/schedules"
+            <Link
+              to="/schedules"
               className="text-xs text-emerald-400 hover:text-emerald-300 font-medium"
             >
               Tất cả ({schedules.length}) →
-            </a>
+            </Link>
           </div>
 
           {upcomingSchedules.length === 0 ? (
@@ -468,12 +469,12 @@ function Dashboard() {
               <h3 className="text-sm font-semibold text-zinc-100">Nhật Ký Sự Kiện Gần Nhất</h3>
               <p className="text-[11px] text-zinc-500">Bản tin ACK & Cảnh báo an toàn</p>
             </div>
-            <a
-              href="/events"
+            <Link
+              to="/events"
               className="text-xs text-emerald-400 hover:text-emerald-300 font-medium"
             >
               Chi tiết →
-            </a>
+            </Link>
           </div>
 
           {events.length === 0 ? (
