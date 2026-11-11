@@ -69,6 +69,16 @@ void sd_logger_init(void);
 bool sd_logger_is_mounted(void);
 
 /**
+ * @brief Tháo mount thẻ MicroSD (dùng cho chẩn đoán hoặc kiểm tra fallback)
+ */
+void sd_logger_unmount(void);
+
+/**
+ * @brief Lấy số lượng bản tin telemetry đang lưu tạm trong RAM Fallback Buffer (FSD §11.5.1)
+ */
+int sd_logger_get_ram_fallback_count(void);
+
+/**
  * @brief Thử mount lại thẻ MicroSD (dùng cho CLI hoặc cắm lại thẻ)
  */
 esp_err_t sd_logger_remount(void);

@@ -235,8 +235,21 @@ esp_err_t config_manager_init(void)
 
     nvs_close(handle);
 
-    // Nạp tệp cấu hình /spiffs/config.json nếu tồn tại (FSD §4.12.2 & FR-CFG-01)
-    config_manager_load_from_file("/spiffs/config.json");
+    // Nạp tệp cấu hình /sdcard/config.json nếu tồn tại (Phương án A - Option A: nạp 1 lần rồi đổi tên thành .bak)
+    struct stat sd_st;
+    if (stat("/sdcard/config.json", &sd_st) == 0) {
+        ESP_LOGI(TAG, "Found /sdcard/config.json on MicroSD card, importing into NVS (Option A)...");
+        if (config_manager_load_from_file("/sdcard/config.json") == ESP_OK) {
+            if (rename("/sdcard/config.json", "/sdcard/config.json.bak") == 0) {
+                ESP_LOGI(TAG, "[CFG] Successfully imported /sdcard/config.json to NVS and renamed to config.json.bak");
+            } else {
+                ESP_LOGW(TAG, "[CFG] Imported /sdcard/config.json but failed to rename to .bak");
+            }
+        }
+    } else {
+        // Nạp tệp cấu hình /spiffs/config.json nếu tồn tại (FSD §4.12.2 & FR-CFG-01)
+        config_manager_load_from_file("/spiffs/config.json");
+    }
 
     ESP_LOGI(TAG, "Configuration loaded successfully from NVS Flash (Timezone: %s)", s_active_config.timezone);
     return ESP_OK;

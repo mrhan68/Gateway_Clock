@@ -25,6 +25,7 @@
 #include "relay_controller.h"
 #include "sd_logger.h"
 #include "board_led.h"
+#include "display.h"
 
 static const char *TAG __attribute__((unused)) = "CLI";
 
@@ -71,6 +72,7 @@ static void print_help(void)
     printf("  mqtt status                          - Show MQTT broker connection status\n");
     printf("  mqtt pub <topic_suffix> <payload>    - Publish message to MQTT broker\n");
     printf("  config show                          - Print active configuration\n");
+    printf("  config import <file>                 - Import config JSON file (e.g. /sdcard/config.json)\n");
     printf("  config set wifi <ssid> <pass>        - Save Wi-Fi SSID and password to NVS\n");
     printf("  config set mqtt <uri> [interval_s]   - Save MQTT Broker URI and publish interval\n");
     printf("  config set apikey <key>              - Set REST API key (8..32 characters)\n");
@@ -82,6 +84,9 @@ static void print_help(void)
     printf("  schedule list                        - List all active schedule entries\n");
     printf("  schedule add [id] <alarm|auto> <HH:MM> <title_or_target> [cmd] - Add schedule\n");
     printf("  schedule test [title]                - Manually trigger an alarm notification\n");
+    printf("  alarm dismiss                        - Dismiss and stop active alarm\n");
+    printf("  alarm snooze [min]                   - Snooze active alarm (default 9 min)\n");
+    printf("  screen <0|1|2|3|next>                - Switch OLED screen index or cycle\n");
     printf("  schedule clear                       - Clear all schedule entries\n");
     printf("  relay status                         - Show state of all 4 relays (GPIO 15..18)\n");
     printf("  relay on <target_id>                 - Turn on relay (fan, heater, dehum, aux)\n");
@@ -223,6 +228,21 @@ static void handle_command(char *cmd_line)
         }
     } else if (strcmp(cmd_line, "config show") == 0) {
         config_manager_print();
+    } else if (strncmp(cmd_line, "config import", 13) == 0) {
+        char path[128] = "/sdcard/config.json";
+        if (strlen(cmd_line) > 14) {
+            sscanf(cmd_line + 14, "%127s", path);
+        }
+        printf("Importing configuration from '%s'...\n", path);
+        esp_err_t err = config_manager_load_from_file(path);
+        if (err == ESP_OK) {
+            char bak_path[136];
+            snprintf(bak_path, sizeof(bak_path), "%s.bak", path);
+            rename(path, bak_path);
+            printf("OK: Successfully imported configuration from '%s' and renamed to '%s'.\n", path, bak_path);
+        } else {
+            printf("Error: Failed to import configuration from '%s' (%s / 0x%x).\n", path, esp_err_to_name(err), err);
+        }
     } else if (strncmp(cmd_line, "config set wifi", 15) == 0) {
         char ssid[32] = {0}, pass[64] = {0};
         int parsed = sscanf(cmd_line + 15, "%31s %63s", ssid, pass);
@@ -420,6 +440,30 @@ static void handle_command(char *cmd_line)
     } else if (strcmp(cmd_line, "schedule clear") == 0) {
         scheduler_clear_entries();
         printf("OK: All schedules cleared.\n");
+    } else if (strncmp(cmd_line, "alarm", 5) == 0) {
+        if (strstr(cmd_line, "dismiss") || strstr(cmd_line, "stop")) {
+            display_stop_alarm();
+            printf("OK: Alarm dismissed.\n");
+        } else if (strstr(cmd_line, "snooze")) {
+            int mins = 9;
+            sscanf(cmd_line + 12, "%d", &mins);
+            if (mins <= 0) mins = 9;
+            display_snooze_alarm((uint8_t)mins);
+            printf("OK: Alarm snoozed for %d minutes.\n", mins);
+        } else {
+            printf("Usage: alarm dismiss | alarm snooze [minutes]\n");
+        }
+    } else if (strncmp(cmd_line, "screen", 6) == 0) {
+        int idx = 0;
+        if (strstr(cmd_line, "next")) {
+            display_set_screen(255);
+            printf("OK: Screen transitioned to next screen.\n");
+        } else if (sscanf(cmd_line + 6, "%d", &idx) == 1 && idx >= 0 && idx <= 3) {
+            display_set_screen((uint8_t)idx);
+            printf("OK: Screen set to #%d.\n", idx);
+        } else {
+            printf("Usage: screen <0|1|2|3|next>\n");
+        }
     } else if (strncmp(cmd_line, "cmd send", 8) == 0) {
         char target[32] = {0}, command[32] = {0};
         int parsed = sscanf(cmd_line + 8, "%31s %31s", target, command);
@@ -532,9 +576,10 @@ static void handle_command(char *cmd_line)
         event_bus_test_burst(count);
     } else if (strncmp(cmd_line, "sd", 2) == 0) {
         if (strcmp(cmd_line, "sd status") == 0) {
-            printf("MicroSD Status: %s (Mount point: %s)\n",
-                   sd_logger_is_mounted() ? "MOUNTED (FAT32)" : "NOT MOUNTED (SPIFFS Fallback)",
+            printf("MicroSD Status       : %s (Mount point: %s)\n",
+                   sd_logger_is_mounted() ? "MOUNTED (FAT32)" : "NOT MOUNTED (RAM/SPIFFS Fallback)",
                    SDCARD_MOUNT_POINT);
+            printf("RAM Fallback Buffer  : %d / 50 items (FSD §11.5.1)\n", sd_logger_get_ram_fallback_count());
         } else if (strcmp(cmd_line, "sd mount") == 0) {
             printf("Retrying MicroSD mount on SPI2 (CS=10, MOSI=11, CLK=12, MISO=13)...\n");
             esp_err_t err = sd_logger_remount();
@@ -542,6 +587,28 @@ static void handle_command(char *cmd_line)
                 printf("SUCCESS: MicroSD card mounted at %s!\n", SDCARD_MOUNT_POINT);
             } else {
                 printf("FAILED: MicroSD mount returned %s (0x%x).\n", esp_err_to_name(err), err);
+            }
+        } else if (strcmp(cmd_line, "sd unmount") == 0) {
+            sd_logger_unmount();
+            printf("SUCCESS: MicroSD card unmounted. RAM fallback is now ACTIVE.\n");
+        } else if (strncmp(cmd_line, "sd write ", 9) == 0) {
+            char path[128] = {0};
+            char content[256] = {0};
+            if (sscanf(cmd_line + 9, "%127s %255[^\n]", path, content) >= 1) {
+                if (strncmp(path, "/sdcard/", 8) != 0 || strstr(path, "..") != NULL) {
+                    printf("Security Error: Access denied. Path must be strictly within /sdcard/ and cannot contain '..'\n");
+                } else {
+                    FILE *f = fopen(path, "w");
+                    if (!f) {
+                        printf("Error opening file '%s' for writing (errno=%d: %s)\n", path, errno, strerror(errno));
+                    } else {
+                        fputs(content, f);
+                        fclose(f);
+                        printf("OK: Written %zu bytes to '%s'\n", strlen(content), path);
+                    }
+                }
+            } else {
+                printf("Usage: sd write <filepath> <content>\n");
             }
         } else if (strcmp(cmd_line, "sd diag") == 0) {
             printf("--- MicroSD Hardware Pin Diagnostics ---\n");
@@ -741,7 +808,7 @@ static void handle_command(char *cmd_line)
                 fclose(f);
             }
         } else {
-            printf("Usage: sd status | sd mount | sd ls [path] | sd cat <file> | sd queue | sd diag | sd test\n");
+            printf("Usage: sd status | sd mount | sd unmount | sd write <file> <text> | sd ls [path] | sd cat <file> | sd queue | sd diag | sd test\n");
         }
     } else if (strncmp(cmd_line, "pin", 3) == 0) {
         int gpio = 0, level = 0;

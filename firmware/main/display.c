@@ -299,8 +299,10 @@ void display_set_screen(uint8_t screen_index)
 {
     if (screen_index < DISPLAY_SCREEN_COUNT) {
         s_current_screen = (display_screen_index_t)screen_index;
-        display_render();
+    } else {
+        s_current_screen = (display_screen_index_t)((s_current_screen + 1) % 3);
     }
+    display_render();
 }
 
 // =========================================================================
@@ -541,9 +543,21 @@ static void display_task(void *pvParameters)
             if ((notify_val & NOTIFY_BTN_BOOT) && (now_ms - last_btn_boot_time > 200)) {
                 last_btn_boot_time = now_ms;
                 if (s_alarm_active) {
-                    // Khi chuông đang kêu: Nhấn nhanh (<2s) -> SNOOZE 9 phút
-                    ESP_LOGI(TAG, "Button 1 pressed during alarm -> SNOOZE 9m");
-                    display_snooze_alarm(9);
+                    // Khi chuông đang kêu: Giữ >= 2s -> TẮT CHUÔNG (Dismiss), Nhả nhanh (<2s) -> SNOOZE 9 phút
+                    vTaskDelay(pdMS_TO_TICKS(100));
+                    int hold_count = 0;
+                    while (gpio_get_level(DISPLAY_BTN_BOOT_GPIO) == 0 && hold_count < 20) {
+                        vTaskDelay(pdMS_TO_TICKS(100));
+                        hold_count++;
+                        supervisor_report_heartbeat(TASK_HEARTBEAT_DISPLAY);
+                    }
+                    if (hold_count >= 20) {
+                        ESP_LOGI(TAG, "BTN_BOOT held >= 2s during alarm -> DISMISS ALARM (Tắt chuông)");
+                        display_stop_alarm();
+                    } else {
+                        ESP_LOGI(TAG, "BTN_BOOT short click (<2s) during alarm -> SNOOZE 9m (Báo lại sau 9 phút)");
+                        display_snooze_alarm(9);
+                    }
                 } else {
                     // Khi bình thường: kiểm tra nhấn giữ >= 5s (5000ms) để Factory Reset toàn diện
                     vTaskDelay(pdMS_TO_TICKS(100));
@@ -570,7 +584,10 @@ static void display_task(void *pvParameters)
                             event_bus_post(EVT_WIFI_PROVISIONING_STARTED, NULL, 0, false);
                             ESP_LOGI(TAG, "[FACTORY_RESET] Completed. All personal data erased. SoftAP OPEN ready.");
                         } else {
-                            ESP_LOGI(TAG, "BTN_BOOT released early (%d ms). Factory Reset aborted.", count_sec * 100);
+                            // Nhấn nhả nhanh (<1.5s): Luân chuyển trang màn hình OLED (Screen 0 -> 1 -> 2 -> 0)
+                            s_current_screen = (display_screen_index_t)((s_current_screen + 1) % 3);
+                            display_render();
+                            ESP_LOGI(TAG, "BTN_BOOT clicked -> Switched to Screen #%d", s_current_screen);
                         }
                     }
                 }

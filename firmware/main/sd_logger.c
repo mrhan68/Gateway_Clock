@@ -5,6 +5,8 @@
 #include <sys/stat.h>
 #include <time.h>
 #include <errno.h>
+#include <dirent.h>
+#include <unistd.h>
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_vfs_fat.h"
@@ -36,10 +38,54 @@ typedef struct {
 } sd_log_item_t;
 
 static bool s_sd_mounted = false;
+static int64_t s_last_remount_attempt_ms = 0;
 static sdmmc_card_t *s_sd_card = NULL;
 static QueueHandle_t s_sd_log_queue = NULL;
 static SemaphoreHandle_t s_sd_mutex = NULL;
 static TaskHandle_t s_sd_task_handle = NULL;
+
+#define SD_RAM_FALLBACK_CAPACITY 50
+
+typedef struct {
+    sd_log_item_t items[SD_RAM_FALLBACK_CAPACITY];
+    int head;
+    int count;
+} sd_ram_fallback_t;
+
+static sd_ram_fallback_t s_ram_fallback = { .head = 0, .count = 0 };
+
+static void enqueue_ram_fallback(const sd_log_item_t *item)
+{
+    s_ram_fallback.items[s_ram_fallback.head] = *item;
+    s_ram_fallback.head = (s_ram_fallback.head + 1) % SD_RAM_FALLBACK_CAPACITY;
+    if (s_ram_fallback.count < SD_RAM_FALLBACK_CAPACITY) {
+        s_ram_fallback.count++;
+    }
+    ESP_LOGD(TAG, "[RAM FALLBACK] Buffered telemetry (count: %d/%d)", s_ram_fallback.count, SD_RAM_FALLBACK_CAPACITY);
+}
+
+static void append_telemetry_csv(const sd_log_item_t *item);
+static void append_sync_queue_record(const sd_log_item_t *item);
+
+static void drain_ram_fallback(void)
+{
+    if (!s_sd_mounted || s_ram_fallback.count == 0) return;
+    ESP_LOGI(TAG, "[SD FALLBACK] Draining %d buffered telemetry items to MicroSD...", s_ram_fallback.count);
+    int start_idx = (s_ram_fallback.head - s_ram_fallback.count + SD_RAM_FALLBACK_CAPACITY) % SD_RAM_FALLBACK_CAPACITY;
+    for (int i = 0; i < s_ram_fallback.count; i++) {
+        int idx = (start_idx + i) % SD_RAM_FALLBACK_CAPACITY;
+        append_telemetry_csv(&s_ram_fallback.items[idx]);
+        append_sync_queue_record(&s_ram_fallback.items[idx]);
+    }
+    s_ram_fallback.count = 0;
+    s_ram_fallback.head = 0;
+    ESP_LOGI(TAG, "[SD FALLBACK] Drain complete.");
+}
+
+int sd_logger_get_ram_fallback_count(void)
+{
+    return s_ram_fallback.count;
+}
 
 static uint32_t calculate_crc32(const uint8_t *data, size_t length)
 {
@@ -150,9 +196,42 @@ static void append_sync_queue_record(const sd_log_item_t *item)
     if (s_sd_mutex) xSemaphoreGive(s_sd_mutex);
 }
 
+static void check_disk_space_and_purge_if_needed(void)
+{
+    if (!s_sd_mounted) return;
+    uint64_t total_bytes = 0, free_bytes = 0;
+    if (esp_vfs_fat_info(SDCARD_MOUNT_POINT, &total_bytes, &free_bytes) == ESP_OK) {
+        if (total_bytes > 0 && free_bytes < (50ULL * 1024 * 1024)) {
+            ESP_LOGW(TAG, "[SD DISK FULL] Free space %llu MB < 50MB (FSD §11.5.2). Purging oldest telemetry CSV...",
+                     (unsigned long long)(free_bytes / (1024 * 1024)));
+            DIR *d = opendir(SD_TELEMETRY_DIR);
+            if (d) {
+                struct dirent *de;
+                char oldest_file[64] = "";
+                while ((de = readdir(d)) != NULL) {
+                    if (strstr(de->d_name, ".csv") != NULL) {
+                        if (oldest_file[0] == '\0' || strcmp(de->d_name, oldest_file) < 0) {
+                            strncpy(oldest_file, de->d_name, sizeof(oldest_file) - 1);
+                        }
+                    }
+                }
+                closedir(d);
+                if (oldest_file[0] != '\0') {
+                    char full_path[128];
+                    snprintf(full_path, sizeof(full_path), "%s/%s", SD_TELEMETRY_DIR, oldest_file);
+                    ESP_LOGW(TAG, "[SD PURGE] Deleting oldest file %s to maintain >=10%% free space", full_path);
+                    unlink(full_path);
+                }
+            }
+        }
+    }
+}
+
 static void append_telemetry_csv(const sd_log_item_t *item)
 {
     if (!s_sd_mounted) return;
+
+    check_disk_space_and_purge_if_needed();
 
     time_t t = (time_t)item->timestamp;
     struct tm ti;
@@ -309,7 +388,18 @@ static void sd_log_task(void *pvParameters)
                 append_telemetry_csv(&item);
                 append_sync_queue_record(&item);
                 items_since_flush++;
+            } else {
+                // FSD §11.5.1: RAM Buffer Fallback (50 items) khi rút nóng hoặc thẻ chưa mount
+                enqueue_ram_fallback(&item);
             }
+        }
+
+        // FSD §11.5.1: Tự động remount mỗi 20 giây nếu thẻ chưa được mount
+        int64_t now_ms = esp_timer_get_time() / 1000ULL;
+        if (!s_sd_mounted && (now_ms - s_last_remount_attempt_ms >= 20000)) {
+            s_last_remount_attempt_ms = now_ms;
+            ESP_LOGI(TAG, "[SD] Card not mounted, attempting auto-remount (every 20s)...");
+            sd_logger_remount();
         }
 
         // Định kỳ kiểm tra backfill nếu đang kết nối MQTT
@@ -333,14 +423,40 @@ static void on_mqtt_connected(const gateway_event_t *evt)
     sd_logger_trigger_backfill();
 }
 
+void sd_logger_unmount(void)
+{
+    if (s_sd_mutex) xSemaphoreTake(s_sd_mutex, portMAX_DELAY);
+    ESP_LOGI(TAG, "[UNMOUNT] Triggered. mounted=%d, card=%p", s_sd_mounted, s_sd_card);
+    if (s_sd_card != NULL) {
+        esp_err_t uerr = esp_vfs_fat_sdcard_unmount(SDCARD_MOUNT_POINT, s_sd_card);
+        ESP_LOGI(TAG, "[UNMOUNT] esp_vfs_fat_sdcard_unmount returned: %s (0x%x)", esp_err_to_name(uerr), uerr);
+        if (uerr != ESP_OK) {
+            esp_vfs_fat_unregister_path(SDCARD_MOUNT_POINT);
+        }
+        s_sd_card = NULL;
+    } else {
+        esp_vfs_fat_unregister_path(SDCARD_MOUNT_POINT);
+    }
+    s_sd_mounted = false;
+    s_last_remount_attempt_ms = esp_timer_get_time() / 1000ULL;
+    if (s_sd_mutex) xSemaphoreGive(s_sd_mutex);
+}
+
 esp_err_t sd_logger_remount(void)
 {
-    if (s_sd_mounted && s_sd_card != NULL) {
-        esp_vfs_fat_sdcard_unmount(SDCARD_MOUNT_POINT, s_sd_card);
+    if (s_sd_mutex) xSemaphoreTake(s_sd_mutex, portMAX_DELAY);
+    esp_log_level_set("vfs_fat_sdmmc", ESP_LOG_DEBUG);
+    esp_log_level_set("vfs_fat", ESP_LOG_DEBUG);
+    if (s_sd_card != NULL) {
+        esp_err_t uerr = esp_vfs_fat_sdcard_unmount(SDCARD_MOUNT_POINT, s_sd_card);
+        if (uerr != ESP_OK) {
+            esp_vfs_fat_unregister_path(SDCARD_MOUNT_POINT);
+        }
         s_sd_card = NULL;
-        s_sd_mounted = false;
-        ESP_LOGI(TAG, "Unmounted previous MicroSD card.");
+    } else {
+        esp_vfs_fat_unregister_path(SDCARD_MOUNT_POINT);
     }
+    s_sd_mounted = false;
 
     // 1. Pull-up nội cho các chân SPI để ổn định giao tiếp trên breadboard
     gpio_set_pull_mode(SD_PIN_MISO, GPIO_PULLUP_ONLY);
@@ -359,7 +475,7 @@ esp_err_t sd_logger_remount(void)
     esp_vfs_fat_sdmmc_mount_config_t mount_config = {
         .format_if_mount_failed = false,
         .max_files = 5,
-        .allocation_unit_size = 16 * 1024
+        .allocation_unit_size = 512
     };
 
     esp_err_t ret = ESP_FAIL;
@@ -369,6 +485,11 @@ esp_err_t sd_logger_remount(void)
         if (ret == ESP_OK) {
             break;
         }
+        if (s_sd_card != NULL) {
+            esp_vfs_fat_sdcard_unmount(SDCARD_MOUNT_POINT, s_sd_card);
+            s_sd_card = NULL;
+        }
+        esp_vfs_fat_unregister_path(SDCARD_MOUNT_POINT);
         vTaskDelay(pdMS_TO_TICKS(150));
     }
 
@@ -399,6 +520,12 @@ esp_err_t sd_logger_remount(void)
         event_bus_post(EVT_SD_STATUS_CHANGED, status, sizeof(sd_status_t), false);
     }
 
+    if (s_sd_mutex) xSemaphoreGive(s_sd_mutex);
+
+    // Drain RAM fallback sau khi đã nhả mutex để tránh deadlock đệ quy
+    if (s_sd_mounted) {
+        drain_ram_fallback();
+    }
     return ret;
 }
 
