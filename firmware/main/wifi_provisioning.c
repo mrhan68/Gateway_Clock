@@ -187,12 +187,44 @@ static const char* authmode_to_str(uint8_t authmode)
 
 static int64_t s_last_scan_time_ms = 0;
 static bool s_is_scanning = false;
+static volatile bool s_suppress_sta_autoreconnect = false;
+
+static void finish_wifi_scan_cleanup(void)
+{
+    s_suppress_sta_autoreconnect = false;
+    s_is_scanning = false;
+
+    if (s_is_connected) {
+        ble_adapter_resume_scan();
+    } else if (s_ble_resume_timer) {
+        esp_timer_stop(s_ble_resume_timer);
+        esp_timer_start_once(s_ble_resume_timer, 60000000ULL);
+    }
+
+    if (!s_is_connected && wifi_provisioning_is_configured()) {
+        if (s_reconnect_timer == NULL) {
+            esp_timer_create_args_t timer_args = {
+                .callback = &wifi_reconnect_timer_cb,
+                .name = "wifi_reconnect_timer"
+            };
+            esp_timer_create(&timer_args, &s_reconnect_timer);
+        }
+        if (s_reconnect_timer) {
+            esp_timer_stop(s_reconnect_timer);
+            esp_timer_start_once(s_reconnect_timer, 15000000ULL);
+        }
+    }
+}
 
 static uint16_t perform_wifi_scan_internal(bool force)
 {
     int64_t now_ms = esp_timer_get_time() / 1000;
-    if (!force && s_scanned_count > 0 && (now_ms - s_last_scan_time_ms) < 30000) {
+    if (!force && s_scanned_count > 0 && (now_ms - s_last_scan_time_ms) < 60000) {
         ESP_LOGI(TAG, "Returning %u cached Wi-Fi APs (age: %lld ms)", s_scanned_count, (long long)(now_ms - s_last_scan_time_ms));
+        return s_scanned_count;
+    }
+    if (!force && s_last_scan_time_ms > 0 && (now_ms - s_last_scan_time_ms) < 3000) {
+        ESP_LOGI(TAG, "Returning %u Wi-Fi APs from recent scan (%lld ms ago)", s_scanned_count, (long long)(now_ms - s_last_scan_time_ms));
         return s_scanned_count;
     }
 
@@ -202,6 +234,16 @@ static uint16_t perform_wifi_scan_internal(bool force)
     }
 
     s_is_scanning = true;
+    ble_adapter_pause_scan();
+
+    if (!s_is_connected) {
+        if (s_reconnect_timer) {
+            esp_timer_stop(s_reconnect_timer);
+        }
+        s_suppress_sta_autoreconnect = true;
+        esp_wifi_disconnect();
+        vTaskDelay(pdMS_TO_TICKS(60));
+    }
 
     wifi_scan_config_t scan_config = {
         .ssid = NULL,
@@ -209,28 +251,36 @@ static uint16_t perform_wifi_scan_internal(bool force)
         .channel = 0,
         .show_hidden = false,
         .scan_type = WIFI_SCAN_TYPE_ACTIVE,
-        .scan_time.active.min = 0,
-        .scan_time.active.max = 0,
+        .scan_time.active.min = 40,
+        .scan_time.active.max = 80,
     };
 
     ESP_LOGI(TAG, "Starting Wi-Fi scan...");
     esp_err_t err = esp_wifi_scan_start(&scan_config, true);
+    if (err == ESP_ERR_WIFI_STATE) {
+        s_suppress_sta_autoreconnect = true;
+        esp_wifi_disconnect();
+        vTaskDelay(pdMS_TO_TICKS(100));
+        err = esp_wifi_scan_start(&scan_config, true);
+    }
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "esp_wifi_scan_start failed: 0x%x", err);
-        s_is_scanning = false;
+        finish_wifi_scan_cleanup();
         return s_scanned_count;
     }
+
+    s_last_scan_time_ms = esp_timer_get_time() / 1000;
 
     uint16_t ap_count = 0;
     esp_wifi_scan_get_ap_num(&ap_count);
     if (ap_count == 0) {
-        s_is_scanning = false;
+        finish_wifi_scan_cleanup();
         return 0;
     }
 
     wifi_ap_record_t *records = malloc(ap_count * sizeof(wifi_ap_record_t));
     if (!records) {
-        s_is_scanning = false;
+        finish_wifi_scan_cleanup();
         return s_scanned_count;
     }
 
@@ -259,7 +309,7 @@ static uint16_t perform_wifi_scan_internal(bool force)
 
     free(records);
     s_last_scan_time_ms = esp_timer_get_time() / 1000;
-    s_is_scanning = false;
+    finish_wifi_scan_cleanup();
     ESP_LOGI(TAG, "Wi-Fi scan finished: found %u valid unique APs", s_scanned_count);
     return s_scanned_count;
 }
@@ -374,6 +424,11 @@ static void stop_dns_task(void *pv)
 static void background_scan_task(void *pv)
 {
     vTaskDelay(pdMS_TO_TICKS(1000));
+    int wait_loops = 0;
+    while (wifi_provisioning_is_configured() && !s_is_connected && s_sta_retry_count == 0 && wait_loops < 25) {
+        vTaskDelay(pdMS_TO_TICKS(200));
+        wait_loops++;
+    }
     ESP_LOGI(TAG, "[WIFI_PRESCAN] Performing initial background Wi-Fi scan...");
     perform_wifi_scan_internal(true);
     ESP_LOGI(TAG, "[WIFI_PRESCAN] Background scan complete: %u APs found", s_scanned_count);
@@ -447,16 +502,15 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
                                int32_t event_id, void *event_data)
 {
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
-        if (wifi_provisioning_is_configured()) {
-            ESP_LOGI(TAG, "Wi-Fi Station started, connecting...");
-            esp_wifi_connect();
-        } else {
-            ESP_LOGI(TAG, "Wi-Fi Station idle, waiting for configuration...");
-        }
+        ESP_LOGI(TAG, "Wi-Fi Station started (connect handled by wifi_provisioning_connect when configured).");
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
         wifi_event_sta_disconnected_t *disconn = (wifi_event_sta_disconnected_t *)event_data;
         s_is_connected = false;
         strcpy(s_current_ip, "0.0.0.0");
+        if (s_suppress_sta_autoreconnect || s_is_scanning) {
+            ESP_LOGI(TAG, "[WIFI] STA disconnected for Wi-Fi scan (Reason: %d), suppressing auto-reconnect.", disconn ? disconn->reason : -1);
+            return;
+        }
         ESP_LOGW(TAG, "[WIFI] Disconnected from AP (Reason code: %d).", disconn ? disconn->reason : -1);
         event_bus_post(EVT_WIFI_LOST, NULL, 0, false);
 
@@ -556,6 +610,9 @@ void wifi_provisioning_force_reset(void)
     ESP_LOGW(TAG, "[FACTORY_RESET] Force reset Wi-Fi & restoring SoftAP credentials...");
     config_manager_factory_reset();
 
+    if (s_reconnect_timer) {
+        esp_timer_stop(s_reconnect_timer);
+    }
     esp_wifi_disconnect();
     s_is_connected = false;
     strcpy(s_current_ip, "0.0.0.0");
@@ -574,6 +631,10 @@ esp_err_t wifi_provisioning_connect(const char *ssid, const char *password)
     }
 
     ESP_LOGI(TAG, "Setting Wi-Fi Station to SSID='%s'", ssid);
+    if (s_reconnect_timer) {
+        esp_timer_stop(s_reconnect_timer);
+    }
+    s_sta_retry_count = 0;
     start_softap_internal(false);
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));

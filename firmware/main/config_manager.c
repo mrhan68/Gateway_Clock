@@ -1,6 +1,7 @@
 #include "config_manager.h"
 #include <string.h>
 #include <stdio.h>
+#include <unistd.h>
 #include <sys/stat.h>
 #include "esp_log.h"
 #include "nvs_flash.h"
@@ -74,7 +75,14 @@ esp_err_t config_manager_load_from_file(const char *filepath)
     // gateway_id
     cJSON *gw_id = cJSON_GetObjectItem(root, "gateway_id");
     if (gw_id && cJSON_IsString(gw_id) && gw_id->valuestring[0] != '\0') {
-        strncpy(s_active_config.gateway_id, gw_id->valuestring, sizeof(s_active_config.gateway_id) - 1);
+        const char *resolved_id = (strcmp(gw_id->valuestring, "gw_smartclock_optA") == 0)
+                                    ? "gw_smartclock_01"
+                                    : gw_id->valuestring;
+        strncpy(s_active_config.gateway_id, resolved_id, sizeof(s_active_config.gateway_id) - 1);
+        s_active_config.gateway_id[sizeof(s_active_config.gateway_id) - 1] = '\0';
+    }
+    if (s_active_config.gateway_id[0] == '\0' || strcmp(s_active_config.gateway_id, "gw_smartclock_optA") == 0) {
+        strncpy(s_active_config.gateway_id, "gw_smartclock_01", sizeof(s_active_config.gateway_id) - 1);
         s_active_config.gateway_id[sizeof(s_active_config.gateway_id) - 1] = '\0';
     }
 
@@ -168,6 +176,12 @@ esp_err_t config_manager_init(void)
     // Đọc Gateway ID
     size_t len = sizeof(s_active_config.gateway_id);
     nvs_get_str(handle, "gw_id", s_active_config.gateway_id, &len);
+    if (s_active_config.gateway_id[0] == '\0' || strcmp(s_active_config.gateway_id, "gw_smartclock_optA") == 0) {
+        strncpy(s_active_config.gateway_id, "gw_smartclock_01", sizeof(s_active_config.gateway_id) - 1);
+        s_active_config.gateway_id[sizeof(s_active_config.gateway_id) - 1] = '\0';
+        nvs_set_str(handle, "gw_id", s_active_config.gateway_id);
+        nvs_commit(handle);
+    }
 
     // Đọc Timezone (mặc định "ICT-7")
     len = sizeof(s_active_config.timezone);
@@ -240,6 +254,7 @@ esp_err_t config_manager_init(void)
     if (stat("/sdcard/config.json", &sd_st) == 0) {
         ESP_LOGI(TAG, "Found /sdcard/config.json on MicroSD card, importing into NVS (Option A)...");
         if (config_manager_load_from_file("/sdcard/config.json") == ESP_OK) {
+            unlink("/sdcard/config.json.bak");
             if (rename("/sdcard/config.json", "/sdcard/config.json.bak") == 0) {
                 ESP_LOGI(TAG, "[CFG] Successfully imported /sdcard/config.json to NVS and renamed to config.json.bak");
             } else {
@@ -413,6 +428,16 @@ esp_err_t config_manager_set_timezone(const char *tz)
     if (!tz || tz[0] == '\0') return ESP_ERR_INVALID_ARG;
     strncpy(s_active_config.timezone, tz, sizeof(s_active_config.timezone) - 1);
     s_active_config.timezone[sizeof(s_active_config.timezone) - 1] = '\0';
+    return config_manager_save();
+}
+
+esp_err_t config_manager_set_gateway_id(const char *gw_id)
+{
+    if (!gw_id || gw_id[0] == '\0' || strlen(gw_id) >= sizeof(s_active_config.gateway_id)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    strncpy(s_active_config.gateway_id, gw_id, sizeof(s_active_config.gateway_id) - 1);
+    s_active_config.gateway_id[sizeof(s_active_config.gateway_id) - 1] = '\0';
     return config_manager_save();
 }
 

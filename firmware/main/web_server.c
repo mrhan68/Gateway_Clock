@@ -2,10 +2,12 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <math.h>
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_timer.h"
 #include "esp_http_server.h"
+#include "lwip/sockets.h"
 #include "cJSON.h"
 #include "rule_engine.h"
 #include "event_bus.h"
@@ -41,6 +43,29 @@ static bool check_api_auth(httpd_req_t *req) {
         }
     }
     httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Missing or invalid X-API-Key header");
+    return false;
+}
+
+static bool is_softap_client(httpd_req_t *req) {
+    if (!req) return false;
+    int sockfd = httpd_req_to_sockfd(req);
+    if (sockfd < 0) return false;
+
+    struct sockaddr_storage addr;
+    socklen_t len = sizeof(addr);
+    if (getsockname(sockfd, (struct sockaddr *)&addr, &len) != 0) {
+        return false;
+    }
+
+    if (addr.ss_family == AF_INET) {
+        return ntohl(((struct sockaddr_in *)&addr)->sin_addr.s_addr) == 0xC0A80401UL;
+    }
+    if (addr.ss_family == AF_INET6) {
+        const uint8_t *b = ((const struct sockaddr_in6 *)&addr)->sin6_addr.s6_addr;
+        static const uint8_t v4mapped_prefix[12] = {0,0,0,0,0,0,0,0,0,0,0xff,0xff};
+        return (memcmp(b, v4mapped_prefix, 12) == 0 &&
+                b[12] == 192 && b[13] == 168 && b[14] == 4 && b[15] == 1);
+    }
     return false;
 }
 
@@ -92,12 +117,18 @@ static const char SET_PASSWORD_HTML[] =
 "</form>"
 "<div class='footer'>Smart Clock Gateway • AICLP Firmware v2.0</div></div>"
 "<script>"
+"var s_scanAutoTried = false;"
 "function fetchScan(force) {"
 "  var st = document.getElementById('scan-status');"
 "  var sel = document.getElementById('ssid-select');"
 "  st.innerText = 'Đang tìm kiếm sóng Wi-Fi...';"
 "  var url = force ? '/scan?refresh=1' : '/scan';"
 "  fetch(url).then(r => r.json()).then(list => {"
+"    if (!force && list.length === 0 && !s_scanAutoTried) {"
+"      s_scanAutoTried = true;"
+"      fetchScan(true);"
+"      return;"
+"    }"
 "    sel.innerHTML = '<option value=\"\" disabled selected>-- Chọn mạng Wi-Fi (' + list.length + ') --</option>';"
 "    st.innerText = 'Tìm thấy ' + list.length + ' mạng Wi-Fi:';"
 "    list.forEach(item => {"
@@ -110,6 +141,7 @@ static const char SET_PASSWORD_HTML[] =
 "    man.value = '__manual__';"
 "    man.text = '+ [Nhập mạng ẩn / thủ công]';"
 "    sel.appendChild(man);"
+"    if (list.length === 0) { document.getElementById('manual-box').style.display = 'block'; }"
 "  }).catch(e => {"
 "    st.innerText = 'Không thể quét tự động, vui lòng bấm Quét Lại hoặc nhập thủ công:';"
 "    document.getElementById('manual-box').style.display = 'block';"
@@ -451,13 +483,15 @@ static const char DASHBOARD_HTML[] =
 "    list.forEach((item, idx) => {"
 "      var tr = document.createElement('tr');"
 "      var isAct = item.active;"
+"      var safeSsid = String(item.ssid).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\"/g,'&quot;');"
+"      var jsSsid = String(item.ssid).replace(/\\\\/g,'\\\\\\\\').replace(/'/g,\"\\\\'\").replace(/\"/g,'&quot;');"
 "      tr.innerHTML = '<td>' + (idx + 1) + '</td>' +"
-"        '<td><strong>' + item.ssid + '</strong></td>' +"
+"        '<td><strong>' + safeSsid + '</strong></td>' +"
 "        '<td>' + (isAct ? '<span class=\"badge green\">Đang dùng</span>' : '<span class=\"badge\">Đã lưu</span>') + '</td>' +"
 "        '<td style=\"display:flex;gap:6px;\">' +"
-"          '<button class=\"btn btn-primary\" style=\"padding:4px 8px;font-size:11px;width:auto;\" onclick=\"connectWifi(\'' + item.ssid + '\')\">⚡ Nối</button>' +"
-"          '<button class=\"btn btn-secondary\" style=\"padding:4px 8px;font-size:11px;\" onclick=\"editWifiPass(\'' + item.ssid + '\')\">✏️ Đổi Pass</button>' +"
-"          '<button class=\"btn btn-danger\" style=\"padding:4px 8px;font-size:11px;\" onclick=\"deleteSavedWifi(\'' + item.ssid + '\')\">🗑️ Xóa</button>' +"
+"          '<button class=\"btn btn-primary\" style=\"padding:4px 8px;font-size:11px;width:auto;\" onclick=\"connectWifi(\\'' + jsSsid + '\\')\">⚡ Nối</button>' +"
+"          '<button class=\"btn btn-secondary\" style=\"padding:4px 8px;font-size:11px;\" onclick=\"editWifiPass(\\'' + jsSsid + '\\')\">✏️ Đổi Pass</button>' +"
+"          '<button class=\"btn btn-danger\" style=\"padding:4px 8px;font-size:11px;\" onclick=\"deleteSavedWifi(\\'' + jsSsid + '\\')\">🗑️ Xóa</button>' +"
 "        '</td>';"
 "      tbody.appendChild(tr);"
 "    });"
@@ -539,12 +573,18 @@ static const char DASHBOARD_HTML[] =
 "    alert('Đã xóa cấu hình! Thiết bị đang khởi động lại ở chế độ OPEN...');"
 "  }).catch(() => alert('Thiết bị đang khởi động lại...'));"
 "}"
+"var s_wifiScanAutoTried = false;"
 "function fetchWifiScan(force) {"
 "  var st = document.getElementById('wifi-scan-status');"
 "  var sel = document.getElementById('wifi-ssid-select');"
 "  st.innerText = 'Đang tìm kiếm sóng Wi-Fi...';"
 "  var url = force ? '/scan?refresh=1' : '/scan';"
 "  fetch(url).then(r => r.json()).then(list => {"
+"    if (!force && list.length === 0 && !s_wifiScanAutoTried) {"
+"      s_wifiScanAutoTried = true;"
+"      fetchWifiScan(true);"
+"      return;"
+"    }"
 "    sel.innerHTML = '<option value=\"\" disabled selected>-- Chọn mạng Wi-Fi (' + list.length + ') --</option>';"
 "    st.innerText = 'Tìm thấy ' + list.length + ' mạng Wi-Fi:';"
 "    list.forEach(item => {"
@@ -624,6 +664,25 @@ static esp_err_t get_status_handler(httpd_req_t *req)
     return ret;
 }
 
+static void add_rounded_number(cJSON *root, const char *key, float val)
+{
+    if (!isfinite(val)) {
+        cJSON_AddNumberToObject(root, key, 0.0);
+        return;
+    }
+    double d = (val > -0.005f && val < 0.005f) ? 0.0 : (double)val;
+    char buf[24];
+    int len = snprintf(buf, sizeof(buf), "%.2f", d);
+    if (len > 0 && (size_t)len < sizeof(buf)) {
+        if (buf[len - 1] == '0' && len >= 2 && buf[len - 2] != '.') {
+            buf[len - 1] = '\0';
+        }
+        cJSON_AddRawToObject(root, key, buf);
+    } else {
+        cJSON_AddNumberToObject(root, key, d);
+    }
+}
+
 static esp_err_t get_telemetry_handler(httpd_req_t *req)
 {
     float temp = display_get_latest_temp();
@@ -636,8 +695,12 @@ static esp_err_t get_telemetry_handler(httpd_req_t *req)
     }
 
     cJSON *root = cJSON_CreateObject();
-    cJSON_AddNumberToObject(root, "temp", temp);
-    cJSON_AddNumberToObject(root, "hum", hum);
+    if (!root) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+    add_rounded_number(root, "temp", temp);
+    add_rounded_number(root, "hum", hum);
     cJSON_AddBoolToObject(root, "valid", valid);
 
     cJSON *relays = cJSON_CreateArray();
@@ -833,8 +896,11 @@ static void url_decode(char *dst, const char *src, size_t max_dst)
 
 static esp_err_t post_save_handler(httpd_req_t *req)
 {
-    // BẢO MẬT: Nếu thiết bị đã hoàn tất Wi-Fi (vận hành trong mạng LAN), bắt buộc có API Key
-    if (wifi_provisioning_is_configured() && !check_api_auth(req)) {
+    // BẢO MẬT: Cho phép SoftAP (192.168.4.1) hoặc thiết bị chưa cấu hình/chưa có pass SoftAP; mạng LAN phải có API Key
+    const gateway_config_t *cfg = config_manager_get();
+    bool allow_open = is_softap_client(req) || !wifi_provisioning_is_configured() ||
+                      !cfg || cfg->softap_password[0] == '\0';
+    if (!allow_open && !check_api_auth(req)) {
         return ESP_OK;
     }
 
@@ -978,7 +1044,7 @@ static esp_err_t post_softap_set_password_handler(httpd_req_t *req)
 
 static esp_err_t get_wifi_saved_handler(httpd_req_t *req)
 {
-    if (!check_api_auth(req)) return ESP_OK;
+    if (!is_softap_client(req) && !check_api_auth(req)) return ESP_OK;
     const gateway_config_t *cfg = config_manager_get();
     cJSON *root = cJSON_CreateObject();
     cJSON_AddStringToObject(root, "active_ssid", cfg ? cfg->wifi_ssid : "");
@@ -1009,7 +1075,7 @@ static esp_err_t get_wifi_saved_handler(httpd_req_t *req)
 
 static esp_err_t post_wifi_save_handler(httpd_req_t *req)
 {
-    if (!check_api_auth(req)) return ESP_OK;
+    if (!is_softap_client(req) && !check_api_auth(req)) return ESP_OK;
     char buf[256];
     int ret = httpd_req_recv(req, buf, sizeof(buf) - 1);
     if (ret <= 0) {
@@ -1077,7 +1143,7 @@ static esp_err_t post_wifi_save_handler(httpd_req_t *req)
 
 static esp_err_t post_wifi_delete_handler(httpd_req_t *req)
 {
-    if (!check_api_auth(req)) return ESP_OK;
+    if (!is_softap_client(req) && !check_api_auth(req)) return ESP_OK;
     char buf[128];
     int ret = httpd_req_recv(req, buf, sizeof(buf) - 1);
     if (ret <= 0) {
@@ -1117,7 +1183,7 @@ static esp_err_t post_wifi_delete_handler(httpd_req_t *req)
 
 static esp_err_t post_wifi_connect_handler(httpd_req_t *req)
 {
-    if (!check_api_auth(req)) return ESP_OK;
+    if (!is_softap_client(req) && !check_api_auth(req)) return ESP_OK;
     char buf[128];
     int ret = httpd_req_recv(req, buf, sizeof(buf) - 1);
     if (ret <= 0) {

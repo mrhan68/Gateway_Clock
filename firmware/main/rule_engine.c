@@ -501,17 +501,18 @@ static void on_rule_action_request(const gateway_event_t *evt)
 {
     if (evt != NULL && evt->data != NULL && evt->len >= sizeof(rule_action_request_t)) {
         const rule_action_request_t *act = (const rule_action_request_t *)evt->data;
-        ESP_LOGI(TAG, "[ACTION_EXECUTOR] >>> Executed Action on Target='%s': Command='%s' (Rule #%d)",
+        ESP_LOGI(TAG, "[ACTION_EXECUTOR] >>> Triggered Action on Target='%s': Command='%s' (Rule #%d)",
                  act->target_device_id, act->action_command, act->source_rule_id);
 
         // Notify cloud via MQTT if available
         if (mqtt_adapter_is_connected()) {
             char topic[96];
             char payload[160];
+            const char *cmd_id = (strncmp(act->command_id, "cmd-", 4) == 0) ? act->command_id : "cmd-webui";
             snprintf(topic, sizeof(topic), "device/%s/action", act->target_device_id);
             snprintf(payload, sizeof(payload),
-                     "{\"command\":\"%s\",\"source_rule\":%d,\"status\":\"EXECUTED\",\"command_id\":\"%s\"}",
-                     act->action_command, act->source_rule_id, act->command_id);
+                     "{\"command\":\"%s\",\"source_rule\":%d,\"status\":\"TRIGGERED\",\"command_id\":\"%s\"}",
+                     act->action_command, act->source_rule_id, cmd_id);
             mqtt_adapter_publish(topic, payload);
         }
     }

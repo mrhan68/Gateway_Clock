@@ -316,7 +316,10 @@ static void on_rule_action_request(const gateway_event_t *evt)
         return;
     }
 
-    relay_controller_set_state(act->target_device_id, new_state, act->command_id, "RULE_TRIGGER");
+    const char *cmd_id = (act->source_rule_id > 0 && strncmp(act->command_id, "cmd-", 4) == 0)
+                         ? act->command_id : "cmd-webui";
+    const char *source = (act->source_rule_id > 0) ? "RULE_TRIGGER" : "MANUAL_CMD";
+    relay_controller_set_state(act->target_device_id, new_state, cmd_id, source);
 }
 
 static void on_sensor_value_invalid(const gateway_event_t *evt)

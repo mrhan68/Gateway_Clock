@@ -76,6 +76,7 @@ static void print_help(void)
     printf("  config set wifi <ssid> <pass>        - Save Wi-Fi SSID and password to NVS\n");
     printf("  config set mqtt <uri> [interval_s]   - Save MQTT Broker URI and publish interval\n");
     printf("  config set apikey <key>              - Set REST API key (8..32 characters)\n");
+    printf("  config set gwid <id>                 - Save Gateway ID to NVS (reboot to apply)\n");
     printf("  rule list                            - List active automation rules\n");
     printf("  rule add <id> <sensor> <GT|LT> <thr> <target> <cmd> - Add or update rule\n");
     printf("  rule test <sensor_id> <val> [valid]  - Test telemetry against rules (valid=1/0)\n");
@@ -278,6 +279,15 @@ static void handle_command(char *cmd_line)
             printf("OK: API key updated: '%s'\n", key);
         } else {
             printf("Error: Usage: config set apikey <key> (8..32 printable non-space characters)\n");
+        }
+    } else if (strncmp(cmd_line, "config set gwid", 15) == 0 && (cmd_line[15] == '\0' || cmd_line[15] == ' ' || cmd_line[15] == '\t')) {
+        char id[64] = {0};
+        char extra[16] = {0};
+        int parsed = sscanf(cmd_line + 15, "%63s %15s", id, extra);
+        if (parsed == 1 && config_manager_set_gateway_id(id) == ESP_OK) {
+            printf("OK: Gateway ID updated: '%s' (reboot to apply)\n", id);
+        } else {
+            printf("Error: Usage: config set gwid <id> (1..31 non-space characters)\n");
         }
     } else if (strcmp(cmd_line, "status") == 0) {
         uint32_t active, alive, heap;

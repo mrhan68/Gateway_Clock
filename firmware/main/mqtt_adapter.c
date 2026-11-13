@@ -9,6 +9,7 @@
 #include "esp_crt_bundle.h"
 #include "esp_timer.h"
 #include "cJSON.h"
+#include "relay_controller.h"
 
 static const char *TAG = "MQTT_ADAPTER";
 
@@ -160,7 +161,13 @@ static void on_command_response(const gateway_event_t *evt)
         snprintf(sub_topic, sizeof(sub_topic), "device/%s/command_ack", ack->target_device_id);
         cJSON *root = cJSON_CreateObject();
         if (root != NULL) {
+            int relay_id = 0;
             cJSON_AddStringToObject(root, "command_id", ack->command_id);
+            if (sscanf(ack->target_device_id, "relay_%d", &relay_id) == 1 &&
+                relay_id >= 1 && relay_id <= RELAY_COUNT) {
+                cJSON_AddNumberToObject(root, "relay_id", relay_id);
+                cJSON_AddStringToObject(root, "state", relay_controller_get_state(relay_id) ? "ON" : "OFF");
+            }
             cJSON_AddBoolToObject(root, "success", ack->success);
             cJSON_AddNumberToObject(root, "error_code", ack->error_code);
             cJSON_AddStringToObject(root, "message", ack->message);
@@ -169,7 +176,31 @@ static void on_command_response(const gateway_event_t *evt)
             cJSON_Delete(root);
             if (str != NULL) {
                 mqtt_adapter_publish(sub_topic, str);
-                free(str);
+                cJSON_free(str);
+            }
+        }
+    }
+}
+
+static void on_relay_state_changed(const gateway_event_t *evt)
+{
+    if (evt != NULL && evt->data != NULL && evt->len >= sizeof(relay_state_changed_t)) {
+        const relay_state_changed_t *ev = (const relay_state_changed_t *)evt->data;
+        char dev_id[16];
+        snprintf(dev_id, sizeof(dev_id), "relay_%d", ev->relay_id);
+        cJSON *root = cJSON_CreateObject();
+        if (root != NULL) {
+            cJSON_AddStringToObject(root, "type", "relay_state_changed");
+            cJSON_AddStringToObject(root, "device_id", ev->device_id[0] ? ev->device_id : dev_id);
+            cJSON_AddNumberToObject(root, "relay_id", ev->relay_id);
+            cJSON_AddStringToObject(root, "state", ev->state ? "ON" : "OFF");
+            cJSON_AddStringToObject(root, "reason", ev->reason);
+            cJSON_AddNumberToObject(root, "timestamp", (double)ev->timestamp);
+            char *str = cJSON_PrintUnformatted(root);
+            cJSON_Delete(root);
+            if (str != NULL) {
+                mqtt_adapter_publish("events", str);
+                cJSON_free(str);
             }
         }
     }
@@ -230,6 +261,7 @@ void mqtt_adapter_init(const char *broker_uri, const char *gateway_id, const cha
     event_bus_register_handler(EVT_WIFI_CONNECTED, on_wifi_connected);
     event_bus_register_handler(EVT_WIFI_LOST, on_wifi_lost);
     event_bus_register_handler(EVT_COMMAND_RESPONSE, on_command_response);
+    event_bus_register_handler(EVT_RELAY_STATE_CHANGED, on_relay_state_changed);
 }
 
 bool mqtt_adapter_publish(const char *topic_suffix, const char *payload_json)
@@ -246,7 +278,7 @@ bool mqtt_adapter_publish(const char *topic_suffix, const char *payload_json)
     }
 
     // timeout=0 (non-blocking - chi enqueue vao esp-mqtt outbox) theo FSD §4.6.3
-    int msg_id = esp_mqtt_client_publish(s_client, full_topic, payload_json, 0, 0, 0);
+    int msg_id = esp_mqtt_client_publish(s_client, full_topic, payload_json, 0, 1, 0);
     return (msg_id >= 0);
 }
 

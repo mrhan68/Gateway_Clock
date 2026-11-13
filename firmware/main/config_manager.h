@@ -87,6 +87,11 @@ esp_err_t config_manager_set_mqtt(const char *uri, uint16_t interval_s);
 esp_err_t config_manager_set_timezone(const char *tz);
 
 /**
+ * @brief Cập nhật Gateway ID (1..31 ký tự)
+ */
+esp_err_t config_manager_set_gateway_id(const char *gw_id);
+
+/**
  * @brief Cập nhật Local REST API key (8..32 ký tự)
  */
 esp_err_t config_manager_set_api_key(const char *key);
