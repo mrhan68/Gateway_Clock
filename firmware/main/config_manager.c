@@ -9,6 +9,11 @@
 #include "cJSON.h"
 #include "ble_adapter.h"
 #include "esp_random.h"
+#if __has_include("secrets.h")
+#include "secrets.h"
+#else
+#include "secrets.example.h"
+#endif
 
 static const char *TAG = "CONFIG_MGR";
 static const char *NVS_NAMESPACE = "sys_cfg";
@@ -23,9 +28,9 @@ static void set_default_config(void)
     strncpy(s_active_config.wifi_ssid, "", sizeof(s_active_config.wifi_ssid) - 1);
     strncpy(s_active_config.wifi_password, "", sizeof(s_active_config.wifi_password) - 1);
     s_active_config.softap_password[0] = '\0';
-    strncpy(s_active_config.mqtt_broker_uri, "mqtts://your-emqx-broker.emqxsl.com:8883", sizeof(s_active_config.mqtt_broker_uri) - 1);
-    strncpy(s_active_config.mqtt_username, "gw_client", sizeof(s_active_config.mqtt_username) - 1);
-    strncpy(s_active_config.mqtt_password, "your_mqtt_password", sizeof(s_active_config.mqtt_password) - 1);
+    strncpy(s_active_config.mqtt_broker_uri, SECRET_MQTT_BROKER_URI, sizeof(s_active_config.mqtt_broker_uri) - 1);
+    strncpy(s_active_config.mqtt_username, SECRET_MQTT_USERNAME, sizeof(s_active_config.mqtt_username) - 1);
+    strncpy(s_active_config.mqtt_password, SECRET_MQTT_PASSWORD, sizeof(s_active_config.mqtt_password) - 1);
     s_active_config.mqtt_telemetry_interval_s = 10;
     s_active_config.saved_wifi_count = 0;
     memset(s_active_config.saved_wifi, 0, sizeof(s_active_config.saved_wifi));
@@ -229,9 +234,9 @@ esp_err_t config_manager_init(void)
     if (strcmp(s_active_config.mqtt_broker_uri, "mqtt://192.168.1.100:1883") == 0 ||
         strstr(s_active_config.mqtt_broker_uri, "hivemq") != NULL ||
         strstr(s_active_config.mqtt_broker_uri, "emqxsl") != NULL) {
-        strncpy(s_active_config.mqtt_broker_uri, "mqtts://your-emqx-broker.emqxsl.com:8883", sizeof(s_active_config.mqtt_broker_uri) - 1);
-        strncpy(s_active_config.mqtt_username, "gw_client", sizeof(s_active_config.mqtt_username) - 1);
-        strncpy(s_active_config.mqtt_password, "your_mqtt_password", sizeof(s_active_config.mqtt_password) - 1);
+        strncpy(s_active_config.mqtt_broker_uri, SECRET_MQTT_BROKER_URI, sizeof(s_active_config.mqtt_broker_uri) - 1);
+        strncpy(s_active_config.mqtt_username, SECRET_MQTT_USERNAME, sizeof(s_active_config.mqtt_username) - 1);
+        strncpy(s_active_config.mqtt_password, SECRET_MQTT_PASSWORD, sizeof(s_active_config.mqtt_password) - 1);
     }
 
     nvs_get_u16(handle, "mqtt_interval", &s_active_config.mqtt_telemetry_interval_s);

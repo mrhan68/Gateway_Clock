@@ -114,10 +114,13 @@ router.post('/register', authLimiter, async (req, res) => {
       }
     });
 
-    const jwtSecret = process.env.JWT_SECRET || 'fallback_secret';
+    const jwtSecret = process.env.JWT_SECRET;
+    if (!jwtSecret && process.env.NODE_ENV === 'production') {
+      return res.status(500).json({ error: 'Server misconfiguration: JWT_SECRET environment variable is missing' });
+    }
     const token = jwt.sign(
       { id: user.id, username: user.username },
-      jwtSecret,
+      jwtSecret || 'fallback_secret',
       { expiresIn: process.env.JWT_EXPIRES_IN || '24h' }
     );
     res.cookie('token', token, { httpOnly: true, sameSite: 'strict', maxAge: 24 * 60 * 60 * 1000 });
@@ -141,8 +144,11 @@ router.get('/me', async (req, res) => {
   }
 
   try {
-    const jwtSecret = process.env.JWT_SECRET || 'fallback_secret';
-    const decoded = jwt.verify(token, jwtSecret);
+    const jwtSecret = process.env.JWT_SECRET;
+    if (!jwtSecret && process.env.NODE_ENV === 'production') {
+      return res.status(500).json({ error: 'Server misconfiguration: JWT_SECRET environment variable is missing' });
+    }
+    const decoded = jwt.verify(token, jwtSecret || 'fallback_secret');
     const user = await prisma.user.findUnique({
       where: { id: decoded.id },
       select: { id: true, username: true, email: true, createdAt: true }

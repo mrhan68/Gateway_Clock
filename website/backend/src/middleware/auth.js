@@ -10,7 +10,11 @@ exports.authenticate = (req, res, next) => {
   if (!token) return res.status(401).json({ error: 'Unauthorized' });
 
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'fallback_secret');
+    const jwtSecret = process.env.JWT_SECRET;
+    if (!jwtSecret && process.env.NODE_ENV === 'production') {
+      return res.status(500).json({ error: 'Server misconfiguration: JWT_SECRET is missing' });
+    }
+    const decoded = jwt.verify(token, jwtSecret || 'fallback_secret');
     req.user = decoded;
     next();
   } catch (err) {

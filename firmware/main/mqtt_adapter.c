@@ -10,13 +10,18 @@
 #include "esp_timer.h"
 #include "cJSON.h"
 #include "relay_controller.h"
+#if __has_include("secrets.h")
+#include "secrets.h"
+#else
+#include "secrets.example.h"
+#endif
 
 static const char *TAG = "MQTT_ADAPTER";
 
 static esp_mqtt_client_handle_t s_client = NULL;
 static bool s_is_connected = false;
 static char s_gateway_id[32] = "gw_default";
-static char s_broker_uri[128] = "mqtts://your-emqx-broker.emqxsl.com:8883";
+static char s_broker_uri[128] = SECRET_MQTT_BROKER_URI;
 static char s_mqtt_username[64] = {0};
 static char s_mqtt_password[64] = {0};
 static char s_status_topic[64] = {0};

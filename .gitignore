@@ -38,6 +38,7 @@ test/host/host_tests
 # ─── Firmware ──
 firmware/build/
 firmware/sdkconfig.old
+firmware/main/secrets.h
 
 # ─── Database ──
 *.db
