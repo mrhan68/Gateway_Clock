@@ -29,6 +29,11 @@ const DEFAULT_RELAYS = [
   { id: 'relay_4', target: 'aux_01', name: 'Còi Báo Động (Aux)', gpio: 'GPIO 18', icon: BellAlertIcon },
 ]
 
+const RELAY_ALIAS_MAP = {
+  ...Object.fromEntries(DEFAULT_RELAYS.flatMap((r) => [[r.id, r.id], [r.target, r.id]])),
+  light_01: 'relay_4',
+}
+
 function Dashboard() {
   const gatewayId = getActiveGateway()
   const [gateway, setGateway] = useState(null)
@@ -84,14 +89,25 @@ function Dashboard() {
       setSchedules(schedRes.data || [])
       setLastRefreshed(new Date())
 
-      // Deduce relay states from device list if available
-      const newRelayStates = { ...relayStates }
+      // Resolve relay states from physical IDs (relay_1..4) and aliases via latest last_seen
+      const latestByRelay = {}
       devList.forEach((d) => {
-        if (d.device_id in newRelayStates) {
-          newRelayStates[d.device_id] = d.status === 'online' || d.last_value === 1
+        const relayId = RELAY_ALIAS_MAP[d.device_id]
+        if (!relayId || d.last_value === null || d.last_value === undefined) return
+        const parsedTs = d.last_seen ? new Date(d.last_seen).getTime() : 0
+        const ts = Number.isNaN(parsedTs) ? 0 : parsedTs
+        const prev = latestByRelay[relayId]
+        if (!prev || ts >= prev.ts) {
+          latestByRelay[relayId] = { ts, value: Number(d.last_value) === 1 }
         }
       })
-      setRelayStates(newRelayStates)
+      setRelayStates((prev) => {
+        const next = { ...prev }
+        Object.entries(latestByRelay).forEach(([relayId, entry]) => {
+          next[relayId] = entry.value
+        })
+        return next
+      })
 
       // Find sensor devices to fetch telemetry for real-time chart
       const sensorDevice = devList.find((d) => d.device_type === 'sensor')

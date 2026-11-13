@@ -34,10 +34,30 @@ const EVENT_TYPE_CONFIG = {
     label: 'Rule Executed',
     icon: BoltIcon,
   },
+  rule_action: {
+    color: 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20',
+    label: 'Rule Action',
+    icon: BoltIcon,
+  },
   rule_trigger: {
     color: 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20',
     label: 'Rule Trigger',
     icon: BoltIcon,
+  },
+  safety_interlock: {
+    color: 'bg-rose-500/10 text-rose-400 border-rose-500/20',
+    label: 'Safety Interlock',
+    icon: ShieldExclamationIcon,
+  },
+  compressor_dwell_lock: {
+    color: 'bg-amber-500/10 text-amber-400 border-amber-500/20',
+    label: 'Dwell Lock',
+    icon: ClockIcon,
+  },
+  command_rejected: {
+    color: 'bg-rose-500/10 text-rose-400 border-rose-500/20',
+    label: 'Command Rejected',
+    icon: ExclamationCircleIcon,
   },
   schedule_triggered: {
     color: 'bg-blue-500/10 text-blue-400 border-blue-500/20',

@@ -89,7 +89,8 @@ async function createGateway(req, res, next) {
       data: {
         id,
         name,
-        timezone: timezone || null
+        timezone: timezone || null,
+        userId: req.user?.id || null
       }
     });
 
@@ -117,7 +118,7 @@ async function createGateway(req, res, next) {
  */
 async function listGateways(req, res, next) {
   try {
-    const where = req.user?.id ? { userId: req.user.id } : {};
+    const where = req.user?.id ? { OR: [{ userId: req.user.id }, { userId: null }] } : {};
     const gateways = await prisma.gateway.findMany({
       where,
       orderBy: { createdAt: 'desc' },

@@ -21,7 +21,7 @@ const api = axios.create({
 // --- Gateway selection ---
 // In this simple MVP, one gateway is active. In a multi-user app,
 // this would be stored in auth context.
-let activeGateway = localStorage.getItem('activeGateway') || null
+let activeGateway = localStorage.getItem('activeGateway') || 'gw_smartclock_01'
 
 export const setActiveGateway = (id) => {
   activeGateway = id

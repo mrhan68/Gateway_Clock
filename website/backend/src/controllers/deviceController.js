@@ -5,6 +5,7 @@ const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
 const { createError } = require('../middleware/errorHandler');
 const relay = require('../mqtt/relay');
+const { getAliasCandidates, recordPendingCommand } = require('../mqtt/relayAliases');
 const crypto = require('crypto');
 
 function safeParseJson(str, fallback = []) {
@@ -253,9 +254,13 @@ async function sendDeviceCommand(req, res, next) {
     const { command, ttl_seconds } = req.body;
     const commandId = crypto.randomUUID();
 
-    // Verify device exists
+    // Verify device exists (match physical relay ID or web alias)
+    const candidates = getAliasCandidates(device_id);
     const device = await prisma.device.findFirst({
-      where: { gatewayId: gateway_id, deviceId: device_id },
+      where: {
+        gatewayId: gateway_id,
+        deviceId: candidates.length > 1 ? { in: candidates } : device_id
+      },
       select: { id: true, deviceId: true, protocol: true }
     });
     if (!device) {
@@ -278,6 +283,13 @@ async function sendDeviceCommand(req, res, next) {
       }
       throw createError('INTERNAL_ERROR', result.message);
     }
+
+    recordPendingCommand(commandId, {
+      gatewayId: gateway_id,
+      deviceId: device_id,
+      state: String(command || '').trim().toUpperCase(),
+      timestamp: Date.now()
+    });
 
     res.status(202).json({
       command_id: commandId,
