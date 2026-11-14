@@ -417,7 +417,9 @@ static void sd_log_task(void *pvParameters)
         if (xQueueReceive(s_sd_log_queue, &item, pdMS_TO_TICKS(1000)) == pdTRUE) {
             if (s_sd_mounted) {
                 append_telemetry_csv(&item);
-                append_sync_queue_record(&item);
+                if (!mqtt_adapter_is_connected()) {
+                    append_sync_queue_record(&item);
+                }
                 items_since_flush++;
             } else {
                 // FSD §11.5.1: RAM Buffer Fallback (50 items) khi rút nóng hoặc thẻ chưa mount

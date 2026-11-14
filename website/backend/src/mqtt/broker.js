@@ -1,5 +1,5 @@
 const mqtt = require('mqtt');
-const { PrismaClient } = require('@prisma/client');
+const prisma = require('../config/prisma');
 const crypto = require('crypto');
 const {
   ALIAS_TO_RELAY,
@@ -10,7 +10,6 @@ const {
   consumePendingCommand
 } = require('./relayAliases');
 
-const prisma = new PrismaClient();
 let mqttClient = null;
 let isRunning = false;
 const seededGateways = new Set();
@@ -258,35 +257,42 @@ async function startBroker() {
     mqttClient.subscribe('gateway/+/rules/sync', { qos: 1 });
   });
 
-  mqttClient.on('message', async (topic, message) => {
+  let mqttMsgQueue = Promise.resolve();
+  mqttClient.on('message', (topic, message) => {
     const payload = message.toString();
-    const parts = topic.split('/');
-    if (parts.length >= 3 && parts[0] === 'gateway') {
-      const gatewayId = parts[1];
-      const action = parts[2];
+    mqttMsgQueue = mqttMsgQueue
+      .then(async () => {
+        const parts = topic.split('/');
+        if (parts.length >= 3 && parts[0] === 'gateway') {
+          const gatewayId = parts[1];
+          const action = parts[2];
 
-      if (action === 'telemetry') {
-        if (parts.length > 3 && parts[3] === 'batch') await handleTelemetryBatch(gatewayId, payload);
-        else await handleTelemetry(gatewayId, payload);
-      } else if (action === 'events') {
-        await handleEvents(gatewayId, payload);
-      } else if (action === 'status') {
-        await handleGatewayStatus(gatewayId, payload);
-      } else if (action === 'alarm') {
-        await handleAlarmEvent(gatewayId, payload);
-      } else if (action === 'schedule' && parts.length > 3 && parts[3] === 'sync') {
-        await handleScheduleSyncFromGateway(gatewayId, payload);
-      } else if (action === 'rules' && parts.length > 3 && parts[3] === 'sync') {
-        await handleRulesSyncFromGateway(gatewayId, payload);
-      } else if (action === 'device' && parts.length >= 5) {
-        const deviceId = parts[3];
-        if (parts[4] === 'command_ack') {
-          await handleCommandAck(gatewayId, deviceId, payload);
-        } else if (parts[4] === 'action') {
-          await handleDeviceAction(gatewayId, deviceId, payload);
+          if (action === 'telemetry') {
+            if (parts.length > 3 && parts[3] === 'batch') await handleTelemetryBatch(gatewayId, payload);
+            else await handleTelemetry(gatewayId, payload);
+          } else if (action === 'events') {
+            await handleEvents(gatewayId, payload);
+          } else if (action === 'status') {
+            await handleGatewayStatus(gatewayId, payload);
+          } else if (action === 'alarm') {
+            await handleAlarmEvent(gatewayId, payload);
+          } else if (action === 'schedule' && parts.length > 3 && parts[3] === 'sync') {
+            await handleScheduleSyncFromGateway(gatewayId, payload);
+          } else if (action === 'rules' && parts.length > 3 && parts[3] === 'sync') {
+            await handleRulesSyncFromGateway(gatewayId, payload);
+          } else if (action === 'device' && parts.length >= 5) {
+            const deviceId = parts[3];
+            if (parts[4] === 'command_ack') {
+              await handleCommandAck(gatewayId, deviceId, payload);
+            } else if (parts[4] === 'action') {
+              await handleDeviceAction(gatewayId, deviceId, payload);
+            }
+          }
         }
-      }
-    }
+      })
+      .catch((err) => {
+        console.error('[MQTT] Unhandled message queue error:', err.message);
+      });
   });
 
   mqttClient.on('error', (err) => {

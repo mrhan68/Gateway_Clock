@@ -1,8 +1,7 @@
 /**
  * Controllers for Automation Rule management.
  */
-const { PrismaClient } = require('@prisma/client');
-const prisma = new PrismaClient();
+const prisma = require('../config/prisma');
 const { createError } = require('../middleware/errorHandler');
 const broker = require('../mqtt/broker');
 const { DEFAULT_ACTUATOR_NAMES } = require('../mqtt/relayAliases');

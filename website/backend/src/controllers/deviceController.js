@@ -1,8 +1,7 @@
 /**
  * Controllers for Device management and device commands.
  */
-const { PrismaClient } = require('@prisma/client');
-const prisma = new PrismaClient();
+const prisma = require('../config/prisma');
 const { createError } = require('../middleware/errorHandler');
 const relay = require('../mqtt/relay');
 const { getAliasCandidates, recordPendingCommand } = require('../mqtt/relayAliases');

@@ -4,8 +4,7 @@
  * Schedules can be of type: automation, alarm, or personal_event.
  * Per FSD §7.2.4: repeat_days and one_time_date are mutually exclusive.
  */
-const { PrismaClient } = require('@prisma/client');
-const prisma = new PrismaClient();
+const prisma = require('../config/prisma');
 const { createError } = require('../middleware/errorHandler');
 const broker = require('../mqtt/broker');
 
