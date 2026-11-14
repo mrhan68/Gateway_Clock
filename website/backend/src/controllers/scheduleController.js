@@ -32,10 +32,23 @@ async function listSchedules(req, res, next) {
       ...(type ? { type: type.toLowerCase() } : {})
     };
 
-    const schedules = await prisma.schedule.findMany({
+    let schedules = await prisma.schedule.findMany({
       where,
       orderBy: [{ type: 'asc' }, { hour: 'asc' }, { minute: 'asc' }]
     });
+
+    if (!type && schedules.length === 0 && typeof broker.ensureDefaultSchedulesAndRules === 'function') {
+      await broker.ensureDefaultSchedulesAndRules(gateway_id);
+      schedules = await prisma.schedule.findMany({
+        where,
+        orderBy: [{ type: 'asc' }, { hour: 'asc' }, { minute: 'asc' }]
+      });
+      if (schedules.length > 0 && typeof broker.publishScheduleConfig === 'function') {
+        broker.publishScheduleConfig(gateway_id, { skipSeed: true }).catch((err) => {
+          console.error('[SCHEDULE] Failed to publish config to gateway:', err.message);
+        });
+      }
+    }
 
     const formatted = schedules.map(s => ({
       id: s.id,

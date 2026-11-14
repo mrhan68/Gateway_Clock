@@ -60,6 +60,8 @@ static int map_target_to_relay_id(const char *target_id)
     if (strcasecmp(target_id, "relay_4") == 0 ||
         strcasecmp(target_id, "aux_01") == 0 ||
         strcasecmp(target_id, "light_01") == 0 ||
+        strcasecmp(target_id, "office_ac_relay") == 0 ||
+        strcasecmp(target_id, "relay_ch4") == 0 ||
         strcasecmp(target_id, "aux") == 0 ||
         strcasecmp(target_id, "light") == 0) {
         return 4;

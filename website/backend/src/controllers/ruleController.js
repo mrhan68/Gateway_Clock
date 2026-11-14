@@ -5,6 +5,65 @@ const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
 const { createError } = require('../middleware/errorHandler');
 const broker = require('../mqtt/broker');
+const { DEFAULT_ACTUATOR_NAMES } = require('../mqtt/relayAliases');
+
+const STANDARD_SENSOR_DEFAULTS = {
+  sensor_temp_01: { name: 'Cảm biến Nhiệt độ (BTHome)', deviceType: 'sensor', protocol: 'ble' },
+  sensor_hum_01: { name: 'Cảm biến Độ ẩm (BTHome)', deviceType: 'sensor', protocol: 'ble' }
+};
+
+const STANDARD_ACTUATOR_IDS = new Set([
+  'fan_01',
+  'heater_01',
+  'dehumidifier_01',
+  'aux_01',
+  'relay_1',
+  'relay_2',
+  'relay_3',
+  'relay_4'
+]);
+
+async function ensureKnownDevice(gatewayId, deviceId, role) {
+  const existing = await prisma.device.findFirst({
+    where: { gatewayId, deviceId }
+  });
+  if (existing) return existing;
+
+  let deviceData = null;
+  if (role === 'sensor' && STANDARD_SENSOR_DEFAULTS[deviceId]) {
+    deviceData = {
+      gatewayId,
+      deviceId,
+      ...STANDARD_SENSOR_DEFAULTS[deviceId],
+      status: 'online'
+    };
+  } else if (role === 'target' && STANDARD_ACTUATOR_IDS.has(deviceId)) {
+    deviceData = {
+      gatewayId,
+      deviceId,
+      name: DEFAULT_ACTUATOR_NAMES[deviceId] || deviceId,
+      deviceType: 'actuator',
+      protocol: 'mqtt',
+      status: 'online'
+    };
+  }
+
+  if (!deviceData) {
+    throw createError(
+      'DEVICE_NOT_FOUND',
+      `${role === 'sensor' ? 'Sensor' : 'Target'} device '${deviceId}' not found in gateway '${gatewayId}'`
+    );
+  }
+
+  try {
+    return await prisma.device.create({ data: deviceData });
+  } catch (err) {
+    if (err && err.code === 'P2002') {
+      return await prisma.device.findFirst({ where: { gatewayId, deviceId } });
+    }
+    throw err;
+  }
+}
 
 /**
  * GET /gateways/{gateway_id}/rules
@@ -23,10 +82,23 @@ async function listRules(req, res, next) {
         `Gateway '${gateway_id}' not found`);
     }
 
-    const rules = await prisma.automationRule.findMany({
+    let rules = await prisma.automationRule.findMany({
       where: { gatewayId: gateway_id },
       orderBy: { createdAt: 'desc' }
     });
+
+    if (rules.length === 0 && typeof broker.ensureDefaultSchedulesAndRules === 'function') {
+      await broker.ensureDefaultSchedulesAndRules(gateway_id);
+      rules = await prisma.automationRule.findMany({
+        where: { gatewayId: gateway_id },
+        orderBy: { createdAt: 'desc' }
+      });
+      if (rules.length > 0 && typeof broker.publishScheduleConfig === 'function') {
+        broker.publishScheduleConfig(gateway_id, { skipSeed: true }).catch((err) => {
+          console.error('[RULE] Failed to publish config to gateway:', err.message);
+        });
+      }
+    }
 
     const formatted = rules.map(r => ({
       id: r.id,
@@ -67,23 +139,9 @@ async function createRule(req, res, next) {
         `Gateway '${gateway_id}' not found`);
     }
 
-    // Verify sensor device exists
-    const sensor = await prisma.device.findFirst({
-      where: { gatewayId: gateway_id, deviceId: sensor_device_id }
-    });
-    if (!sensor) {
-      throw createError('DEVICE_NOT_FOUND',
-        `Sensor device '${sensor_device_id}' not found in gateway '${gateway_id}'`);
-    }
-
-    // Verify target device exists
-    const target = await prisma.device.findFirst({
-      where: { gatewayId: gateway_id, deviceId: target_device_id }
-    });
-    if (!target) {
-      throw createError('DEVICE_NOT_FOUND',
-        `Target device '${target_device_id}' not found in gateway '${gateway_id}'`);
-    }
+    // Verify or auto-create standard sensor & target devices
+    await ensureKnownDevice(gateway_id, sensor_device_id, 'sensor');
+    await ensureKnownDevice(gateway_id, target_device_id, 'target');
 
     const rule = await prisma.automationRule.create({
       data: {

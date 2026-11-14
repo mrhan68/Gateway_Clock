@@ -69,6 +69,11 @@ const EVENT_TYPE_CONFIG = {
     label: 'Alarm Trigger',
     icon: BellAlertIcon,
   },
+  alarm_triggered: {
+    color: 'bg-amber-500/10 text-amber-400 border-amber-500/20',
+    label: 'Báo Thức (Alarm)',
+    icon: BellAlertIcon,
+  },
   device_connected: {
     color: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20',
     label: 'Connected',
@@ -337,6 +342,7 @@ function Events() {
           { id: 'command_ack', label: 'Command ACK', color: 'emerald' },
           { id: 'rule_executed', label: 'Rule Executions', color: 'cyan' },
           { id: 'schedule_triggered', label: 'Schedules', color: 'blue' },
+          { id: 'alarm_triggered', label: 'Alarms', color: 'amber' },
           { id: 'error', label: 'Errors', color: 'rose' },
         ].map((item) => {
           const isActive = filters.type === item.id

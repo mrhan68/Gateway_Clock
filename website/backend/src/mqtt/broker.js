@@ -2,6 +2,8 @@ const mqtt = require('mqtt');
 const { PrismaClient } = require('@prisma/client');
 const crypto = require('crypto');
 const {
+  ALIAS_TO_RELAY,
+  RELAY_TO_ALIAS,
   DEFAULT_ACTUATOR_NAMES,
   resolveRelayTargets,
   recordPendingCommand,
@@ -11,6 +13,133 @@ const {
 const prisma = new PrismaClient();
 let mqttClient = null;
 let isRunning = false;
+const seededGateways = new Set();
+
+const DAY_NAMES = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
+
+const DEFAULT_FSD_RULES = [
+  { sensorDeviceId: 'sensor_temp_01', conditionType: 'gt', threshold: 30.0, targetDeviceId: 'fan_01', actionCommand: 'ON', enabled: true },
+  { sensorDeviceId: 'sensor_temp_01', conditionType: 'lt', threshold: 22.0, targetDeviceId: 'heater_01', actionCommand: 'ON', enabled: true },
+  { sensorDeviceId: 'sensor_hum_01', conditionType: 'gt', threshold: 75.0, targetDeviceId: 'dehumidifier_01', actionCommand: 'ON', enabled: true }
+];
+
+const DEFAULT_FSD_SCHEDULES = [
+  { type: 'alarm', hour: 7, minute: 0, repeatDays: 'SUN,MON,TUE,WED,THU,FRI,SAT', oneTimeDate: null, enabled: true, targetDeviceId: null, actionCommand: null, title: 'Good Morning Alarm', buzzer: true },
+  { type: 'automation', hour: 18, minute: 0, repeatDays: 'MON,TUE,WED,THU,FRI', oneTimeDate: null, enabled: true, targetDeviceId: 'aux_01', actionCommand: 'OFF', title: 'Office Auto AC Off', buzzer: false }
+];
+
+function resetSeededGateways() {
+  seededGateways.clear();
+}
+
+function repeatDaysToIndices(repeatDays) {
+  if (!repeatDays) return [];
+  if (Array.isArray(repeatDays)) {
+    if (repeatDays.length === 7 && repeatDays.every((v) => typeof v === 'boolean')) {
+      return repeatDays.reduce((acc, enabled, idx) => {
+        if (enabled) acc.push(idx);
+        return acc;
+      }, []);
+    }
+    return repeatDays
+      .map((d) => (typeof d === 'number' ? d : DAY_NAMES.indexOf(String(d).trim().toUpperCase())))
+      .filter((idx) => Number.isInteger(idx) && idx >= 0 && idx <= 6);
+  }
+  return String(repeatDays)
+    .split(',')
+    .map((d) => DAY_NAMES.indexOf(d.trim().toUpperCase()))
+    .filter((idx) => idx >= 0);
+}
+
+function normalizeRepeatDaysString(repeatDays, fallbackIndicesOrMask) {
+  const fromBoolOrMask = (arr) => {
+    const names = [];
+    for (let i = 0; i < 7 && i < arr.length; i++) {
+      if (arr[i] === true || arr[i] === 1) names.push(DAY_NAMES[i]);
+    }
+    return names.length > 0 ? names.join(',') : null;
+  };
+
+  if (typeof repeatDays === 'string') {
+    const tokens = repeatDays
+      .split(',')
+      .map((d) => d.trim().toUpperCase())
+      .filter((d) => DAY_NAMES.includes(d));
+    if (tokens.length > 0) return tokens.join(',');
+  } else if (Array.isArray(repeatDays)) {
+    if (repeatDays.length === 7 && repeatDays.every((v) => typeof v === 'boolean')) {
+      return fromBoolOrMask(repeatDays);
+    }
+    const tokens = repeatDays
+      .map((d) => (typeof d === 'number' ? DAY_NAMES[d] : String(d).trim().toUpperCase()))
+      .filter((d) => DAY_NAMES.includes(d));
+    if (tokens.length > 0) return tokens.join(',');
+  }
+
+  if (Array.isArray(fallbackIndicesOrMask)) {
+    if (fallbackIndicesOrMask.length === 7 && fallbackIndicesOrMask.every((v) => v === 0 || v === 1 || typeof v === 'boolean')) {
+      return fromBoolOrMask(fallbackIndicesOrMask);
+    }
+    const tokens = fallbackIndicesOrMask
+      .map((d) => (typeof d === 'number' ? DAY_NAMES[d] : String(d).trim().toUpperCase()))
+      .filter((d) => DAY_NAMES.includes(d));
+    if (tokens.length > 0) return tokens.join(',');
+  }
+
+  return null;
+}
+
+function mapRelayToFriendlyAlias(deviceId) {
+  if (!deviceId) return null;
+  const trimmed = String(deviceId).trim();
+  if (!trimmed) return null;
+  if (trimmed === 'office_ac_relay' || trimmed === 'relay_ch4') return 'aux_01';
+  return RELAY_TO_ALIAS[trimmed] || trimmed;
+}
+
+function normalizeConditionType(cond) {
+  const c = String(cond || '').trim().toLowerCase();
+  if (c === '>' || c === 'gt') return 'gt';
+  if (c === '<' || c === 'lt') return 'lt';
+  if (c === '=' || c === '==' || c === 'eq') return 'eq';
+  return 'gt';
+}
+
+async function countRecordsSafe(model, gatewayId) {
+  if (!model) return 0;
+  if (typeof model.findMany === 'function') {
+    const rows = await model.findMany({ where: { gatewayId } });
+    return Array.isArray(rows) ? rows.length : 0;
+  }
+  if (typeof model.count === 'function') {
+    return await model.count({ where: { gatewayId } });
+  }
+  return 0;
+}
+
+async function ensureDefaultSchedulesAndRules(gatewayId) {
+  if (!gatewayId || seededGateways.has(gatewayId)) return;
+
+  if (prisma.automationRule && typeof prisma.automationRule.create === 'function') {
+    const ruleCount = await countRecordsSafe(prisma.automationRule, gatewayId);
+    if (ruleCount === 0) {
+      for (const rule of DEFAULT_FSD_RULES) {
+        await prisma.automationRule.create({ data: { gatewayId, ...rule } });
+      }
+    }
+  }
+
+  if (prisma.schedule && typeof prisma.schedule.create === 'function') {
+    const schedCount = await countRecordsSafe(prisma.schedule, gatewayId);
+    if (schedCount === 0) {
+      for (const sched of DEFAULT_FSD_SCHEDULES) {
+        await prisma.schedule.create({ data: { gatewayId, ...sched } });
+      }
+    }
+  }
+
+  seededGateways.add(gatewayId);
+}
 
 function parseJsonPayload(payload) {
   return typeof payload === 'string' ? JSON.parse(payload) : payload;
@@ -124,6 +253,9 @@ async function startBroker() {
     mqttClient.subscribe('gateway/+/telemetry/batch', { qos: 1 });
     mqttClient.subscribe('gateway/+/events', { qos: 1 });
     mqttClient.subscribe('gateway/+/status', { qos: 1 });
+    mqttClient.subscribe('gateway/+/alarm', { qos: 1 });
+    mqttClient.subscribe('gateway/+/schedule/sync', { qos: 1 });
+    mqttClient.subscribe('gateway/+/rules/sync', { qos: 1 });
   });
 
   mqttClient.on('message', async (topic, message) => {
@@ -140,6 +272,12 @@ async function startBroker() {
         await handleEvents(gatewayId, payload);
       } else if (action === 'status') {
         await handleGatewayStatus(gatewayId, payload);
+      } else if (action === 'alarm') {
+        await handleAlarmEvent(gatewayId, payload);
+      } else if (action === 'schedule' && parts.length > 3 && parts[3] === 'sync') {
+        await handleScheduleSyncFromGateway(gatewayId, payload);
+      } else if (action === 'rules' && parts.length > 3 && parts[3] === 'sync') {
+        await handleRulesSyncFromGateway(gatewayId, payload);
       } else if (action === 'device' && parts.length >= 5) {
         const deviceId = parts[3];
         if (parts[4] === 'command_ack') {
@@ -438,8 +576,188 @@ function publishDeviceCommand({ gatewayId, deviceId, command, commandId, ttlSeco
   });
 }
 
-async function publishScheduleConfig(gatewayId) {
-  return true;
+async function handleAlarmEvent(gatewayId, payload) {
+  try {
+    const data = parseJsonPayload(payload);
+    await prisma.eventLog.create({
+      data: {
+        gatewayId,
+        eventType: 'alarm_triggered',
+        deviceId: null,
+        payload: JSON.stringify({
+          ...data,
+          message: `Alarm triggered: ${data.title || 'Alarm'} at ${data.time || ''}`.trim()
+        }),
+        occurredAt: new Date()
+      }
+    });
+  } catch (err) {
+    console.error('[MQTT] Failed to process alarm event:', err.message);
+  }
+}
+
+async function handleScheduleSyncFromGateway(gatewayId, payload) {
+  try {
+    const parsed = parseJsonPayload(payload);
+    const items = Array.isArray(parsed)
+      ? parsed
+      : (parsed && Array.isArray(parsed.schedules) ? parsed.schedules : null);
+    if (!items) return;
+
+    seededGateways.add(gatewayId);
+
+    if (prisma.schedule && typeof prisma.schedule.deleteMany === 'function') {
+      await prisma.schedule.deleteMany({ where: { gatewayId } });
+    }
+
+    if (prisma.schedule && typeof prisma.schedule.create === 'function') {
+      for (const item of items) {
+        const typeRaw = String(item.type || 'alarm').trim().toLowerCase();
+        const type = ['automation', 'alarm', 'personal_event'].includes(typeRaw) ? typeRaw : 'alarm';
+        const oneTimeDateRaw = item.one_time_date && String(item.one_time_date).trim()
+          ? new Date(item.one_time_date)
+          : null;
+        const oneTimeDate = oneTimeDateRaw && !Number.isNaN(oneTimeDateRaw.getTime()) ? oneTimeDateRaw : null;
+        const repeatDays = oneTimeDate
+          ? null
+          : normalizeRepeatDaysString(item.repeat_days, item.repeat_days_indices || item.repeat_days_mask);
+        const targetDeviceId = mapRelayToFriendlyAlias(item.target_device_id);
+        const actionCommand = item.action_command ? String(item.action_command).trim() : null;
+
+        await prisma.schedule.create({
+          data: {
+            gatewayId,
+            type,
+            hour: Number.isInteger(item.hour) ? item.hour : (parseInt(item.hour, 10) || 0),
+            minute: Number.isInteger(item.minute) ? item.minute : (parseInt(item.minute, 10) || 0),
+            repeatDays,
+            oneTimeDate,
+            enabled: item.enabled !== undefined ? Boolean(item.enabled) : true,
+            targetDeviceId,
+            actionCommand: actionCommand || null,
+            title: item.title ? String(item.title).slice(0, 64) : null,
+            buzzer: Boolean(item.buzzer)
+          }
+        });
+      }
+    }
+
+    await publishScheduleConfig(gatewayId, { skipSeed: true });
+  } catch (err) {
+    console.error('[MQTT] Failed to sync schedules from gateway:', err.message);
+  }
+}
+
+async function handleRulesSyncFromGateway(gatewayId, payload) {
+  try {
+    const parsed = parseJsonPayload(payload);
+    const items = Array.isArray(parsed)
+      ? parsed
+      : (parsed && Array.isArray(parsed.rules) ? parsed.rules : null);
+    if (!items) return;
+
+    seededGateways.add(gatewayId);
+
+    if (prisma.automationRule && typeof prisma.automationRule.deleteMany === 'function') {
+      await prisma.automationRule.deleteMany({ where: { gatewayId } });
+    }
+
+    if (prisma.automationRule && typeof prisma.automationRule.create === 'function') {
+      for (const item of items) {
+        const targetDeviceId = mapRelayToFriendlyAlias(item.target_device_id) || item.target_device_id;
+        await prisma.automationRule.create({
+          data: {
+            gatewayId,
+            sensorDeviceId: String(item.sensor_device_id || 'sensor_temp_01').trim(),
+            conditionType: normalizeConditionType(item.condition_type || item.condition),
+            threshold: Number(item.threshold ?? 0),
+            targetDeviceId,
+            actionCommand: String(item.action_command || item.action || 'ON').trim().toUpperCase(),
+            enabled: item.enabled !== undefined ? Boolean(item.enabled) : true
+          }
+        });
+      }
+    }
+
+    await publishScheduleConfig(gatewayId, { skipSeed: true });
+  } catch (err) {
+    console.error('[MQTT] Failed to sync rules from gateway:', err.message);
+  }
+}
+
+async function publishScheduleConfig(gatewayId, opts = {}) {
+  if (!opts.skipSeed) {
+    try {
+      await ensureDefaultSchedulesAndRules(gatewayId);
+    } catch (err) {
+      console.error('[MQTT] Seed check failed:', err.message);
+    }
+  }
+
+  let schedules = [];
+  let rules = [];
+  try {
+    if (prisma.schedule && typeof prisma.schedule.findMany === 'function') {
+      schedules = await prisma.schedule.findMany({
+        where: { gatewayId },
+        orderBy: { id: 'asc' }
+      });
+    }
+    if (prisma.automationRule && typeof prisma.automationRule.findMany === 'function') {
+      rules = await prisma.automationRule.findMany({
+        where: { gatewayId },
+        orderBy: { id: 'asc' }
+      });
+    }
+  } catch (err) {
+    console.error('[MQTT] Failed to query schedules/rules:', err.message);
+    return false;
+  }
+
+  const formattedSchedules = (schedules || []).map((s) => ({
+    id: s.id,
+    type: s.type,
+    hour: s.hour,
+    minute: s.minute,
+    repeat_days: s.repeatDays || '',
+    repeat_days_indices: repeatDaysToIndices(s.repeatDays),
+    one_time_date: s.oneTimeDate ? new Date(s.oneTimeDate).toISOString().split('T')[0] : '',
+    enabled: Boolean(s.enabled),
+    target_device_id: s.targetDeviceId ? (ALIAS_TO_RELAY[s.targetDeviceId] || s.targetDeviceId) : '',
+    action_command: s.actionCommand || '',
+    title: s.title || '',
+    buzzer: Boolean(s.buzzer)
+  }));
+
+  const formattedRules = (rules || []).map((r) => ({
+    id: r.id,
+    sensor_device_id: r.sensorDeviceId,
+    condition_type: r.conditionType,
+    threshold: r.threshold,
+    target_device_id: ALIAS_TO_RELAY[r.targetDeviceId] || r.targetDeviceId,
+    action_command: r.actionCommand,
+    enabled: Boolean(r.enabled)
+  }));
+
+  if (!mqttClient || !mqttClient.connected) return false;
+
+  const topic = `gateway/${gatewayId}/config/schedule`;
+  const payload = JSON.stringify({
+    schedules: formattedSchedules,
+    rules: formattedRules,
+    updated_at: Math.floor(Date.now() / 1000)
+  });
+
+  return new Promise((resolve) => {
+    mqttClient.publish(topic, payload, { qos: 1, retain: true }, (err) => {
+      if (err) {
+        console.error('[MQTT] Failed to publish schedule config:', err.message);
+        resolve(false);
+      } else {
+        resolve(true);
+      }
+    });
+  });
 }
 
 async function isGatewayOnline(gatewayId) {
@@ -452,7 +770,13 @@ async function isGatewayOnline(gatewayId) {
 
 async function stopBroker() {
   if (mqttClient) {
+    if (typeof mqttClient.removeAllListeners === 'function') {
+      mqttClient.removeAllListeners('connect');
+      mqttClient.removeAllListeners('message');
+      mqttClient.removeAllListeners('error');
+    }
     mqttClient.end();
+    mqttClient = null;
     isRunning = false;
   }
 }
@@ -462,9 +786,14 @@ module.exports = {
   stopBroker,
   publishDeviceCommand,
   publishScheduleConfig,
+  ensureDefaultSchedulesAndRules,
+  resetSeededGateways,
   isGatewayOnline,
   handleTelemetry,
   handleCommandAck,
   handleDeviceAction,
-  handleEvents
+  handleEvents,
+  handleAlarmEvent,
+  handleScheduleSyncFromGateway,
+  handleRulesSyncFromGateway
 };

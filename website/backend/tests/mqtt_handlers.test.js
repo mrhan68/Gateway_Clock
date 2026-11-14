@@ -33,6 +33,16 @@ const mockPrisma = {
   },
   eventLog: {
     create: jest.fn().mockResolvedValue({ id: 1 })
+  },
+  schedule: {
+    findMany: jest.fn().mockResolvedValue([]),
+    create: jest.fn().mockResolvedValue({ id: 1 }),
+    deleteMany: jest.fn().mockResolvedValue({ count: 0 })
+  },
+  automationRule: {
+    findMany: jest.fn().mockResolvedValue([]),
+    create: jest.fn().mockResolvedValue({ id: 1 }),
+    deleteMany: jest.fn().mockResolvedValue({ count: 0 })
   }
 };
 
@@ -69,6 +79,10 @@ describe('Plan 1 Backend: Relay Aliases, MQTT Handlers & Telemetry Batching', ()
   beforeEach(() => {
     jest.clearAllMocks();
     clearPendingCommands();
+    if (typeof broker.resetSeededGateways === 'function') {
+      broker.resetSeededGateways();
+    }
+    mockMqttClient.connected = true;
     mockPrisma.gateway.findUnique.mockResolvedValue({ id: 'gw_01', status: 'online' });
     mockPrisma.gateway.updateMany.mockResolvedValue({ count: 1 });
     mockPrisma.device.findFirst.mockResolvedValue(null);
@@ -77,6 +91,12 @@ describe('Plan 1 Backend: Relay Aliases, MQTT Handlers & Telemetry Batching', ()
     mockPrisma.device.updateMany.mockResolvedValue({ count: 1 });
     mockPrisma.telemetryLog.createMany.mockResolvedValue({ count: 2 });
     mockPrisma.eventLog.create.mockResolvedValue({ id: 1 });
+    mockPrisma.schedule.findMany.mockResolvedValue([]);
+    mockPrisma.schedule.create.mockResolvedValue({ id: 1 });
+    mockPrisma.schedule.deleteMany.mockResolvedValue({ count: 0 });
+    mockPrisma.automationRule.findMany.mockResolvedValue([]);
+    mockPrisma.automationRule.create.mockResolvedValue({ id: 1 });
+    mockPrisma.automationRule.deleteMany.mockResolvedValue({ count: 0 });
   });
 
   test('startBroker subscribes to gateway/+/device/+/action and routes action & command_ack', async () => {
@@ -348,5 +368,399 @@ describe('Plan 1 Backend: Relay Aliases, MQTT Handlers & Telemetry Batching', ()
     for (const call of mockPrisma.device.updateMany.mock.calls) {
       expect(call[0].data).toMatchObject({ status: 'online', lastValue: 0 });
     }
+  });
+});
+
+describe('Schedule & Rule 2-Way Sync (PLAN_SCHEDULE_SYNC)', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    clearPendingCommands();
+    broker.resetSeededGateways();
+    mockMqttClient.connected = true;
+    mockPrisma.gateway.findUnique.mockResolvedValue({ id: 'gw_01', status: 'online' });
+    mockPrisma.device.findFirst.mockResolvedValue(null);
+    mockPrisma.device.create.mockResolvedValue({ id: 10 });
+    mockPrisma.eventLog.create.mockResolvedValue({ id: 1 });
+    mockPrisma.schedule.findMany.mockResolvedValue([]);
+    mockPrisma.schedule.create.mockResolvedValue({ id: 1 });
+    mockPrisma.schedule.deleteMany.mockResolvedValue({ count: 0 });
+    mockPrisma.automationRule.findMany.mockResolvedValue([]);
+    mockPrisma.automationRule.create.mockResolvedValue({ id: 1 });
+    mockPrisma.automationRule.deleteMany.mockResolvedValue({ count: 0 });
+  });
+
+  test('startBroker subscribes to alarm, schedule/sync, and rules/sync topics', async () => {
+    await broker.stopBroker();
+    mockMqttClient.subscribe.mockClear();
+    await broker.startBroker();
+    mockMqttClient.emit('connect');
+
+    const subscribedTopics = mockMqttClient.subscribe.mock.calls.map((c) => c[0]);
+    expect(subscribedTopics).toContain('gateway/+/alarm');
+    expect(subscribedTopics).toContain('gateway/+/schedule/sync');
+    expect(subscribedTopics).toContain('gateway/+/rules/sync');
+  });
+
+  test('publishScheduleConfig seeds defaults once, maps aliases & repeat_days_indices, and publishes retained QoS 1', async () => {
+    const seededSchedules = [
+      {
+        id: 1,
+        gatewayId: 'gw_01',
+        type: 'alarm',
+        hour: 7,
+        minute: 0,
+        repeatDays: 'SUN,MON,TUE,WED,THU,FRI,SAT',
+        oneTimeDate: null,
+        enabled: true,
+        targetDeviceId: null,
+        actionCommand: null,
+        title: 'Good Morning Alarm',
+        buzzer: true
+      },
+      {
+        id: 2,
+        gatewayId: 'gw_01',
+        type: 'automation',
+        hour: 18,
+        minute: 0,
+        repeatDays: 'MON,TUE,WED,THU,FRI',
+        oneTimeDate: null,
+        enabled: true,
+        targetDeviceId: 'aux_01',
+        actionCommand: 'OFF',
+        title: 'Office Auto AC Off',
+        buzzer: false
+      }
+    ];
+    const seededRules = [
+      {
+        id: 1,
+        gatewayId: 'gw_01',
+        sensorDeviceId: 'sensor_temp_01',
+        conditionType: 'gt',
+        threshold: 30.0,
+        targetDeviceId: 'fan_01',
+        actionCommand: 'ON',
+        enabled: true
+      }
+    ];
+
+    // First findMany calls inside ensureDefaultSchedulesAndRules return [], subsequent queries return seeded rows
+    mockPrisma.automationRule.findMany
+      .mockResolvedValueOnce([])
+      .mockResolvedValue(seededRules);
+    mockPrisma.schedule.findMany
+      .mockResolvedValueOnce([])
+      .mockResolvedValue(seededSchedules);
+
+    const ok = await broker.publishScheduleConfig('gw_01');
+    expect(ok).toBe(true);
+
+    // 3 default rules + 2 default schedules created
+    expect(mockPrisma.automationRule.create).toHaveBeenCalledTimes(3);
+    expect(mockPrisma.schedule.create).toHaveBeenCalledTimes(2);
+
+    // Verify MQTT publish topic, qos: 1, retain: true
+    expect(mockMqttClient.publish).toHaveBeenCalledTimes(1);
+    const [topic, payloadStr, opts] = mockMqttClient.publish.mock.calls[0];
+    expect(topic).toBe('gateway/gw_01/config/schedule');
+    expect(opts).toEqual({ qos: 1, retain: true });
+
+    const payload = JSON.parse(payloadStr);
+    expect(payload.updated_at).toEqual(expect.any(Number));
+    expect(payload.schedules).toHaveLength(2);
+    expect(payload.schedules[0]).toMatchObject({
+      id: 1,
+      type: 'alarm',
+      repeat_days: 'SUN,MON,TUE,WED,THU,FRI,SAT',
+      repeat_days_indices: [0, 1, 2, 3, 4, 5, 6],
+      target_device_id: '',
+      buzzer: true
+    });
+    expect(payload.schedules[1]).toMatchObject({
+      id: 2,
+      type: 'automation',
+      repeat_days: 'MON,TUE,WED,THU,FRI',
+      repeat_days_indices: [1, 2, 3, 4, 5],
+      target_device_id: 'relay_4',
+      action_command: 'OFF',
+      buzzer: false
+    });
+    expect(payload.rules[0]).toMatchObject({
+      id: 1,
+      sensor_device_id: 'sensor_temp_01',
+      condition_type: 'gt',
+      threshold: 30.0,
+      target_device_id: 'relay_1',
+      action_command: 'ON',
+      enabled: true
+    });
+
+    // Calling again in same process must NOT re-seed even if DB returns empty (user deleted all)
+    mockPrisma.automationRule.create.mockClear();
+    mockPrisma.schedule.create.mockClear();
+    mockPrisma.automationRule.findMany.mockResolvedValue([]);
+    mockPrisma.schedule.findMany.mockResolvedValue([]);
+
+    await broker.publishScheduleConfig('gw_01');
+    expect(mockPrisma.automationRule.create).not.toHaveBeenCalled();
+    expect(mockPrisma.schedule.create).not.toHaveBeenCalled();
+  });
+
+  test('publishScheduleConfig returns false when MQTT client is disconnected', async () => {
+    mockMqttClient.connected = false;
+    const ok = await broker.publishScheduleConfig('gw_01', { skipSeed: true });
+    expect(ok).toBe(false);
+    expect(mockMqttClient.publish).not.toHaveBeenCalled();
+  });
+
+  test('handleAlarmEvent records alarm_triggered EventLog and routes via gateway/+/alarm', async () => {
+    mockMqttClient.emit(
+      'message',
+      'gateway/gw_01/alarm',
+      Buffer.from(JSON.stringify({
+        alarm_id: 1,
+        title: 'Good Morning Alarm',
+        time: '07:00',
+        buzzer: true
+      }))
+    );
+    await new Promise((r) => setImmediate(r));
+
+    expect(mockPrisma.eventLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          gatewayId: 'gw_01',
+          eventType: 'alarm_triggered',
+          deviceId: null
+        })
+      })
+    );
+    const savedPayload = JSON.parse(mockPrisma.eventLog.create.mock.calls[0][0].data.payload);
+    expect(savedPayload.alarm_id).toBe(1);
+    expect(savedPayload.message).toBe('Alarm triggered: Good Morning Alarm at 07:00');
+  });
+
+  test('handleScheduleSyncFromGateway replaces DB schedules, maps aliases/repeat_days, and republishes retained config', async () => {
+    await broker.handleScheduleSyncFromGateway('gw_01', JSON.stringify({
+      schedules: [
+        {
+          type: 'alarm',
+          hour: 8,
+          minute: 30,
+          repeat_days: [false, true, true, true, true, true, false],
+          enabled: true,
+          title: 'Morning Check',
+          buzzer: true
+        },
+        {
+          type: 'automation',
+          hour: 22,
+          minute: 15,
+          repeat_days: [0, 6],
+          enabled: true,
+          target_device_id: 'office_ac_relay',
+          action_command: 'OFF',
+          title: 'Night AC Off',
+          buzzer: false
+        }
+      ]
+    }));
+
+    expect(mockPrisma.schedule.deleteMany).toHaveBeenCalledWith({ where: { gatewayId: 'gw_01' } });
+    expect(mockPrisma.schedule.create).toHaveBeenNthCalledWith(1, {
+      data: expect.objectContaining({
+        gatewayId: 'gw_01',
+        type: 'alarm',
+        hour: 8,
+        minute: 30,
+        repeatDays: 'MON,TUE,WED,THU,FRI',
+        targetDeviceId: null,
+        title: 'Morning Check',
+        buzzer: true
+      })
+    });
+    expect(mockPrisma.schedule.create).toHaveBeenNthCalledWith(2, {
+      data: expect.objectContaining({
+        gatewayId: 'gw_01',
+        type: 'automation',
+        hour: 22,
+        minute: 15,
+        repeatDays: 'SUN,SAT',
+        targetDeviceId: 'aux_01',
+        actionCommand: 'OFF',
+        buzzer: false
+      })
+    });
+
+    expect(mockMqttClient.publish).toHaveBeenCalledWith(
+      'gateway/gw_01/config/schedule',
+      expect.any(String),
+      { qos: 1, retain: true },
+      expect.any(Function)
+    );
+  });
+
+  test('handleRulesSyncFromGateway replaces DB rules, maps relay_1..4 -> aliases, normalizes conditions, and republishes', async () => {
+    mockMqttClient.emit(
+      'message',
+      'gateway/gw_01/rules/sync',
+      Buffer.from(JSON.stringify({
+        rules: [
+          {
+            sensor_device_id: 'sensor_temp_01',
+            condition_type: '>',
+            threshold: 31.5,
+            target_device_id: 'relay_1',
+            action_command: 'on',
+            enabled: true
+          },
+          {
+            sensor_device_id: 'sensor_temp_01',
+            condition_type: '<',
+            threshold: 20.0,
+            target_device_id: 'relay_2',
+            action_command: 'ON',
+            enabled: false
+          }
+        ]
+      }))
+    );
+    await new Promise((r) => setImmediate(r));
+
+    expect(mockPrisma.automationRule.deleteMany).toHaveBeenCalledWith({ where: { gatewayId: 'gw_01' } });
+    expect(mockPrisma.automationRule.create).toHaveBeenNthCalledWith(1, {
+      data: {
+        gatewayId: 'gw_01',
+        sensorDeviceId: 'sensor_temp_01',
+        conditionType: 'gt',
+        threshold: 31.5,
+        targetDeviceId: 'fan_01',
+        actionCommand: 'ON',
+        enabled: true
+      }
+    });
+    expect(mockPrisma.automationRule.create).toHaveBeenNthCalledWith(2, {
+      data: {
+        gatewayId: 'gw_01',
+        sensorDeviceId: 'sensor_temp_01',
+        conditionType: 'lt',
+        threshold: 20.0,
+        targetDeviceId: 'heater_01',
+        actionCommand: 'ON',
+        enabled: false
+      }
+    });
+    expect(mockMqttClient.publish).toHaveBeenCalledWith(
+      'gateway/gw_01/config/schedule',
+      expect.any(String),
+      { qos: 1, retain: true },
+      expect.any(Function)
+    );
+  });
+
+  test('createRule auto-creates known standard devices but returns 404 for unknown devices', async () => {
+    // Unknown sensor -> 404 DEVICE_NOT_FOUND
+    const resUnknown = await request(app)
+      .post('/api/v1/gateways/gw_01/rules')
+      .send({
+        sensor_device_id: 'unknown_sensor_99',
+        condition_type: 'gt',
+        threshold: 30,
+        target_device_id: 'fan_01',
+        action_command: 'ON'
+      });
+    expect(resUnknown.statusCode).toBe(404);
+    expect(resUnknown.body.error.code).toBe('DEVICE_NOT_FOUND');
+
+    // Known standard sensor & target missing in DB -> auto-created and rule created (201)
+    jest.clearAllMocks();
+    mockPrisma.gateway.findUnique.mockResolvedValue({ id: 'gw_01', status: 'online' });
+    mockPrisma.device.findFirst.mockResolvedValue(null);
+    mockPrisma.device.create.mockResolvedValue({ id: 20 });
+    mockPrisma.automationRule.create.mockResolvedValue({ id: 55 });
+    mockPrisma.automationRule.findMany.mockResolvedValue([{
+      id: 55,
+      gatewayId: 'gw_01',
+      sensorDeviceId: 'sensor_temp_01',
+      conditionType: 'gt',
+      threshold: 31,
+      targetDeviceId: 'fan_01',
+      actionCommand: 'ON',
+      enabled: true
+    }]);
+    mockPrisma.schedule.findMany.mockResolvedValue([{
+      id: 1,
+      gatewayId: 'gw_01',
+      type: 'alarm',
+      hour: 7,
+      minute: 0,
+      repeatDays: 'SUN,MON,TUE,WED,THU,FRI,SAT',
+      oneTimeDate: null,
+      enabled: true,
+      targetDeviceId: null,
+      actionCommand: null,
+      title: 'Good Morning Alarm',
+      buzzer: true
+    }]);
+
+    const resKnown = await request(app)
+      .post('/api/v1/gateways/gw_01/rules')
+      .send({
+        sensor_device_id: 'sensor_temp_01',
+        condition_type: 'gt',
+        threshold: 31,
+        target_device_id: 'fan_01',
+        action_command: 'ON'
+      });
+    await new Promise((r) => setImmediate(r));
+    expect(resKnown.statusCode).toBe(201);
+    expect(mockPrisma.device.create).toHaveBeenCalledTimes(2);
+    expect(mockPrisma.automationRule.create).toHaveBeenCalledTimes(1);
+    expect(mockMqttClient.publish).toHaveBeenCalledWith(
+      'gateway/gw_01/config/schedule',
+      expect.any(String),
+      { qos: 1, retain: true },
+      expect.any(Function)
+    );
+  });
+
+  test('listSchedules and listRules auto-seed defaults when gateway DB is empty', async () => {
+    mockPrisma.schedule.findMany
+      .mockResolvedValueOnce([]) // initial listSchedules query
+      .mockResolvedValueOnce([]) // ensureDefaultSchedulesAndRules check
+      .mockResolvedValue([{
+        id: 1,
+        gatewayId: 'gw_01',
+        type: 'alarm',
+        hour: 7,
+        minute: 0,
+        repeatDays: 'SUN,MON,TUE,WED,THU,FRI,SAT',
+        oneTimeDate: null,
+        enabled: true,
+        targetDeviceId: null,
+        actionCommand: null,
+        title: 'Good Morning Alarm',
+        buzzer: true
+      }]);
+    mockPrisma.automationRule.findMany
+      .mockResolvedValueOnce([]) // ensureDefaultSchedulesAndRules check
+      .mockResolvedValue([{
+        id: 1,
+        gatewayId: 'gw_01',
+        sensorDeviceId: 'sensor_temp_01',
+        conditionType: 'gt',
+        threshold: 30.0,
+        targetDeviceId: 'fan_01',
+        actionCommand: 'ON',
+        enabled: true
+      }]);
+
+    const schedRes = await request(app).get('/api/v1/gateways/gw_01/schedules');
+    await new Promise((r) => setImmediate(r));
+    expect(schedRes.statusCode).toBe(200);
+    expect(schedRes.body).toHaveLength(1);
+    expect(mockPrisma.schedule.create).toHaveBeenCalledTimes(2);
+    expect(mockPrisma.automationRule.create).toHaveBeenCalledTimes(3);
   });
 });

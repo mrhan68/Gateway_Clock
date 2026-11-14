@@ -6,20 +6,23 @@
 #include "rule_engine.h"
 #include <stdio.h>
 #include <string.h>
+#include <strings.h>
 #include <stdlib.h>
 #include <time.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "cJSON.h"
 #include "mqtt_adapter.h"
+#include "sd_logger.h"
 
 static const char *TAG = "RULE_ENGINE";
 
-#define RULES_STORAGE_PATH "/spiffs/rules.json"
-
 static automation_rule_t s_rules[MAX_RULES];
+static automation_rule_t s_prev_rules[MAX_RULES];
 static int s_rule_count = 0;
 static SemaphoreHandle_t s_rule_mutex = NULL;
 
@@ -107,10 +110,91 @@ static void load_default_rules(void)
     ESP_LOGI(TAG, "Loaded %d default automation rules", s_rule_count);
 }
 
-static void save_rules_to_storage(void)
+static void normalize_rule_target(const char *target, char *out, size_t out_sz)
+{
+    if (!out || out_sz == 0) return;
+    if (!target || target[0] == '\0') {
+        out[0] = '\0';
+        return;
+    }
+    if (strcasecmp(target, "fan_01") == 0 ||
+        strcasecmp(target, "fan_relay_01") == 0 ||
+        strcasecmp(target, "fan") == 0) {
+        strncpy(out, "relay_1", out_sz - 1);
+    } else if (strcasecmp(target, "heater_01") == 0 ||
+               strcasecmp(target, "heater_relay_01") == 0 ||
+               strcasecmp(target, "heater") == 0) {
+        strncpy(out, "relay_2", out_sz - 1);
+    } else if (strcasecmp(target, "dehumidifier_01") == 0 ||
+               strcasecmp(target, "dehum_01") == 0 ||
+               strcasecmp(target, "dehumidifier") == 0 ||
+               strcasecmp(target, "dehum") == 0) {
+        strncpy(out, "relay_3", out_sz - 1);
+    } else if (strcasecmp(target, "aux_01") == 0 ||
+               strcasecmp(target, "light_01") == 0 ||
+               strcasecmp(target, "relay_ch4") == 0 ||
+               strcasecmp(target, "office_ac_relay") == 0 ||
+               strcasecmp(target, "aux") == 0 ||
+               strcasecmp(target, "light") == 0) {
+        strncpy(out, "relay_4", out_sz - 1);
+    } else {
+        strncpy(out, target, out_sz - 1);
+    }
+    out[out_sz - 1] = '\0';
+}
+
+static bool file_matches_content(const char *path, const char *content, size_t len)
+{
+    struct stat st;
+    if (stat(path, &st) != 0 || (size_t)st.st_size != len) {
+        return false;
+    }
+    FILE *f = fopen(path, "r");
+    if (!f) return false;
+    char *buf = (char *)malloc(len + 1);
+    if (!buf) {
+        fclose(f);
+        return false;
+    }
+    size_t rd = fread(buf, 1, len, f);
+    fclose(f);
+    bool same = (rd == len && memcmp(buf, content, len) == 0);
+    free(buf);
+    return same;
+}
+
+static bool write_file_atomic(const char *path, const char *content, size_t len)
+{
+    if (file_matches_content(path, content, len)) {
+        return true;
+    }
+
+    char tmp_path[96];
+    snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", path);
+    FILE *f = fopen(tmp_path, "w");
+    if (f != NULL) {
+        size_t wr = fwrite(content, 1, len, f);
+        fclose(f);
+        if (wr == len) {
+            unlink(path);
+            if (rename(tmp_path, path) == 0) {
+                return true;
+            }
+        }
+        unlink(tmp_path);
+    }
+
+    f = fopen(path, "w");
+    if (!f) return false;
+    size_t wr = fwrite(content, 1, len, f);
+    fclose(f);
+    return (wr == len);
+}
+
+static cJSON *build_rules_json_array_locked(void)
 {
     cJSON *arr = cJSON_CreateArray();
-    if (!arr) return;
+    if (!arr) return NULL;
 
     for (int i = 0; i < s_rule_count; i++) {
         cJSON *item = cJSON_CreateObject();
@@ -127,28 +211,106 @@ static void save_rules_to_storage(void)
         cJSON_AddBoolToObject(item, "enabled", s_rules[i].is_active);
         cJSON_AddItemToArray(arr, item);
     }
+    return arr;
+}
+
+static void save_rules_to_storage(void)
+{
+    cJSON *arr = build_rules_json_array_locked();
+    if (!arr) return;
 
     char *str = cJSON_PrintUnformatted(arr);
     cJSON_Delete(arr);
 
     if (str != NULL) {
-        FILE *f = fopen(RULES_STORAGE_PATH, "w");
-        if (f != NULL) {
-            fputs(str, f);
-            fclose(f);
-            ESP_LOGI(TAG, "Saved %d rules to %s", s_rule_count, RULES_STORAGE_PATH);
-        } else {
-            ESP_LOGW(TAG, "Failed to open %s for writing", RULES_STORAGE_PATH);
+        size_t len = strlen(str);
+        bool sd_mounted = sd_logger_is_mounted();
+        bool saved = false;
+
+        if (sd_mounted) {
+            if (write_file_atomic(SD_RULES_STORAGE_PATH, str, len)) {
+                saved = true;
+            } else {
+                ESP_LOGW(TAG, "Failed to save rules to %s", SD_RULES_STORAGE_PATH);
+            }
         }
-        free(str);
+
+        if (write_file_atomic(SPIFFS_RULES_STORAGE_PATH, str, len)) {
+            saved = true;
+        } else {
+            ESP_LOGW(TAG, "Failed to save rules to %s", SPIFFS_RULES_STORAGE_PATH);
+        }
+
+        if (saved) {
+            ESP_LOGI(TAG, "Saved %d rules to %s", s_rule_count,
+                     sd_mounted ? SD_RULES_STORAGE_PATH : SPIFFS_RULES_STORAGE_PATH);
+        }
+        cJSON_free(str);
     }
 }
 
-static bool load_rules_from_storage(void)
+static bool parse_rule_item(const cJSON *item, automation_rule_t *r)
 {
-    FILE *f = fopen(RULES_STORAGE_PATH, "r");
+    if (!item || !cJSON_IsObject(item) || !r) return false;
+
+    const cJSON *id = cJSON_GetObjectItem(item, "id");
+    const cJSON *sensor = cJSON_GetObjectItem(item, "sensor_device_id");
+    if (!sensor) sensor = cJSON_GetObjectItem(item, "device_id");
+
+    const cJSON *cond = cJSON_GetObjectItem(item, "condition_type");
+    if (!cond) cond = cJSON_GetObjectItem(item, "condition");
+
+    const cJSON *thresh = cJSON_GetObjectItem(item, "threshold");
+    const cJSON *hyst = cJSON_GetObjectItem(item, "hysteresis");
+    const cJSON *cool = cJSON_GetObjectItem(item, "cooldown_s");
+
+    const cJSON *target = cJSON_GetObjectItem(item, "target_device_id");
+    if (!target) target = cJSON_GetObjectItem(item, "target");
+
+    const cJSON *act = cJSON_GetObjectItem(item, "action_command");
+    if (!act) act = cJSON_GetObjectItem(item, "action");
+
+    const cJSON *en = cJSON_GetObjectItem(item, "enabled");
+    if (!en) en = cJSON_GetObjectItem(item, "is_active");
+
+    if (!id || !cJSON_IsNumber(id) ||
+        !sensor || !cJSON_IsString(sensor) ||
+        !cond ||
+        !thresh || !cJSON_IsNumber(thresh) ||
+        !target || !cJSON_IsString(target) ||
+        !act || !cJSON_IsString(act)) {
+        return false;
+    }
+
+    memset(r, 0, sizeof(automation_rule_t));
+    r->id = id->valueint;
+    strncpy(r->device_id, sensor->valuestring, sizeof(r->device_id) - 1);
+
+    if (cJSON_IsString(cond)) {
+        if (strcasecmp(cond->valuestring, "lt") == 0 || strcmp(cond->valuestring, "<") == 0) {
+            r->condition_type = RULE_CONDITION_SENSOR_LT;
+        } else {
+            r->condition_type = RULE_CONDITION_SENSOR_GT;
+        }
+    } else if (cJSON_IsNumber(cond)) {
+        r->condition_type = (rule_condition_type_t)cond->valueint;
+    }
+
+    r->threshold = (float)thresh->valuedouble;
+    float default_hyst = (strstr(r->device_id, "hum") != NULL) ? 2.0f : 1.5f;
+    r->hysteresis = (hyst && cJSON_IsNumber(hyst) && hyst->valuedouble > 0) ? (float)hyst->valuedouble : default_hyst;
+    r->cooldown_s = (cool && cJSON_IsNumber(cool) && cool->valueint > 0) ? (uint32_t)cool->valueint : 60;
+
+    normalize_rule_target(target->valuestring, r->target_device_id, sizeof(r->target_device_id));
+    strncpy(r->action_command, act->valuestring, sizeof(r->action_command) - 1);
+    r->is_active = (en != NULL) ? cJSON_IsTrue(en) : true;
+    return true;
+}
+
+static bool load_rules_from_file(const char *path)
+{
+    FILE *f = fopen(path, "r");
     if (f == NULL) {
-        ESP_LOGI(TAG, "Rules file %s not found. Using defaults.", RULES_STORAGE_PATH);
         return false;
     }
 
@@ -161,92 +323,62 @@ static bool load_rules_from_storage(void)
         return false;
     }
 
-    char *buf = (char *)malloc(sz + 1);
+    char *buf = (char *)malloc((size_t)sz + 1);
     if (buf == NULL) {
         fclose(f);
         return false;
     }
 
-    size_t read_bytes = fread(buf, 1, sz, f);
+    size_t read_bytes = fread(buf, 1, (size_t)sz, f);
     fclose(f);
     buf[read_bytes] = '\0';
 
     cJSON *root = cJSON_Parse(buf);
     free(buf);
-
-    if (root == NULL || !cJSON_IsArray(root)) {
-        if (root) cJSON_Delete(root);
+    if (root == NULL) {
         return false;
     }
 
-    int count = cJSON_GetArraySize(root);
-    if (count == 0) {
+    const cJSON *arr = NULL;
+    if (cJSON_IsArray(root)) {
+        arr = root;
+    } else if (cJSON_IsObject(root)) {
+        const cJSON *rules = cJSON_GetObjectItem(root, "rules");
+        if (rules && cJSON_IsArray(rules)) {
+            arr = rules;
+        }
+    }
+
+    if (arr == NULL) {
         cJSON_Delete(root);
         return false;
     }
 
+    int count = cJSON_GetArraySize(arr);
     s_rule_count = 0;
     for (int i = 0; i < count && s_rule_count < MAX_RULES; i++) {
-        cJSON *item = cJSON_GetArrayItem(root, i);
-        if (!item || !cJSON_IsObject(item)) continue;
-
-        cJSON *id = cJSON_GetObjectItem(item, "id");
-        cJSON *sensor = cJSON_GetObjectItem(item, "sensor_device_id");
-        if (!sensor) sensor = cJSON_GetObjectItem(item, "device_id");
-
-        cJSON *cond = cJSON_GetObjectItem(item, "condition_type");
-        if (!cond) cond = cJSON_GetObjectItem(item, "condition");
-
-        cJSON *thresh = cJSON_GetObjectItem(item, "threshold");
-        cJSON *hyst = cJSON_GetObjectItem(item, "hysteresis");
-        cJSON *cool = cJSON_GetObjectItem(item, "cooldown_s");
-
-        cJSON *target = cJSON_GetObjectItem(item, "target_device_id");
-        if (!target) target = cJSON_GetObjectItem(item, "target");
-
-        cJSON *act = cJSON_GetObjectItem(item, "action_command");
-        if (!act) act = cJSON_GetObjectItem(item, "action");
-
-        cJSON *en = cJSON_GetObjectItem(item, "enabled");
-        if (!en) en = cJSON_GetObjectItem(item, "is_active");
-
-        if (!id || !sensor || !cond || !thresh || !target || !act) continue;
-
-        automation_rule_t *r = &s_rules[s_rule_count];
-        memset(r, 0, sizeof(automation_rule_t));
-
-        r->id = id->valueint;
-        strncpy(r->device_id, sensor->valuestring, sizeof(r->device_id) - 1);
-
-        if (cJSON_IsString(cond)) {
-            if (strcmp(cond->valuestring, "lt") == 0 || strcmp(cond->valuestring, "<") == 0) {
-                r->condition_type = RULE_CONDITION_SENSOR_LT;
-            } else {
-                r->condition_type = RULE_CONDITION_SENSOR_GT;
-            }
-        } else if (cJSON_IsNumber(cond)) {
-            r->condition_type = (rule_condition_type_t)cond->valueint;
+        cJSON *item = cJSON_GetArrayItem(arr, i);
+        automation_rule_t r;
+        if (parse_rule_item(item, &r)) {
+            s_rules[s_rule_count++] = r;
         }
-
-        r->threshold = (float)thresh->valuedouble;
-        r->hysteresis = (hyst && cJSON_IsNumber(hyst) && hyst->valuedouble > 0) ? (float)hyst->valuedouble : 1.5f;
-        r->cooldown_s = (cool && cJSON_IsNumber(cool) && cool->valueint > 0) ? (uint32_t)cool->valueint : 60;
-
-        strncpy(r->target_device_id, target->valuestring, sizeof(r->target_device_id) - 1);
-        strncpy(r->action_command, act->valuestring, sizeof(r->action_command) - 1);
-        r->is_active = (en != NULL) ? cJSON_IsTrue(en) : true;
-        r->current_state = false;
-        r->last_triggered_ts = 0;
-        r->lockout_until_ts = 0;
-        r->last_triggered_mono_us = 0;
-        r->lockout_until_mono_us = 0;
-
-        s_rule_count++;
     }
 
     cJSON_Delete(root);
-    ESP_LOGI(TAG, "Loaded %d rules from storage %s", s_rule_count, RULES_STORAGE_PATH);
-    return (s_rule_count > 0);
+    ESP_LOGI(TAG, "Loaded %d rules from storage %s", s_rule_count, path);
+    return true;
+}
+
+static bool load_rules_from_storage(void)
+{
+    if (sd_logger_is_mounted() && load_rules_from_file(SD_RULES_STORAGE_PATH)) {
+        return true;
+    }
+    if (load_rules_from_file(SPIFFS_RULES_STORAGE_PATH)) {
+        return true;
+    }
+    ESP_LOGI(TAG, "Rules storage file not found. Using defaults.");
+    return false;
 }
 
 void rule_engine_reload_rules(void)
@@ -255,24 +387,121 @@ void rule_engine_reload_rules(void)
     lock_rules();
     if (!load_rules_from_storage()) {
         load_default_rules();
+        save_rules_to_storage();
     }
     unlock_rules();
+}
+
+bool rule_engine_apply_cloud_json(const cJSON *rules_arr)
+{
+    if (rules_arr == NULL || !cJSON_IsArray(rules_arr)) {
+        return false;
+    }
+
+    lock_rules();
+    int prev_count = s_rule_count;
+    if (prev_count > 0) {
+        memcpy(s_prev_rules, s_rules, sizeof(automation_rule_t) * (size_t)prev_count);
+    }
+
+    int count = cJSON_GetArraySize(rules_arr);
+    s_rule_count = 0;
+    for (int i = 0; i < count && s_rule_count < MAX_RULES; i++) {
+        cJSON *item = cJSON_GetArrayItem(rules_arr, i);
+        automation_rule_t r;
+        if (!parse_rule_item(item, &r)) {
+            continue;
+        }
+
+        const cJSON *hyst = cJSON_GetObjectItem(item, "hysteresis");
+        const cJSON *cool = cJSON_GetObjectItem(item, "cooldown_s");
+        bool has_hyst = (hyst && cJSON_IsNumber(hyst) && hyst->valuedouble > 0);
+        bool has_cool = (cool && cJSON_IsNumber(cool) && cool->valueint > 0);
+
+        for (int p = 0; p < prev_count; p++) {
+            if (s_prev_rules[p].id == r.id) {
+                if (!has_hyst && s_prev_rules[p].hysteresis > 0.0f) {
+                    r.hysteresis = s_prev_rules[p].hysteresis;
+                }
+                if (!has_cool && s_prev_rules[p].cooldown_s > 0) {
+                    r.cooldown_s = s_prev_rules[p].cooldown_s;
+                }
+                if (strcmp(s_prev_rules[p].device_id, r.device_id) == 0 &&
+                    strcmp(s_prev_rules[p].target_device_id, r.target_device_id) == 0 &&
+                    s_prev_rules[p].condition_type == r.condition_type) {
+                    r.current_state = s_prev_rules[p].current_state;
+                    r.last_triggered_mono_us = s_prev_rules[p].last_triggered_mono_us;
+                    r.lockout_until_mono_us = s_prev_rules[p].lockout_until_mono_us;
+                    r.last_triggered_ts = s_prev_rules[p].last_triggered_ts;
+                    r.lockout_until_ts = s_prev_rules[p].lockout_until_ts;
+                }
+                break;
+            }
+        }
+
+        s_rules[s_rule_count++] = r;
+    }
+
+    save_rules_to_storage();
+    int applied = s_rule_count;
+    unlock_rules();
+
+    ESP_LOGI(TAG, "[CLOUD SYNC] Applied %d rule(s) from Cloud and saved to storage", applied);
+    return true;
+}
+
+void rule_engine_publish_sync(void)
+{
+    if (!mqtt_adapter_is_connected()) {
+        return;
+    }
+
+    lock_rules();
+    cJSON *arr = build_rules_json_array_locked();
+    unlock_rules();
+
+    if (!arr) return;
+
+    cJSON *root = cJSON_CreateObject();
+    if (!root) {
+        cJSON_Delete(arr);
+        return;
+    }
+    cJSON_AddItemToObject(root, "rules", arr);
+
+    char *json_str = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+
+    if (json_str != NULL) {
+        bool ok = mqtt_adapter_publish("rules/sync", json_str);
+        ESP_LOGI(TAG, "[CLOUD SYNC] Published %s to rules/sync (%d bytes)",
+                 ok ? "OK" : "FAILED", (int)strlen(json_str));
+        cJSON_free(json_str);
+    }
 }
 
 bool rule_engine_add_rule(const automation_rule_t *rule)
 {
     if (rule == NULL) return false;
 
+    automation_rule_t norm = *rule;
+    normalize_rule_target(rule->target_device_id, norm.target_device_id, sizeof(norm.target_device_id));
+    if (norm.hysteresis <= 0.0f) {
+        norm.hysteresis = (strstr(norm.device_id, "hum") != NULL) ? 2.0f : 1.5f;
+    }
+    if (norm.cooldown_s == 0) {
+        norm.cooldown_s = 60;
+    }
+
     lock_rules();
     // Check if rule ID already exists, update it
     for (int i = 0; i < s_rule_count; i++) {
-        if (s_rules[i].id == rule->id) {
-            s_rules[i] = *rule;
-            if (s_rules[i].hysteresis <= 0.0f) s_rules[i].hysteresis = 1.5f;
-            if (s_rules[i].cooldown_s == 0) s_rules[i].cooldown_s = 60;
+        if (s_rules[i].id == norm.id) {
+            s_rules[i] = norm;
             save_rules_to_storage();
             unlock_rules();
-            ESP_LOGI(TAG, "Updated existing rule #%d (dev='%s')", rule->id, rule->device_id);
+            ESP_LOGI(TAG, "Updated existing rule #%d (dev='%s')", norm.id, norm.device_id);
+            rule_engine_publish_sync();
             return true;
         }
     }
@@ -283,9 +512,7 @@ bool rule_engine_add_rule(const automation_rule_t *rule)
         return false;
     }
 
-    s_rules[s_rule_count] = *rule;
-    if (s_rules[s_rule_count].hysteresis <= 0.0f) s_rules[s_rule_count].hysteresis = 1.5f;
-    if (s_rules[s_rule_count].cooldown_s == 0) s_rules[s_rule_count].cooldown_s = 60;
+    s_rules[s_rule_count] = norm;
     s_rules[s_rule_count].current_state = false;
     s_rules[s_rule_count].last_triggered_ts = 0;
     s_rules[s_rule_count].lockout_until_ts = 0;
@@ -296,8 +523,9 @@ bool rule_engine_add_rule(const automation_rule_t *rule)
     save_rules_to_storage();
     unlock_rules();
     ESP_LOGI(TAG, "Added new rule #%d (dev='%s', thr=%.1f hyst=%.1f cool=%lu -> target='%s' cmd='%s')",
-             rule->id, rule->device_id, rule->threshold, rule->hysteresis,
-             (unsigned long)rule->cooldown_s, rule->target_device_id, rule->action_command);
+             norm.id, norm.device_id, norm.threshold, norm.hysteresis,
+             (unsigned long)norm.cooldown_s, norm.target_device_id, norm.action_command);
+    rule_engine_publish_sync();
     return true;
 }
 
@@ -308,6 +536,7 @@ void rule_engine_clear_rules(void)
     save_rules_to_storage();
     unlock_rules();
     ESP_LOGI(TAG, "Cleared all rules");
+    rule_engine_publish_sync();
 }
 
 bool rule_engine_delete_rule(int rule_id)
@@ -334,6 +563,7 @@ bool rule_engine_delete_rule(int rule_id)
     save_rules_to_storage();
     unlock_rules();
     ESP_LOGI(TAG, "Deleted rule #%d (remaining rules: %d)", rule_id, s_rule_count);
+    rule_engine_publish_sync();
     return true;
 }
 
@@ -521,7 +751,7 @@ static void on_rule_action_request(const gateway_event_t *evt)
 static void on_cloud_config_updated(const gateway_event_t *evt)
 {
     (void)evt;
-    rule_engine_reload_rules();
+    ESP_LOGD(TAG, "[CLOUD SYNC] Config updated notification received");
 }
 
 static void on_relay_state_changed(const gateway_event_t *evt)
@@ -612,6 +842,7 @@ void rule_engine_init(void)
     lock_rules();
     if (!load_rules_from_storage()) {
         load_default_rules();
+        save_rules_to_storage();
     }
     unlock_rules();
 

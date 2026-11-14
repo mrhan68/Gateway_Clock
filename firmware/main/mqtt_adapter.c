@@ -10,6 +10,8 @@
 #include "esp_timer.h"
 #include "cJSON.h"
 #include "relay_controller.h"
+#include "scheduler.h"
+#include "rule_engine.h"
 #if __has_include("secrets.h")
 #include "secrets.h"
 #else
@@ -83,11 +85,17 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
     case MQTT_EVENT_DATA:
         if (event != NULL && event->topic_len > 0 && event->data_len > 0) {
             char topic[128] = {0};
-            char data[256] = {0};
-            size_t tlen = event->topic_len < (sizeof(topic) - 1) ? event->topic_len : (sizeof(topic) - 1);
-            size_t dlen = event->data_len < (sizeof(data) - 1) ? event->data_len : (sizeof(data) - 1);
+            size_t tlen = event->topic_len < (sizeof(topic) - 1) ? (size_t)event->topic_len : (sizeof(topic) - 1);
             memcpy(topic, event->topic, tlen);
+
+            size_t dlen = event->data_len <= 8192 ? (size_t)event->data_len : 8192;
+            char *data = (char *)malloc(dlen + 1);
+            if (data == NULL) {
+                ESP_LOGE(TAG, "OOM allocating %u bytes for MQTT payload", (unsigned int)(dlen + 1));
+                break;
+            }
             memcpy(data, event->data, dlen);
+            data[dlen] = '\0';
 
             ESP_LOGI(TAG, "[MQTT RX] Topic: %s, Data: %s", topic, data);
 
@@ -145,7 +153,28 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
                         free(req);
                     }
                 }
+            } else if (strstr(topic, "/config/schedule") != NULL) {
+                cJSON *json = cJSON_Parse(data);
+                if (json != NULL) {
+                    if (cJSON_IsArray(json)) {
+                        scheduler_apply_cloud_json(json);
+                    } else if (cJSON_IsObject(json)) {
+                        cJSON *schedules = cJSON_GetObjectItem(json, "schedules");
+                        if (schedules != NULL && cJSON_IsArray(schedules)) {
+                            scheduler_apply_cloud_json(schedules);
+                        }
+                        cJSON *rules = cJSON_GetObjectItem(json, "rules");
+                        if (rules != NULL && cJSON_IsArray(rules)) {
+                            rule_engine_apply_cloud_json(rules);
+                        }
+                    }
+                    cJSON_Delete(json);
+                    event_bus_post(EVT_CONFIG_UPDATED_FROM_CLOUD, NULL, 0, false);
+                } else {
+                    ESP_LOGW(TAG, "Failed to parse schedule config JSON from %s", topic);
+                }
             }
+            free(data);
         }
         break;
 

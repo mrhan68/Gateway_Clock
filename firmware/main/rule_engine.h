@@ -14,12 +14,15 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include "event_bus.h"
+#include "cJSON.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 #define MAX_RULES 16
+#define SD_RULES_STORAGE_PATH     "/sdcard/rules.json"
+#define SPIFFS_RULES_STORAGE_PATH "/spiffs/rules.json"
 
 /**
  * @brief Rule condition types (FSD §4.7.4)
@@ -108,6 +111,16 @@ int rule_engine_evaluate_telemetry(const sensor_telemetry_t *telem);
  * @brief Reset all active rule safety lockouts and cooldowns (test harness hook)
  */
 void rule_engine_reset_lockouts(void);
+
+/**
+ * @brief Apply automation rules array received from Cloud MQTT config/schedule without re-publishing sync.
+ */
+bool rule_engine_apply_cloud_json(const cJSON *rules_arr);
+
+/**
+ * @brief Publish current rules to Cloud MQTT (gateway/<gw_id>/rules/sync).
+ */
+void rule_engine_publish_sync(void);
 
 #ifdef __cplusplus
 }

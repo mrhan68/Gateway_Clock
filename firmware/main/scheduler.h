@@ -5,12 +5,15 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include "event_bus.h"
+#include "cJSON.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 #define MAX_SCHEDULE_ENTRIES 16
+#define SD_SCHEDULE_PATH     "/sdcard/schedule.json"
+#define SPIFFS_SCHEDULE_PATH "/spiffs/schedule.json"
 
 typedef struct {
     int id;
@@ -72,6 +75,16 @@ int scheduler_get_entries(schedule_entry_t *dest, int max_entries);
  * @brief Manually trigger an alarm event (for test / CLI verification).
  */
 void scheduler_trigger_alarm(const char *title, bool buzzer);
+
+/**
+ * @brief Apply schedule array received from Cloud MQTT config/schedule without re-publishing sync.
+ */
+bool scheduler_apply_cloud_json(const cJSON *schedules_arr);
+
+/**
+ * @brief Publish current schedules to Cloud MQTT (gateway/<gw_id>/schedule/sync).
+ */
+void scheduler_publish_sync(void);
 
 #ifdef __cplusplus
 }
