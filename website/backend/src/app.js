@@ -27,6 +27,7 @@ const eventRoutes = require('./routes/events');
 const telemetryRoutes = require('./routes/telemetry');
 
 const app = express();
+app.set('trust proxy', 1); // Render single-hop reverse proxy (required by express-rate-limit for X-Forwarded-For)
 
 // ─── Middleware ───
 const allowedOriginEnv = process.env.ALLOWED_ORIGIN;

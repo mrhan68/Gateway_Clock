@@ -498,6 +498,36 @@ async function handleDeviceAction(gatewayId, deviceId, payload) {
 
 async function handleTelemetryBatch(gatewayId, payload) {
   console.log(`[MQTT] Batch telemetry from ${gatewayId}`);
+  try {
+    let data = null;
+    try {
+      data = parseJsonPayload(payload);
+    } catch (_err) {
+      data = { raw: String(payload || '') };
+    }
+
+    const firstRecord = Array.isArray(data)
+      ? data[0]
+      : (data && Array.isArray(data.records) ? data.records[0] : null);
+    const deviceId = (data && data.device_id) || (firstRecord && firstRecord.device_id) || null;
+    const rawTs = (data && (data.ts !== undefined ? data.ts : data.timestamp)) ??
+      (firstRecord && (firstRecord.ts !== undefined ? firstRecord.ts : firstRecord.timestamp));
+    const occurredAt = parseTimestampOrNow(rawTs, new Date());
+
+    if (prisma.eventLog && typeof prisma.eventLog.create === 'function') {
+      await prisma.eventLog.create({
+        data: {
+          gatewayId,
+          eventType: 'telemetry_batch_backfill',
+          deviceId: deviceId ? String(deviceId).slice(0, 32) : null,
+          payload: typeof payload === 'string' ? payload : JSON.stringify(data),
+          occurredAt
+        }
+      });
+    }
+  } catch (err) {
+    console.error('[MQTT] Failed to process telemetry batch:', err.message);
+  }
 }
 
 async function handleEvents(gatewayId, payload) {
@@ -790,6 +820,7 @@ module.exports = {
   resetSeededGateways,
   isGatewayOnline,
   handleTelemetry,
+  handleTelemetryBatch,
   handleCommandAck,
   handleDeviceAction,
   handleEvents,
