@@ -50,8 +50,8 @@ void app_main(void)
     // Tắt ngay lập tức LED RGB trên bo mạch khi vừa cấp nguồn
     board_led_init();
 
-    // Chờ 1.5s để USB-UART trên Host ổn định enumeration
-    vTaskDelay(pdMS_TO_TICKS(1500));
+    // Chờ ngắn để hệ thống ổn định sau reset
+    vTaskDelay(pdMS_TO_TICKS(100));
 
     ESP_LOGI(TAG, "==================================================");
     ESP_LOGI(TAG, "[BOOT] Starting Smart Clock Edge Gateway");

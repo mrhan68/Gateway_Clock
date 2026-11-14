@@ -31,7 +31,7 @@ static const char *TAG __attribute__((unused)) = "CLI";
 
 #define CLI_UART_NUM        UART_NUM_0
 #define CLI_BUFFER_SIZE     256
-#define CLI_TASK_STACK_SIZE 8192
+#define CLI_TASK_STACK_SIZE 4096
 #define CLI_TASK_PRIO       2
 #define CLI_TASK_CORE       1
 

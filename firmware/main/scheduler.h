@@ -57,6 +57,11 @@ void scheduler_reload(void);
 bool scheduler_add_entry(const schedule_entry_t *entry);
 
 /**
+ * @brief Delete a schedule entry by ID and sync to storage/cloud.
+ */
+bool scheduler_delete_entry(int entry_id);
+
+/**
  * @brief Clear all schedule entries.
  */
 void scheduler_clear_entries(void);

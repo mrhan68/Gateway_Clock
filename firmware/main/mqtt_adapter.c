@@ -22,6 +22,10 @@ static const char *TAG = "MQTT_ADAPTER";
 
 static esp_mqtt_client_handle_t s_client = NULL;
 static bool s_is_connected = false;
+static bool s_manual_disconnect = false;
+static char s_rx_topic[128] = {0};
+static char *s_rx_buf = NULL;
+static int s_rx_total_len = 0;
 static char s_gateway_id[32] = "gw_default";
 static char s_broker_uri[128] = SECRET_MQTT_BROKER_URI;
 static char s_mqtt_username[64] = {0};
@@ -33,7 +37,7 @@ static char s_sched_sub_topic[64] = {0};
 static void on_wifi_connected(const gateway_event_t *evt)
 {
     (void)evt;
-    if (s_client != NULL) {
+    if (s_client != NULL && !s_manual_disconnect) {
         ESP_LOGI(TAG, "Wi-Fi UP: Starting/restarting MQTT client...");
         esp_mqtt_client_start(s_client);
     }
@@ -46,6 +50,87 @@ static void on_wifi_lost(const gateway_event_t *evt)
         ESP_LOGW(TAG, "Wi-Fi DOWN: Stopping MQTT client...");
         esp_mqtt_client_stop(s_client);
         s_is_connected = false;
+    }
+}
+
+static void process_mqtt_message(const char *topic, const char *data)
+{
+    ESP_LOGI(TAG, "[MQTT RX] Topic: %s, Data: %s", topic, data);
+
+    // Parse device command: gateway/<gw_id>/device/<dev_id>/command
+    const char *p_dev = strstr(topic, "/device/");
+    const char *p_cmd = strstr(topic, "/command");
+    if (p_dev != NULL && p_cmd != NULL && p_cmd > p_dev) {
+        p_dev += 8;
+        char target_dev[32] = {0};
+        size_t dev_len = (size_t)(p_cmd - p_dev);
+        if (dev_len > 0 && dev_len < sizeof(target_dev)) {
+            strncpy(target_dev, p_dev, dev_len);
+        }
+
+        device_command_req_t *req = (device_command_req_t *)malloc(sizeof(device_command_req_t));
+        if (req != NULL) {
+            memset(req, 0, sizeof(device_command_req_t));
+            strncpy(req->target_device_id, target_dev, sizeof(req->target_device_id) - 1);
+            req->ttl_seconds = 60;
+            req->timestamp = (uint32_t)(esp_timer_get_time() / 1000000ULL);
+
+            cJSON *json = cJSON_Parse(data);
+            if (json != NULL) {
+                cJSON *j_cmd = cJSON_GetObjectItem(json, "command");
+                cJSON *j_act = cJSON_GetObjectItem(json, "action");
+                cJSON *j_id = cJSON_GetObjectItem(json, "command_id");
+                cJSON *j_target = cJSON_GetObjectItem(json, "target_device_id");
+                cJSON *j_ttl = cJSON_GetObjectItem(json, "ttl_seconds");
+
+                if (j_cmd && cJSON_IsString(j_cmd)) {
+                    strncpy(req->action, j_cmd->valuestring, sizeof(req->action) - 1);
+                } else if (j_act && cJSON_IsString(j_act)) {
+                    strncpy(req->action, j_act->valuestring, sizeof(req->action) - 1);
+                }
+                if (j_id && cJSON_IsString(j_id)) {
+                    strncpy(req->command_id, j_id->valuestring, sizeof(req->command_id) - 1);
+                }
+                if (j_target && cJSON_IsString(j_target)) {
+                    strncpy(req->target_device_id, j_target->valuestring, sizeof(req->target_device_id) - 1);
+                }
+                if (j_ttl && cJSON_IsNumber(j_ttl)) {
+                    req->ttl_seconds = (uint32_t)j_ttl->valueint;
+                }
+                cJSON_Delete(json);
+            } else {
+                strncpy(req->action, data, sizeof(req->action) - 1);
+                snprintf(req->command_id, sizeof(req->command_id), "cmd_%lu", (unsigned long)req->timestamp);
+            }
+
+            if (req->action[0] != '\0') {
+                event_bus_post(EVT_DEVICE_COMMAND_REQUEST, req, sizeof(device_command_req_t), false);
+                ESP_LOGI(TAG, "Dispatched device command: target='%s', action='%s', cmd_id='%s'",
+                         req->target_device_id, req->action, req->command_id);
+            } else {
+                free(req);
+            }
+        }
+    } else if (strstr(topic, "/config/schedule") != NULL) {
+        cJSON *json = cJSON_Parse(data);
+        if (json != NULL) {
+            if (cJSON_IsArray(json)) {
+                scheduler_apply_cloud_json(json);
+            } else if (cJSON_IsObject(json)) {
+                cJSON *schedules = cJSON_GetObjectItem(json, "schedules");
+                if (schedules != NULL && cJSON_IsArray(schedules)) {
+                    scheduler_apply_cloud_json(schedules);
+                }
+                cJSON *rules = cJSON_GetObjectItem(json, "rules");
+                if (rules != NULL && cJSON_IsArray(rules)) {
+                    rule_engine_apply_cloud_json(rules);
+                }
+            }
+            cJSON_Delete(json);
+            event_bus_post(EVT_CONFIG_UPDATED_FROM_CLOUD, NULL, 0, false);
+        } else {
+            ESP_LOGW(TAG, "Failed to parse schedule config JSON from %s", topic);
+        }
     }
 }
 
@@ -76,6 +161,12 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
 
     case MQTT_EVENT_DISCONNECTED:
         s_is_connected = false;
+        if (s_rx_buf != NULL) {
+            free(s_rx_buf);
+            s_rx_buf = NULL;
+        }
+        s_rx_total_len = 0;
+        s_rx_topic[0] = '\0';
         printf("[MQTT] Disconnected from broker\n");
         ESP_LOGW(TAG, "Disconnected from MQTT broker");
         fflush(stdout);
@@ -83,98 +174,61 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
         break;
 
     case MQTT_EVENT_DATA:
-        if (event != NULL && event->topic_len > 0 && event->data_len > 0) {
-            char topic[128] = {0};
-            size_t tlen = event->topic_len < (sizeof(topic) - 1) ? (size_t)event->topic_len : (sizeof(topic) - 1);
-            memcpy(topic, event->topic, tlen);
-
-            size_t dlen = event->data_len <= 8192 ? (size_t)event->data_len : 8192;
-            char *data = (char *)malloc(dlen + 1);
-            if (data == NULL) {
-                ESP_LOGE(TAG, "OOM allocating %u bytes for MQTT payload", (unsigned int)(dlen + 1));
-                break;
-            }
-            memcpy(data, event->data, dlen);
-            data[dlen] = '\0';
-
-            ESP_LOGI(TAG, "[MQTT RX] Topic: %s, Data: %s", topic, data);
-
-            // Parse device command: gateway/<gw_id>/device/<dev_id>/command
-            char *p_dev = strstr(topic, "/device/");
-            char *p_cmd = strstr(topic, "/command");
-            if (p_dev != NULL && p_cmd != NULL && p_cmd > p_dev) {
-                p_dev += 8;
-                char target_dev[32] = {0};
-                size_t dev_len = (size_t)(p_cmd - p_dev);
-                if (dev_len > 0 && dev_len < sizeof(target_dev)) {
-                    strncpy(target_dev, p_dev, dev_len);
-                }
-
-                device_command_req_t *req = (device_command_req_t *)malloc(sizeof(device_command_req_t));
-                if (req != NULL) {
-                    memset(req, 0, sizeof(device_command_req_t));
-                    strncpy(req->target_device_id, target_dev, sizeof(req->target_device_id) - 1);
-                    req->ttl_seconds = 60;
-                    req->timestamp = (uint32_t)(esp_timer_get_time() / 1000000ULL);
-
-                    cJSON *json = cJSON_Parse(data);
-                    if (json != NULL) {
-                        cJSON *j_cmd = cJSON_GetObjectItem(json, "command");
-                        cJSON *j_act = cJSON_GetObjectItem(json, "action");
-                        cJSON *j_id = cJSON_GetObjectItem(json, "command_id");
-                        cJSON *j_target = cJSON_GetObjectItem(json, "target_device_id");
-                        cJSON *j_ttl = cJSON_GetObjectItem(json, "ttl_seconds");
-
-                        if (j_cmd && cJSON_IsString(j_cmd)) {
-                            strncpy(req->action, j_cmd->valuestring, sizeof(req->action) - 1);
-                        } else if (j_act && cJSON_IsString(j_act)) {
-                            strncpy(req->action, j_act->valuestring, sizeof(req->action) - 1);
-                        }
-                        if (j_id && cJSON_IsString(j_id)) {
-                            strncpy(req->command_id, j_id->valuestring, sizeof(req->command_id) - 1);
-                        }
-                        if (j_target && cJSON_IsString(j_target)) {
-                            strncpy(req->target_device_id, j_target->valuestring, sizeof(req->target_device_id) - 1);
-                        }
-                        if (j_ttl && cJSON_IsNumber(j_ttl)) {
-                            req->ttl_seconds = (uint32_t)j_ttl->valueint;
-                        }
-                        cJSON_Delete(json);
-                    } else {
-                        strncpy(req->action, data, sizeof(req->action) - 1);
-                        snprintf(req->command_id, sizeof(req->command_id), "cmd_%lu", (unsigned long)req->timestamp);
-                    }
-
-                    if (req->action[0] != '\0') {
-                        event_bus_post(EVT_DEVICE_COMMAND_REQUEST, req, sizeof(device_command_req_t), false);
-                        ESP_LOGI(TAG, "Dispatched device command: target='%s', action='%s', cmd_id='%s'",
-                                 req->target_device_id, req->action, req->command_id);
-                    } else {
-                        free(req);
-                    }
-                }
-            } else if (strstr(topic, "/config/schedule") != NULL) {
-                cJSON *json = cJSON_Parse(data);
-                if (json != NULL) {
-                    if (cJSON_IsArray(json)) {
-                        scheduler_apply_cloud_json(json);
-                    } else if (cJSON_IsObject(json)) {
-                        cJSON *schedules = cJSON_GetObjectItem(json, "schedules");
-                        if (schedules != NULL && cJSON_IsArray(schedules)) {
-                            scheduler_apply_cloud_json(schedules);
-                        }
-                        cJSON *rules = cJSON_GetObjectItem(json, "rules");
-                        if (rules != NULL && cJSON_IsArray(rules)) {
-                            rule_engine_apply_cloud_json(rules);
-                        }
-                    }
-                    cJSON_Delete(json);
-                    event_bus_post(EVT_CONFIG_UPDATED_FROM_CLOUD, NULL, 0, false);
+        if (event != NULL) {
+            if (event->current_data_offset == 0) {
+                if (event->topic_len > 0 && event->topic != NULL) {
+                    size_t tlen = (size_t)event->topic_len < (sizeof(s_rx_topic) - 1)
+                                      ? (size_t)event->topic_len
+                                      : (sizeof(s_rx_topic) - 1);
+                    memcpy(s_rx_topic, event->topic, tlen);
+                    s_rx_topic[tlen] = '\0';
                 } else {
-                    ESP_LOGW(TAG, "Failed to parse schedule config JSON from %s", topic);
+                    s_rx_topic[0] = '\0';
+                }
+
+                if (s_rx_buf != NULL) {
+                    free(s_rx_buf);
+                    s_rx_buf = NULL;
+                }
+                s_rx_total_len = 0;
+
+                int total_len = event->total_data_len > 0 ? event->total_data_len : event->data_len;
+                if (total_len > 0 && total_len <= 8192) {
+                    s_rx_buf = (char *)malloc((size_t)total_len + 1);
+                    if (s_rx_buf == NULL) {
+                        ESP_LOGE(TAG, "OOM allocating %d bytes for MQTT payload", total_len + 1);
+                        break;
+                    }
+                    s_rx_total_len = total_len;
+                } else if (total_len > 8192) {
+                    ESP_LOGW(TAG, "MQTT payload too large (%d bytes > 8192), dropping", total_len);
+                    break;
                 }
             }
-            free(data);
+
+            if (s_rx_buf != NULL && event->data != NULL && event->data_len > 0) {
+                if (event->current_data_offset < 0 || event->current_data_offset >= s_rx_total_len) {
+                    free(s_rx_buf);
+                    s_rx_buf = NULL;
+                    s_rx_total_len = 0;
+                    break;
+                }
+                int copy_len = event->data_len;
+                if (event->current_data_offset + copy_len > s_rx_total_len) {
+                    copy_len = s_rx_total_len - event->current_data_offset;
+                }
+                memcpy(s_rx_buf + event->current_data_offset, event->data, (size_t)copy_len);
+
+                if (event->current_data_offset + copy_len >= s_rx_total_len) {
+                    s_rx_buf[s_rx_total_len] = '\0';
+                    if (s_rx_topic[0] != '\0') {
+                        process_mqtt_message(s_rx_topic, s_rx_buf);
+                    }
+                    free(s_rx_buf);
+                    s_rx_buf = NULL;
+                    s_rx_total_len = 0;
+                }
+            }
         }
         break;
 
@@ -280,6 +334,10 @@ void mqtt_adapter_init(const char *broker_uri, const char *gateway_id, const cha
             },
             .keepalive = 60,
         },
+        .buffer = {
+            .size = 2048,
+            .out_size = 0,
+        },
     };
 
     s_client = esp_mqtt_client_init(&mqtt_cfg);
@@ -319,4 +377,30 @@ bool mqtt_adapter_publish(const char *topic_suffix, const char *payload_json)
 bool mqtt_adapter_is_connected(void)
 {
     return s_is_connected;
+}
+
+void mqtt_adapter_disconnect(void)
+{
+    s_manual_disconnect = true;
+    if (s_client != NULL) {
+        esp_mqtt_client_stop(s_client);
+    }
+    s_is_connected = false;
+    if (s_rx_buf != NULL) {
+        free(s_rx_buf);
+        s_rx_buf = NULL;
+    }
+    s_rx_total_len = 0;
+    s_rx_topic[0] = '\0';
+    ESP_LOGW(TAG, "MQTT manually disconnected");
+    event_bus_post(EVT_MQTT_DISCONNECTED, NULL, 0, false);
+}
+
+void mqtt_adapter_reconnect(void)
+{
+    s_manual_disconnect = false;
+    if (s_client != NULL && !s_is_connected) {
+        ESP_LOGI(TAG, "MQTT manual reconnect triggered");
+        esp_mqtt_client_start(s_client);
+    }
 }

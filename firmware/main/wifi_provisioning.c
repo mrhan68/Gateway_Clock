@@ -429,6 +429,11 @@ static void background_scan_task(void *pv)
         vTaskDelay(pdMS_TO_TICKS(200));
         wait_loops++;
     }
+    if (s_is_connected) {
+        ESP_LOGI(TAG, "[WIFI_PRESCAN] STA already connected, skipping initial background scan");
+        vTaskDelete(NULL);
+        return;
+    }
     ESP_LOGI(TAG, "[WIFI_PRESCAN] Performing initial background Wi-Fi scan...");
     perform_wifi_scan_internal(true);
     ESP_LOGI(TAG, "[WIFI_PRESCAN] Background scan complete: %u APs found", s_scanned_count);

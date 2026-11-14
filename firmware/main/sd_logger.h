@@ -103,6 +103,11 @@ void sd_logger_append_crash_log(const char *crash_text);
  */
 void sd_logger_trigger_backfill(void);
 
+/**
+ * @brief Đọc thống kê hàng đợi Store-and-Forward từ header sync_queue.bin
+ */
+bool sd_logger_get_sync_queue_stats(uint32_t *total_records, uint32_t *unacked_count);
+
 #ifdef __cplusplus
 }
 #endif

@@ -1,15 +1,20 @@
 #include "web_server.h"
 #include <stdio.h>
 #include <string.h>
+#include <strings.h>
 #include <stdlib.h>
 #include <math.h>
+#include <time.h>
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_timer.h"
 #include "esp_http_server.h"
+#include "esp_ota_ops.h"
 #include "lwip/sockets.h"
 #include "cJSON.h"
 #include "rule_engine.h"
+#include "scheduler.h"
+#include "sd_logger.h"
 #include "event_bus.h"
 #include "rtc.h"
 #include "supervisor.h"
@@ -646,6 +651,12 @@ static esp_err_t get_status_handler(httpd_req_t *req)
     char time_str[32] = {0};
     app_rtc_get_formatted_time(time_str, sizeof(time_str));
 
+    const gateway_config_t *cfg = config_manager_get();
+    uint32_t sq_total = 0, sq_unacked = 0;
+    sd_logger_get_sync_queue_stats(&sq_total, &sq_unacked);
+
+    cJSON_AddStringToObject(root, "gateway_id",
+                            (cfg && cfg->gateway_id[0] != '\0') ? cfg->gateway_id : "gw_smartclock_01");
     cJSON_AddNumberToObject(root, "uptime_s", (double)uptime_s);
     cJSON_AddNumberToObject(root, "free_heap", free_heap);
     cJSON_AddStringToObject(root, "ip", wifi_provisioning_get_ip());
@@ -654,9 +665,19 @@ static esp_err_t get_status_handler(httpd_req_t *req)
     cJSON_AddNumberToObject(root, "active_mask", active);
     cJSON_AddNumberToObject(root, "alive_mask", alive);
     cJSON_AddStringToObject(root, "time", time_str);
+    cJSON_AddBoolToObject(root, "rtc_valid", rtc_is_valid());
+    cJSON_AddBoolToObject(root, "sd_mounted", sd_logger_is_mounted());
+    cJSON_AddNumberToObject(root, "sync_queue_total", (double)sq_total);
+    cJSON_AddNumberToObject(root, "sync_queue_unacked", (double)sq_unacked);
+    cJSON_AddNumberToObject(root, "ram_fallback_count", sd_logger_get_ram_fallback_count());
+    cJSON_AddBoolToObject(root, "alarm_active", display_is_alarm_active());
 
     char *resp_str = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
+    if (!resp_str) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
 
     set_common_headers(req, "application/json");
     esp_err_t ret = httpd_resp_send(req, resp_str, strlen(resp_str));
@@ -860,6 +881,472 @@ static esp_err_t delete_rules_handler(httpd_req_t *req)
     rule_engine_clear_rules();
     set_common_headers(req, "application/json");
     return httpd_resp_send(req, "{\"status\":\"ok\",\"message\":\"All rules cleared\"}", HTTPD_RESP_USE_STRLEN);
+}
+
+static cJSON *recv_json_body(httpd_req_t *req, size_t max_len)
+{
+    if (req->content_len <= 0 || (size_t)req->content_len >= max_len) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid content length");
+        return NULL;
+    }
+
+    char *buf = (char *)malloc((size_t)req->content_len + 1);
+    if (!buf) {
+        httpd_resp_send_500(req);
+        return NULL;
+    }
+
+    int received = 0;
+    while (received < req->content_len) {
+        int r = httpd_req_recv(req, buf + received, req->content_len - received);
+        if (r == HTTPD_SOCK_ERR_TIMEOUT) {
+            continue;
+        }
+        if (r <= 0) {
+            free(buf);
+            httpd_resp_send_500(req);
+            return NULL;
+        }
+        received += r;
+    }
+    buf[received] = '\0';
+
+    cJSON *json = cJSON_Parse(buf);
+    free(buf);
+    if (!json) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
+        return NULL;
+    }
+    return json;
+}
+
+static esp_err_t send_cjson_response(httpd_req_t *req, cJSON *root)
+{
+    if (!root) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+    char *resp_str = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (!resp_str) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+    set_common_headers(req, "application/json");
+    esp_err_t ret = httpd_resp_send(req, resp_str, strlen(resp_str));
+    free(resp_str);
+    return ret;
+}
+
+static const char *s_sched_day_names[7] = {"SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"};
+
+static void parse_repeat_days_str_local(const char *str, bool out_days[7])
+{
+    if (!str) return;
+    char buf[64];
+    strncpy(buf, str, sizeof(buf) - 1);
+    buf[sizeof(buf) - 1] = '\0';
+
+    char *saveptr = NULL;
+    char *tok = strtok_r(buf, ",; ", &saveptr);
+    while (tok != NULL) {
+        for (int d = 0; d < 7; d++) {
+            if (strcasecmp(tok, s_sched_day_names[d]) == 0 ||
+                (tok[0] == ('0' + d) && tok[1] == '\0')) {
+                out_days[d] = true;
+                break;
+            }
+        }
+        tok = strtok_r(NULL, ",; ", &saveptr);
+    }
+}
+
+static esp_err_t get_schedules_handler(httpd_req_t *req)
+{
+    schedule_entry_t *entries = (schedule_entry_t *)calloc(MAX_SCHEDULE_ENTRIES, sizeof(schedule_entry_t));
+    if (!entries) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+
+    int count = scheduler_get_entries(entries, MAX_SCHEDULE_ENTRIES);
+    cJSON *arr = cJSON_CreateArray();
+    if (!arr) {
+        free(entries);
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+
+    for (int i = 0; i < count; i++) {
+        const schedule_entry_t *e = &entries[i];
+        cJSON *item = cJSON_CreateObject();
+        if (!item) continue;
+
+        char rd_str[32] = {0};
+        size_t pos = 0;
+        for (int d = 0; d < 7; d++) {
+            if (!e->repeat_days[d]) continue;
+            int n = snprintf(rd_str + pos, sizeof(rd_str) - pos, "%s%s", (pos > 0) ? "," : "", s_sched_day_names[d]);
+            if (n < 0 || (size_t)n >= sizeof(rd_str) - pos) break;
+            pos += (size_t)n;
+        }
+
+        cJSON_AddNumberToObject(item, "id", e->id);
+        cJSON_AddStringToObject(item, "type", e->type);
+        cJSON_AddNumberToObject(item, "hour", e->hour);
+        cJSON_AddNumberToObject(item, "minute", e->minute);
+        cJSON_AddStringToObject(item, "repeat_days", rd_str);
+        cJSON_AddStringToObject(item, "one_time_date", e->one_time_date);
+        cJSON_AddBoolToObject(item, "enabled", e->enabled);
+        cJSON_AddStringToObject(item, "target_device_id", e->target_device_id);
+        cJSON_AddStringToObject(item, "action_command", e->action_command);
+        cJSON_AddStringToObject(item, "title", e->title);
+        cJSON_AddBoolToObject(item, "buzzer", e->buzzer);
+        cJSON_AddItemToArray(arr, item);
+    }
+
+    free(entries);
+    return send_cjson_response(req, arr);
+}
+
+static esp_err_t post_schedules_handler(httpd_req_t *req)
+{
+    if (!check_api_auth(req)) return ESP_OK;
+    cJSON *json = recv_json_body(req, 1024);
+    if (!json) return ESP_FAIL;
+
+    cJSON *j_hour = cJSON_GetObjectItem(json, "hour");
+    cJSON *j_min = cJSON_GetObjectItem(json, "minute");
+    if (!j_hour || !cJSON_IsNumber(j_hour) || !j_min || !cJSON_IsNumber(j_min)) {
+        cJSON_Delete(json);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing hour or minute");
+        return ESP_FAIL;
+    }
+
+    schedule_entry_t entry;
+    memset(&entry, 0, sizeof(entry));
+
+    cJSON *j_id = cJSON_GetObjectItem(json, "id");
+    entry.id = (j_id && cJSON_IsNumber(j_id)) ? j_id->valueint : (scheduler_get_entry_count() + 1);
+
+    cJSON *j_type = cJSON_GetObjectItem(json, "type");
+    if (j_type && cJSON_IsString(j_type) && j_type->valuestring[0] != '\0') {
+        strncpy(entry.type, j_type->valuestring, sizeof(entry.type) - 1);
+    } else {
+        strncpy(entry.type, "alarm", sizeof(entry.type) - 1);
+    }
+
+    entry.hour = j_hour->valueint;
+    entry.minute = j_min->valueint;
+    if (entry.hour < 0) entry.hour = 0;
+    if (entry.hour > 23) entry.hour = 23;
+    if (entry.minute < 0) entry.minute = 0;
+    if (entry.minute > 59) entry.minute = 59;
+
+    cJSON *j_rd = cJSON_GetObjectItem(json, "repeat_days");
+    if (!j_rd) j_rd = cJSON_GetObjectItem(json, "repeat_days_indices");
+    if (j_rd && cJSON_IsString(j_rd)) {
+        parse_repeat_days_str_local(j_rd->valuestring, entry.repeat_days);
+    } else if (j_rd && cJSON_IsArray(j_rd)) {
+        int n = cJSON_GetArraySize(j_rd);
+        cJSON *first = (n > 0) ? cJSON_GetArrayItem(j_rd, 0) : NULL;
+        if (n == 7 && first && cJSON_IsBool(first)) {
+            for (int d = 0; d < 7; d++) {
+                cJSON *el = cJSON_GetArrayItem(j_rd, d);
+                entry.repeat_days[d] = (el != NULL) && cJSON_IsTrue(el);
+            }
+        } else {
+            for (int i = 0; i < n; i++) {
+                cJSON *el = cJSON_GetArrayItem(j_rd, i);
+                if (el && cJSON_IsNumber(el) && el->valueint >= 0 && el->valueint < 7) {
+                    entry.repeat_days[el->valueint] = true;
+                } else if (el && cJSON_IsString(el)) {
+                    parse_repeat_days_str_local(el->valuestring, entry.repeat_days);
+                }
+            }
+        }
+    }
+
+    cJSON *j_otd = cJSON_GetObjectItem(json, "one_time_date");
+    if (j_otd && cJSON_IsString(j_otd)) {
+        strncpy(entry.one_time_date, j_otd->valuestring, sizeof(entry.one_time_date) - 1);
+    }
+
+    cJSON *j_en = cJSON_GetObjectItem(json, "enabled");
+    entry.enabled = (j_en != NULL) ? cJSON_IsTrue(j_en) : true;
+
+    cJSON *j_tgt = cJSON_GetObjectItem(json, "target_device_id");
+    if (j_tgt && cJSON_IsString(j_tgt)) {
+        strncpy(entry.target_device_id, j_tgt->valuestring, sizeof(entry.target_device_id) - 1);
+    }
+
+    cJSON *j_act = cJSON_GetObjectItem(json, "action_command");
+    if (j_act && cJSON_IsString(j_act)) {
+        strncpy(entry.action_command, j_act->valuestring, sizeof(entry.action_command) - 1);
+    }
+
+    cJSON *j_title = cJSON_GetObjectItem(json, "title");
+    if (j_title && cJSON_IsString(j_title)) {
+        strncpy(entry.title, j_title->valuestring, sizeof(entry.title) - 1);
+    }
+
+    cJSON *j_buz = cJSON_GetObjectItem(json, "buzzer");
+    entry.buzzer = (j_buz != NULL) ? cJSON_IsTrue(j_buz) : (strcmp(entry.type, "automation") != 0);
+
+    cJSON_Delete(json);
+
+    bool ok = scheduler_add_entry(&entry);
+    set_common_headers(req, "application/json");
+    if (ok) {
+        return httpd_resp_send(req, "{\"status\":\"ok\",\"message\":\"Schedule saved\"}", HTTPD_RESP_USE_STRLEN);
+    }
+    httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to save schedule");
+    return ESP_FAIL;
+}
+
+static esp_err_t delete_schedules_handler(httpd_req_t *req)
+{
+    if (!check_api_auth(req)) return ESP_OK;
+    char query[64] = {0};
+    int query_len = httpd_req_get_url_query_len(req);
+
+    if (query_len > 0 && query_len < (int)sizeof(query)) {
+        if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
+            char param[16] = {0};
+            if (httpd_query_key_value(query, "id", param, sizeof(param)) == ESP_OK) {
+                int entry_id = atoi(param);
+                bool ok = scheduler_delete_entry(entry_id);
+                if (ok) {
+                    set_common_headers(req, "application/json");
+                    return httpd_resp_send(req, "{\"status\":\"ok\",\"message\":\"Schedule deleted\"}", HTTPD_RESP_USE_STRLEN);
+                }
+                httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Schedule not found");
+                return ESP_FAIL;
+            }
+        }
+    }
+
+    scheduler_clear_entries();
+    set_common_headers(req, "application/json");
+    return httpd_resp_send(req, "{\"status\":\"ok\",\"message\":\"All schedules cleared\"}", HTTPD_RESP_USE_STRLEN);
+}
+
+static esp_err_t post_rules_test_handler(httpd_req_t *req)
+{
+    if (!check_api_auth(req)) return ESP_OK;
+    cJSON *json = recv_json_body(req, 512);
+    if (!json) return ESP_FAIL;
+
+    cJSON *j_reset = cJSON_GetObjectItem(json, "reset");
+    cJSON *j_dev = cJSON_GetObjectItem(json, "device_id");
+    cJSON *j_val = cJSON_GetObjectItem(json, "value");
+
+    if (j_reset && cJSON_IsTrue(j_reset)) {
+        rule_engine_reset_lockouts();
+        if (!j_dev) {
+            cJSON_Delete(json);
+            set_common_headers(req, "application/json");
+            return httpd_resp_send(req, "{\"status\":\"ok\",\"reset\":true}", HTTPD_RESP_USE_STRLEN);
+        }
+    }
+
+    if (!j_dev || !cJSON_IsString(j_dev) || !j_val || !cJSON_IsNumber(j_val)) {
+        cJSON_Delete(json);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing device_id or value");
+        return ESP_FAIL;
+    }
+
+    sensor_telemetry_t telem;
+    memset(&telem, 0, sizeof(telem));
+    strncpy(telem.device_id, j_dev->valuestring, sizeof(telem.device_id) - 1);
+    telem.value = (float)j_val->valuedouble;
+
+    cJSON *j_hum = cJSON_GetObjectItem(json, "humidity");
+    if (j_hum && cJSON_IsNumber(j_hum)) {
+        telem.humidity = (float)j_hum->valuedouble;
+    }
+
+    cJSON *j_valid = cJSON_GetObjectItem(json, "valid");
+    telem.valid = (j_valid != NULL) ? cJSON_IsTrue(j_valid) : true;
+
+    time_t now = time(NULL);
+    telem.timestamp = (now > 0) ? (uint32_t)now : (uint32_t)(esp_timer_get_time() / 1000000ULL);
+    cJSON_Delete(json);
+
+    int trig = rule_engine_evaluate_telemetry(&telem);
+
+    cJSON *resp = cJSON_CreateObject();
+    if (!resp) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+    cJSON_AddStringToObject(resp, "status", "ok");
+    cJSON_AddStringToObject(resp, "device_id", telem.device_id);
+    cJSON_AddNumberToObject(resp, "value", telem.value);
+    cJSON_AddBoolToObject(resp, "valid", telem.valid);
+    cJSON_AddNumberToObject(resp, "triggered_count", trig);
+    cJSON_AddBoolToObject(resp, "safe_default", !telem.valid);
+    return send_cjson_response(req, resp);
+}
+
+static esp_err_t post_alarm_handler(httpd_req_t *req)
+{
+    if (!check_api_auth(req)) return ESP_OK;
+    cJSON *json = recv_json_body(req, 512);
+    if (!json) return ESP_FAIL;
+
+    cJSON *j_act = cJSON_GetObjectItem(json, "action");
+    if (!j_act || !cJSON_IsString(j_act)) {
+        cJSON_Delete(json);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing action");
+        return ESP_FAIL;
+    }
+
+    if (strcmp(j_act->valuestring, "trigger") == 0) {
+        cJSON *j_title = cJSON_GetObjectItem(json, "title");
+        cJSON *j_buz = cJSON_GetObjectItem(json, "buzzer");
+        const char *title = (j_title && cJSON_IsString(j_title) && j_title->valuestring[0] != '\0')
+                                ? j_title->valuestring
+                                : "Manual Alarm";
+        bool buzzer = (j_buz != NULL) ? cJSON_IsTrue(j_buz) : true;
+        scheduler_trigger_alarm(title, buzzer);
+        cJSON_Delete(json);
+        set_common_headers(req, "application/json");
+        return httpd_resp_send(req, "{\"status\":\"ok\",\"action\":\"trigger\",\"alarm_active\":true}", HTTPD_RESP_USE_STRLEN);
+    }
+
+    if (strcmp(j_act->valuestring, "dismiss") == 0) {
+        cJSON_Delete(json);
+        display_stop_alarm();
+        set_common_headers(req, "application/json");
+        return httpd_resp_send(req, "{\"status\":\"ok\",\"action\":\"dismiss\",\"alarm_active\":false}", HTTPD_RESP_USE_STRLEN);
+    }
+
+    if (strcmp(j_act->valuestring, "snooze") == 0) {
+        cJSON *j_min = cJSON_GetObjectItem(json, "minutes");
+        int minutes = (j_min && cJSON_IsNumber(j_min) && j_min->valueint > 0) ? j_min->valueint : 9;
+        if (minutes > 255) minutes = 255;
+        cJSON_Delete(json);
+        display_snooze_alarm((uint8_t)minutes);
+        set_common_headers(req, "application/json");
+        return httpd_resp_send(req, "{\"status\":\"ok\",\"action\":\"snooze\"}", HTTPD_RESP_USE_STRLEN);
+    }
+
+    cJSON_Delete(json);
+    httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Unknown alarm action");
+    return ESP_FAIL;
+}
+
+static esp_err_t post_time_handler(httpd_req_t *req)
+{
+    if (!check_api_auth(req)) return ESP_OK;
+    cJSON *json = recv_json_body(req, 256);
+    if (!json) return ESP_FAIL;
+
+    cJSON *j_dt = cJSON_GetObjectItem(json, "datetime");
+    cJSON *j_act = cJSON_GetObjectItem(json, "action");
+
+    if (j_dt && cJSON_IsString(j_dt)) {
+        int y = 0, m = 0, d = 0, hh = 0, mm = 0, ss = 0;
+        if (sscanf(j_dt->valuestring, "%d-%d-%d %d:%d:%d", &y, &m, &d, &hh, &mm, &ss) != 6 ||
+            y < 2000 || m < 1 || m > 12 || d < 1 || d > 31 ||
+            hh < 0 || hh > 23 || mm < 0 || mm > 59 || ss < 0 || ss > 59) {
+            cJSON_Delete(json);
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid datetime format");
+            return ESP_FAIL;
+        }
+        cJSON_Delete(json);
+
+        struct tm ti;
+        memset(&ti, 0, sizeof(ti));
+        ti.tm_year = y - 1900;
+        ti.tm_mon = m - 1;
+        ti.tm_mday = d;
+        ti.tm_hour = hh;
+        ti.tm_min = mm;
+        ti.tm_sec = ss;
+        ti.tm_isdst = -1;
+
+        if (!app_rtc_set_time(&ti)) {
+            httpd_resp_send_500(req);
+            return ESP_FAIL;
+        }
+
+        char tbuf[32] = {0};
+        app_rtc_get_formatted_time(tbuf, sizeof(tbuf));
+        cJSON *resp = cJSON_CreateObject();
+        if (!resp) {
+            httpd_resp_send_500(req);
+            return ESP_FAIL;
+        }
+        cJSON_AddStringToObject(resp, "status", "ok");
+        cJSON_AddStringToObject(resp, "time", tbuf);
+        return send_cjson_response(req, resp);
+    }
+
+    if (j_act && cJSON_IsString(j_act) && strcmp(j_act->valuestring, "sync") == 0) {
+        cJSON_Delete(json);
+        app_rtc_sync_from_ntp_and_save();
+        set_common_headers(req, "application/json");
+        return httpd_resp_send(req, "{\"status\":\"ok\",\"action\":\"sync\"}", HTTPD_RESP_USE_STRLEN);
+    }
+
+    cJSON_Delete(json);
+    httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing datetime or action");
+    return ESP_FAIL;
+}
+
+static esp_err_t post_mqtt_control_handler(httpd_req_t *req)
+{
+    if (!check_api_auth(req)) return ESP_OK;
+    cJSON *json = recv_json_body(req, 256);
+    if (!json) return ESP_FAIL;
+
+    cJSON *j_act = cJSON_GetObjectItem(json, "action");
+    if (!j_act || !cJSON_IsString(j_act)) {
+        cJSON_Delete(json);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing action");
+        return ESP_FAIL;
+    }
+
+    if (strcmp(j_act->valuestring, "disconnect") == 0) {
+        cJSON_Delete(json);
+        mqtt_adapter_disconnect();
+        set_common_headers(req, "application/json");
+        return httpd_resp_send(req, "{\"status\":\"ok\",\"mqtt_connected\":false}", HTTPD_RESP_USE_STRLEN);
+    }
+
+    if (strcmp(j_act->valuestring, "reconnect") == 0) {
+        cJSON_Delete(json);
+        mqtt_adapter_reconnect();
+        cJSON *resp = cJSON_CreateObject();
+        if (!resp) {
+            httpd_resp_send_500(req);
+            return ESP_FAIL;
+        }
+        cJSON_AddStringToObject(resp, "status", "ok");
+        cJSON_AddBoolToObject(resp, "mqtt_connected", mqtt_adapter_is_connected());
+        return send_cjson_response(req, resp);
+    }
+
+    if (strcmp(j_act->valuestring, "backfill") == 0) {
+        cJSON_Delete(json);
+        sd_logger_trigger_backfill();
+        uint32_t total = 0, unacked = 0;
+        sd_logger_get_sync_queue_stats(&total, &unacked);
+        cJSON *resp = cJSON_CreateObject();
+        if (!resp) {
+            httpd_resp_send_500(req);
+            return ESP_FAIL;
+        }
+        cJSON_AddStringToObject(resp, "status", "ok");
+        cJSON_AddNumberToObject(resp, "sync_queue_unacked", (double)unacked);
+        return send_cjson_response(req, resp);
+    }
+
+    cJSON_Delete(json);
+    httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Unknown mqtt control action");
+    return ESP_FAIL;
 }
 
 static esp_err_t get_scan_handler(httpd_req_t *req)
@@ -1261,6 +1748,83 @@ static esp_err_t post_system_factory_reset_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+static esp_err_t post_system_ota_handler(httpd_req_t *req)
+{
+    if (!check_api_auth(req)) return ESP_OK;
+    if (req->content_len <= 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Empty OTA payload");
+        return ESP_FAIL;
+    }
+
+    const esp_partition_t *update_part = esp_ota_get_next_update_partition(NULL);
+    if (!update_part) {
+        ESP_LOGE(TAG, "No OTA update partition found");
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+
+    esp_ota_handle_t ota_handle = 0;
+    esp_err_t err = esp_ota_begin(update_part, OTA_SIZE_UNKNOWN, &ota_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_ota_begin failed: 0x%x", err);
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+
+    char *buf = (char *)malloc(1024);
+    if (!buf) {
+        esp_ota_abort(ota_handle);
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+
+    int remaining = req->content_len;
+    while (remaining > 0) {
+        int to_read = (remaining > 1024) ? 1024 : remaining;
+        int r = httpd_req_recv(req, buf, to_read);
+        if (r == HTTPD_SOCK_ERR_TIMEOUT) {
+            continue;
+        }
+        if (r <= 0) {
+            ESP_LOGE(TAG, "OTA recv error: %d", r);
+            free(buf);
+            esp_ota_abort(ota_handle);
+            httpd_resp_send_500(req);
+            return ESP_FAIL;
+        }
+        err = esp_ota_write(ota_handle, buf, (size_t)r);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "esp_ota_write failed: 0x%x", err);
+            free(buf);
+            esp_ota_abort(ota_handle);
+            httpd_resp_send_500(req);
+            return ESP_FAIL;
+        }
+        remaining -= r;
+    }
+    free(buf);
+
+    err = esp_ota_end(ota_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_ota_end failed: 0x%x", err);
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+
+    err = esp_ota_set_boot_partition(update_part);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_ota_set_boot_partition failed: 0x%x", err);
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+
+    ESP_LOGI(TAG, "OTA update succeeded (%d bytes), rebooting...", req->content_len);
+    set_common_headers(req, "application/json");
+    httpd_resp_send(req, "{\"status\":\"ok\",\"message\":\"OTA successful, rebooting\"}", HTTPD_RESP_USE_STRLEN);
+    xTaskCreate(delayed_reboot_task, "reboot_task", 2048, NULL, 5, NULL);
+    return ESP_OK;
+}
+
 static esp_err_t http_captive_redirect_handler(httpd_req_t *req)
 {
     httpd_resp_set_status(req, "302 Found");
@@ -1344,6 +1908,27 @@ esp_err_t web_server_start(void)
     httpd_uri_t uri_rules_del = { .uri = "/api/rules", .method = HTTP_DELETE, .handler = delete_rules_handler };
     httpd_register_uri_handler(s_server, &uri_rules_del);
 
+    httpd_uri_t uri_rules_test = { .uri = "/api/rules/test", .method = HTTP_POST, .handler = post_rules_test_handler };
+    httpd_register_uri_handler(s_server, &uri_rules_test);
+
+    httpd_uri_t uri_sched_get = { .uri = "/api/schedules", .method = HTTP_GET, .handler = get_schedules_handler };
+    httpd_register_uri_handler(s_server, &uri_sched_get);
+
+    httpd_uri_t uri_sched_post = { .uri = "/api/schedules", .method = HTTP_POST, .handler = post_schedules_handler };
+    httpd_register_uri_handler(s_server, &uri_sched_post);
+
+    httpd_uri_t uri_sched_del = { .uri = "/api/schedules", .method = HTTP_DELETE, .handler = delete_schedules_handler };
+    httpd_register_uri_handler(s_server, &uri_sched_del);
+
+    httpd_uri_t uri_alarm = { .uri = "/api/alarm", .method = HTTP_POST, .handler = post_alarm_handler };
+    httpd_register_uri_handler(s_server, &uri_alarm);
+
+    httpd_uri_t uri_time = { .uri = "/api/time", .method = HTTP_POST, .handler = post_time_handler };
+    httpd_register_uri_handler(s_server, &uri_time);
+
+    httpd_uri_t uri_mqtt_ctrl = { .uri = "/api/mqtt/control", .method = HTTP_POST, .handler = post_mqtt_control_handler };
+    httpd_register_uri_handler(s_server, &uri_mqtt_ctrl);
+
     httpd_uri_t uri_scan = { .uri = "/scan", .method = HTTP_GET, .handler = get_scan_handler };
     httpd_register_uri_handler(s_server, &uri_scan);
 
@@ -1370,6 +1955,9 @@ esp_err_t web_server_start(void)
 
     httpd_uri_t uri_factory_reset = { .uri = "/api/system/factory_reset", .method = HTTP_POST, .handler = post_system_factory_reset_handler };
     httpd_register_uri_handler(s_server, &uri_factory_reset);
+
+    httpd_uri_t uri_ota = { .uri = "/api/system/ota", .method = HTTP_POST, .handler = post_system_ota_handler };
+    httpd_register_uri_handler(s_server, &uri_ota);
 
     ESP_LOGI(TAG, "Gateway Web Server & REST API active on port 80 (Always-on)");
     return ESP_OK;

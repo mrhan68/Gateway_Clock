@@ -537,6 +537,32 @@ bool scheduler_add_entry(const schedule_entry_t *entry)
     return true;
 }
 
+bool scheduler_delete_entry(int entry_id)
+{
+    lock_sched();
+    int idx = -1;
+    for (int i = 0; i < s_entry_count; i++) {
+        if (s_entries[i].id == entry_id) {
+            idx = i;
+            break;
+        }
+    }
+    if (idx < 0) {
+        unlock_sched();
+        return false;
+    }
+
+    for (int i = idx; i < s_entry_count - 1; i++) {
+        s_entries[i] = s_entries[i + 1];
+    }
+    s_entry_count--;
+    save_schedules_to_storage_locked();
+    unlock_sched();
+    ESP_LOGI(TAG, "Deleted schedule #%d", entry_id);
+    scheduler_publish_sync();
+    return true;
+}
+
 void scheduler_clear_entries(void)
 {
     lock_sched();

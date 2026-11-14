@@ -28,6 +28,16 @@ bool mqtt_adapter_publish(const char *topic_suffix, const char *payload_json);
  */
 bool mqtt_adapter_is_connected(void);
 
+/**
+ * @brief Ngat ket noi MQTT chu dong (dung cho kiem thu Store-and-Forward)
+ */
+void mqtt_adapter_disconnect(void);
+
+/**
+ * @brief Ket noi lai MQTT sau khi da ngat chu dong
+ */
+void mqtt_adapter_reconnect(void);
+
 #ifdef __cplusplus
 }
 #endif

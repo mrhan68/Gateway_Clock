@@ -173,8 +173,8 @@ static void append_sync_queue_record(const sd_log_item_t *item)
     rec.flags = item->flags;
     strncpy(rec.device_id, item->device_id, sizeof(rec.device_id) - 1);
     rec.device_id[sizeof(rec.device_id) - 1] = '\0';
-    snprintf(rec.payload, sizeof(rec.payload), "{\"val\":%.2f,\"ts\":%lu}",
-             item->value, (unsigned long)item->timestamp);
+    snprintf(rec.payload, sizeof(rec.payload), "{\"device_id\":\"%s\",\"val\":%.2f,\"ts\":%lu}",
+             item->device_id, item->value, (unsigned long)item->timestamp);
     rec.payload_len = (uint16_t)strlen(rec.payload);
     rec.crc32 = calculate_crc32((const uint8_t *)&rec, 168);
 
@@ -346,9 +346,7 @@ void sd_logger_trigger_backfill(void)
             uint32_t expected_crc = calculate_crc32((const uint8_t *)&rec, 168);
             if (rec.crc32 == expected_crc) {
                 // Publish bản tin telemetry bù lên MQTT broker
-                char topic[64];
-                snprintf(topic, sizeof(topic), "gateway/local/telemetry/batch");
-                mqtt_adapter_publish(topic, rec.payload);
+                mqtt_adapter_publish("telemetry/batch", rec.payload);
             } else {
                 ESP_LOGW(TAG, "[BACKFILL] Record at offset %lu corrupt, skipping", (unsigned long)hdr.read_offset);
             }
@@ -370,6 +368,39 @@ void sd_logger_trigger_backfill(void)
 
     fclose(f);
     if (s_sd_mutex) xSemaphoreGive(s_sd_mutex);
+}
+
+bool sd_logger_get_sync_queue_stats(uint32_t *total_records, uint32_t *unacked_count)
+{
+    if (total_records != NULL) *total_records = 0;
+    if (unacked_count != NULL) *unacked_count = 0;
+
+    if (!s_sd_mounted) {
+        return false;
+    }
+
+    if (s_sd_mutex) xSemaphoreTake(s_sd_mutex, portMAX_DELAY);
+
+    FILE *f = fopen(SD_SYNC_QUEUE_PATH, "rb");
+    if (!f) {
+        if (s_sd_mutex) xSemaphoreGive(s_sd_mutex);
+        return true;
+    }
+
+    sync_queue_header_t hdr;
+    size_t rd = fread(&hdr, 1, sizeof(sync_queue_header_t), f);
+    fclose(f);
+    if (s_sd_mutex) xSemaphoreGive(s_sd_mutex);
+
+    if (rd != sizeof(sync_queue_header_t) ||
+        hdr.magic != SYNC_QUEUE_MAGIC ||
+        hdr.crc32 != calculate_crc32((const uint8_t *)&hdr, 20)) {
+        return false;
+    }
+
+    if (total_records != NULL) *total_records = hdr.total_records;
+    if (unacked_count != NULL) *unacked_count = hdr.unacked_count;
+    return true;
 }
 
 static void sd_log_task(void *pvParameters)
