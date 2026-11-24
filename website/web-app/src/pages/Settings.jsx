@@ -48,7 +48,7 @@ function Settings() {
       setForm({
         name: res.data.name || '',
         timezone: res.data.timezone || 'Asia/Ho_Chi_Minh',
-        firmware_version: res.data.firmware_version || '1.6.0',
+        firmware_version: res.data.firmware_version || res.data.firmwareVersion || '1.6.0',
       })
     } catch (err) {
       console.error('Failed to load gateway:', err)
@@ -211,7 +211,7 @@ function Settings() {
                   <div className="p-3 rounded-lg bg-zinc-950/70 border border-zinc-800/80">
                     <span className="text-[11px] text-zinc-500 block">Phiên bản Firmware</span>
                     <span className="text-xs font-mono font-semibold text-emerald-400">
-                      v{gateway?.firmware_version || '1.6.0'}
+                      v{gateway?.firmware_version || gateway?.firmwareVersion || '1.6.0'}
                     </span>
                   </div>
 
@@ -225,8 +225,8 @@ function Settings() {
                   <div className="p-3 rounded-lg bg-zinc-950/70 border border-zinc-800/80">
                     <span className="text-[11px] text-zinc-500 block">Lần tương tác cuối</span>
                     <span className="text-xs font-mono font-medium text-zinc-300 tabular-nums">
-                      {gateway?.last_seen
-                        ? new Date(gateway.last_seen).toLocaleString('vi-VN')
+                      {(gateway?.last_seen || gateway?.lastSeen)
+                        ? new Date(gateway.last_seen || gateway.lastSeen).toLocaleString('vi-VN')
                         : 'Không rõ'}
                     </span>
                   </div>
@@ -267,8 +267,8 @@ function Settings() {
                   <label className="text-xs font-medium text-zinc-300">
                     Múi giờ hệ thống (Timezone)
                   </label>
-                  <div className="flex gap-2 text-[11px]">
-                    {COMMON_TIMEZONES.slice(0, 3).map((tz) => (
+                  <div className="flex flex-wrap gap-2 text-[11px]">
+                    {COMMON_TIMEZONES.slice(0, 5).map((tz) => (
                       <button
                         key={tz}
                         type="button"

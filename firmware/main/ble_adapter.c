@@ -27,6 +27,7 @@ typedef struct {
     char device_id[32];
     char mac_address[18];
     float last_value;
+    float last_humidity;
     TickType_t last_seen_tick;
     uint32_t packet_count;
     bool registered;
@@ -39,6 +40,7 @@ static SemaphoreHandle_t s_device_mutex = NULL;
 static TaskHandle_t s_ble_scan_task_handle = NULL;
 static bool s_scan_active = false;
 static bool s_scanning_enabled = true;
+static bool s_nimble_synced = false;
 
 /* Forward declarations */
 static void ble_gap_start_disc(void);
@@ -146,8 +148,8 @@ static void ble_scan_task(void *pvParameters)
         // 1. Report heartbeat to Supervisor to prevent watchdog timeout
         supervisor_report_heartbeat(TASK_HEARTBEAT_BLE);
 
-        // 2. Keep GAP discovery procedure running
-        if (s_scanning_enabled && !s_scan_active) {
+        // 2. Keep GAP discovery procedure running once NimBLE host is synced
+        if (s_nimble_synced && s_scanning_enabled && !s_scan_active) {
             ble_gap_start_disc();
         }
 
@@ -232,18 +234,6 @@ static int parse_advertisement_data(const struct ble_gap_disc_desc *disc)
         }
     }
 
-    // C. Friendly phone test advertiser fallback:
-    // If device advertises name "sensor_temp_01" (or "sensor_temp_01:<val>"), parse or default value
-    if (!found_telemetry && name_str[0] != '\0' && strncmp(name_str, "sensor_temp_01", 14) == 0) {
-        char *colon = strchr(name_str, ':');
-        if (colon != NULL) {
-            temp_val = strtof(colon + 1, NULL);
-        } else {
-            temp_val = 31.50f; // Default warm temperature to trigger Rule 1 (> 30 C)
-        }
-        found_telemetry = true;
-    }
-
     if (!found_telemetry) {
         return 0;
     }
@@ -256,8 +246,10 @@ static int parse_advertisement_data(const struct ble_gap_disc_desc *disc)
     }
 
     TickType_t now = xTaskGetTickCount();
-    // Rate limit: Max 1 event per 2 seconds per device unless value changes significantly
-    if ((now - entry->last_seen_tick < pdMS_TO_TICKS(2000)) && (fabsf(temp_val - entry->last_value) < 0.2f)) {
+    // Rate limit: Max 1 event per 2 seconds per device unless temp or humidity changes significantly
+    bool sig_change = (fabsf(temp_val - entry->last_value) >= 0.2f) ||
+                      (has_hum && fabsf(hum_val - entry->last_humidity) >= 0.5f);
+    if ((now - entry->last_seen_tick < pdMS_TO_TICKS(2000)) && !sig_change) {
         entry->packet_count++;
         unlock_devices();
         return 0;
@@ -265,6 +257,9 @@ static int parse_advertisement_data(const struct ble_gap_disc_desc *disc)
 
     entry->last_seen_tick = now;
     entry->last_value = temp_val;
+    if (has_hum) {
+        entry->last_humidity = hum_val;
+    }
     entry->packet_count++;
     char dev_id_buf[32];
     strncpy(dev_id_buf, entry->device_id, sizeof(dev_id_buf) - 1);
@@ -315,6 +310,9 @@ static int ble_gap_event(struct ble_gap_event *event, void *arg)
 
 static void ble_gap_start_disc(void)
 {
+    if (!s_nimble_synced) {
+        return;
+    }
     if (!s_scanning_enabled) {
         ESP_LOGI(TAG, "BLE scan is currently paused for Wi-Fi provisioning");
         return;
@@ -355,6 +353,7 @@ static void ble_on_sync(void)
         ESP_LOGE(TAG, "Error ensuring identity address: %d", rc);
         return;
     }
+    s_nimble_synced = true;
     ESP_LOGI(TAG, "NimBLE host synced. Starting BLE GAP scanner...");
     ble_gap_start_disc();
 }
@@ -362,6 +361,7 @@ static void ble_on_sync(void)
 static void ble_on_reset(int reason)
 {
     ESP_LOGE(TAG, "NimBLE host reset; reason=%d", reason);
+    s_nimble_synced = false;
     s_scan_active = false;
 }
 
@@ -378,9 +378,9 @@ void ble_adapter_init(void)
         s_device_mutex = xSemaphoreCreateMutex();
     }
 
-    // Default known sensor mapping
-    ble_adapter_register_device("sensor_temp_01", "AA:BB:CC:11:22:33");
-    ble_adapter_register_device("sensor_hum_01",  "AA:BB:CC:44:55:66");
+    // Default known sensor mapping (aligned with Board 2 Static Random MAC)
+    ble_adapter_register_device("sensor_temp_01", "FA:BB:CC:11:22:33");
+    ble_adapter_register_device("sensor_hum_01",  "FA:BB:CC:44:55:66");
 
     // Initialize NimBLE host stack
     esp_err_t ret = nimble_port_init();
@@ -400,7 +400,7 @@ void ble_adapter_init(void)
     // Start BLE Scan & Worker task on Core 0, priority 5
     xTaskCreatePinnedToCore(ble_scan_task,
                            "ble_scan_task",
-                           4096,
+                           5120,
                            NULL,
                            5,
                            &s_ble_scan_task_handle,
@@ -493,4 +493,30 @@ void ble_adapter_inject_test_packet(const char *device_id, float temp, float hum
         telem->timestamp = (uint32_t)time(NULL);
         event_bus_post(EVT_BLE_DEVICE_DATA, telem, sizeof(sensor_telemetry_t), false);
     }
+}
+
+void ble_adapter_sync_devices_from_json(const cJSON *devices_arr)
+{
+    if (devices_arr == NULL || !cJSON_IsArray(devices_arr)) {
+        return;
+    }
+
+    int count = cJSON_GetArraySize(devices_arr);
+    int synced = 0;
+    for (int i = 0; i < count; i++) {
+        const cJSON *item = cJSON_GetArrayItem(devices_arr, i);
+        if (!item || !cJSON_IsObject(item)) continue;
+        const cJSON *dev_id = cJSON_GetObjectItem(item, "device_id");
+        if (!dev_id) dev_id = cJSON_GetObjectItem(item, "id");
+        const cJSON *mac = cJSON_GetObjectItem(item, "mac_address");
+        if (!mac) mac = cJSON_GetObjectItem(item, "mac");
+
+        if (dev_id && cJSON_IsString(dev_id) && dev_id->valuestring[0] != '\0') {
+            const char *mac_str = (mac && cJSON_IsString(mac) && mac->valuestring[0] != '\0')
+                                  ? mac->valuestring : NULL;
+            ble_adapter_register_device(dev_id->valuestring, mac_str);
+            synced++;
+        }
+    }
+    ESP_LOGI(TAG, "[CLOUD SYNC] Synchronized %d BLE sensor(s) from JSON", synced);
 }

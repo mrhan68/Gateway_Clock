@@ -22,9 +22,43 @@
 static const char *TAG = "RULE_ENGINE";
 
 static automation_rule_t s_rules[MAX_RULES];
-static automation_rule_t s_prev_rules[MAX_RULES];
 static int s_rule_count = 0;
 static SemaphoreHandle_t s_rule_mutex = NULL;
+static int64_t s_manual_override_until_us[4] = {0};
+
+static int target_to_relay_index(const char *target_id)
+{
+    if (!target_id) return -1;
+    if (strcasecmp(target_id, "relay_1") == 0 ||
+        strcasecmp(target_id, "fan_01") == 0 ||
+        strcasecmp(target_id, "fan_relay_01") == 0 ||
+        strcasecmp(target_id, "fan") == 0) {
+        return 0;
+    }
+    if (strcasecmp(target_id, "relay_2") == 0 ||
+        strcasecmp(target_id, "heater_01") == 0 ||
+        strcasecmp(target_id, "heater_relay_01") == 0 ||
+        strcasecmp(target_id, "heater") == 0) {
+        return 1;
+    }
+    if (strcasecmp(target_id, "relay_3") == 0 ||
+        strcasecmp(target_id, "dehum_01") == 0 ||
+        strcasecmp(target_id, "dehumidifier_01") == 0 ||
+        strcasecmp(target_id, "dehum") == 0 ||
+        strcasecmp(target_id, "dehumidifier") == 0) {
+        return 2;
+    }
+    if (strcasecmp(target_id, "relay_4") == 0 ||
+        strcasecmp(target_id, "aux_01") == 0 ||
+        strcasecmp(target_id, "light_01") == 0 ||
+        strcasecmp(target_id, "office_ac_relay") == 0 ||
+        strcasecmp(target_id, "relay_ch4") == 0 ||
+        strcasecmp(target_id, "aux") == 0 ||
+        strcasecmp(target_id, "light") == 0) {
+        return 3;
+    }
+    return -1;
+}
 
 static void lock_rules(void)
 {
@@ -400,8 +434,14 @@ bool rule_engine_apply_cloud_json(const cJSON *rules_arr)
 
     lock_rules();
     int prev_count = s_rule_count;
+    automation_rule_t *prev_rules = NULL;
     if (prev_count > 0) {
-        memcpy(s_prev_rules, s_rules, sizeof(automation_rule_t) * (size_t)prev_count);
+        prev_rules = (automation_rule_t *)malloc(sizeof(automation_rule_t) * (size_t)prev_count);
+        if (prev_rules != NULL) {
+            memcpy(prev_rules, s_rules, sizeof(automation_rule_t) * (size_t)prev_count);
+        } else {
+            prev_count = 0;
+        }
     }
 
     int count = cJSON_GetArraySize(rules_arr);
@@ -419,27 +459,31 @@ bool rule_engine_apply_cloud_json(const cJSON *rules_arr)
         bool has_cool = (cool && cJSON_IsNumber(cool) && cool->valueint > 0);
 
         for (int p = 0; p < prev_count; p++) {
-            if (s_prev_rules[p].id == r.id) {
-                if (!has_hyst && s_prev_rules[p].hysteresis > 0.0f) {
-                    r.hysteresis = s_prev_rules[p].hysteresis;
+            if (prev_rules[p].id == r.id) {
+                if (!has_hyst && prev_rules[p].hysteresis > 0.0f) {
+                    r.hysteresis = prev_rules[p].hysteresis;
                 }
-                if (!has_cool && s_prev_rules[p].cooldown_s > 0) {
-                    r.cooldown_s = s_prev_rules[p].cooldown_s;
+                if (!has_cool && prev_rules[p].cooldown_s > 0) {
+                    r.cooldown_s = prev_rules[p].cooldown_s;
                 }
-                if (strcmp(s_prev_rules[p].device_id, r.device_id) == 0 &&
-                    strcmp(s_prev_rules[p].target_device_id, r.target_device_id) == 0 &&
-                    s_prev_rules[p].condition_type == r.condition_type) {
-                    r.current_state = s_prev_rules[p].current_state;
-                    r.last_triggered_mono_us = s_prev_rules[p].last_triggered_mono_us;
-                    r.lockout_until_mono_us = s_prev_rules[p].lockout_until_mono_us;
-                    r.last_triggered_ts = s_prev_rules[p].last_triggered_ts;
-                    r.lockout_until_ts = s_prev_rules[p].lockout_until_ts;
+                if (strcmp(prev_rules[p].device_id, r.device_id) == 0 &&
+                    strcmp(prev_rules[p].target_device_id, r.target_device_id) == 0 &&
+                    prev_rules[p].condition_type == r.condition_type) {
+                    r.current_state = prev_rules[p].current_state;
+                    r.last_triggered_mono_us = prev_rules[p].last_triggered_mono_us;
+                    r.lockout_until_mono_us = prev_rules[p].lockout_until_mono_us;
+                    r.last_triggered_ts = prev_rules[p].last_triggered_ts;
+                    r.lockout_until_ts = prev_rules[p].lockout_until_ts;
                 }
                 break;
             }
         }
 
         s_rules[s_rule_count++] = r;
+    }
+
+    if (prev_rules != NULL) {
+        free(prev_rules);
     }
 
     save_rules_to_storage();
@@ -587,7 +631,7 @@ int rule_engine_get_rules(automation_rule_t *dest, int max_rules)
     return count;
 }
 
-static void post_rule_action(const char *target, const char *cmd, int rule_id)
+static void post_rule_action(const char *target, const char *cmd, int rule_id, const char *reason)
 {
     rule_action_request_t *req = (rule_action_request_t *)malloc(sizeof(rule_action_request_t));
     if (req != NULL) {
@@ -596,6 +640,9 @@ static void post_rule_action(const char *target, const char *cmd, int rule_id)
                  rule_id, (unsigned long)get_current_epoch());
         strncpy(req->target_device_id, target, sizeof(req->target_device_id) - 1);
         strncpy(req->action_command, cmd, sizeof(req->action_command) - 1);
+        if (reason != NULL && reason[0] != '\0') {
+            strncpy(req->reason, reason, sizeof(req->reason) - 1);
+        }
         req->source_rule_id = rule_id;
         req->timestamp = get_current_epoch();
 
@@ -627,13 +674,24 @@ int rule_engine_evaluate_telemetry(const sensor_telemetry_t *telem)
         automation_rule_t *r = &s_rules[i];
         if (!r->is_active) continue;
 
-        if (strcmp(r->device_id, telem->device_id) != 0) {
+        bool device_match = (strcmp(r->device_id, telem->device_id) == 0) ||
+                            (strstr(r->device_id, "hum") != NULL &&
+                             telem->humidity > 0.0f &&
+                             strstr(telem->device_id, "temp") != NULL);
+        if (!device_match) {
             continue;
         }
 
         // FSD §4.7.5: Check 5-minute safety lockout (Monotonic clock)
         if (now_mono < r->lockout_until_mono_us || (r->lockout_until_ts > 0 && now < r->lockout_until_ts)) {
             ESP_LOGD(TAG, "Rule #%d is in lockout, skipping", r->id);
+            continue;
+        }
+
+        // Manual Override Priority (Human Always Wins over Automation for 30 minutes)
+        int r_idx = target_to_relay_index(r->target_device_id);
+        if (r_idx >= 0 && now_mono < s_manual_override_until_us[r_idx]) {
+            ESP_LOGD(TAG, "Rule #%d skipped: relay_%d in manual override", r->id, r_idx + 1);
             continue;
         }
 
@@ -660,7 +718,16 @@ int rule_engine_evaluate_telemetry(const sensor_telemetry_t *telem)
                         const char *cmd = (strlen(r->action_command) > 0) ? r->action_command : "ON";
                         ESP_LOGI(TAG, ">>> [GT EDGE-UP] Rule #%d TRIGGERED! Sensor '%s' val=%.2f >= thr=%.2f -> '%s' CMD='%s'",
                                  r->id, r->device_id, val, r->threshold, r->target_device_id, cmd);
-                        post_rule_action(r->target_device_id, cmd, r->id);
+                        post_rule_action(r->target_device_id, cmd, r->id, "RULE_THRESHOLD_TRIGGER");
+                        if (r_idx == 0 && strcasecmp(cmd, "ON") == 0) {
+                            // Cooling Safety Override: relay_controller immediately turns OFF relay_2 (Heater).
+                            // Clear current_state on any rule targeting relay_2 so this pass doesn't emit a duplicate OFF.
+                            for (int j = 0; j < s_rule_count; j++) {
+                                if (target_to_relay_index(s_rules[j].target_device_id) == 1) {
+                                    s_rules[j].current_state = false;
+                                }
+                            }
+                        }
                     }
                 }
             } else if (val <= (r->threshold - hyst)) {
@@ -670,7 +737,7 @@ int rule_engine_evaluate_telemetry(const sensor_telemetry_t *telem)
                     matched_count++;
                     ESP_LOGI(TAG, ">>> [GT EDGE-DOWN] Rule #%d RELEASED! Sensor '%s' val=%.2f <= release=%.2f -> '%s' CMD='OFF'",
                              r->id, r->device_id, val, r->threshold - hyst, r->target_device_id);
-                    post_rule_action(r->target_device_id, "OFF", r->id);
+                    post_rule_action(r->target_device_id, "OFF", r->id, "RULE_HYSTERESIS_RELEASE");
                 }
             }
             // In deadband (threshold - hyst < val < threshold): preserve current state
@@ -687,7 +754,7 @@ int rule_engine_evaluate_telemetry(const sensor_telemetry_t *telem)
                         const char *cmd = (strlen(r->action_command) > 0) ? r->action_command : "ON";
                         ESP_LOGI(TAG, ">>> [LT EDGE-UP] Rule #%d TRIGGERED! Sensor '%s' val=%.2f <= thr=%.2f -> '%s' CMD='%s'",
                                  r->id, r->device_id, val, r->threshold, r->target_device_id, cmd);
-                        post_rule_action(r->target_device_id, cmd, r->id);
+                        post_rule_action(r->target_device_id, cmd, r->id, "RULE_THRESHOLD_TRIGGER");
                     }
                 }
             } else if (val >= (r->threshold + hyst)) {
@@ -697,7 +764,7 @@ int rule_engine_evaluate_telemetry(const sensor_telemetry_t *telem)
                     matched_count++;
                     ESP_LOGI(TAG, ">>> [LT EDGE-DOWN] Rule #%d RELEASED! Sensor '%s' val=%.2f >= release=%.2f -> '%s' CMD='OFF'",
                              r->id, r->device_id, val, r->threshold + hyst, r->target_device_id);
-                    post_rule_action(r->target_device_id, "OFF", r->id);
+                    post_rule_action(r->target_device_id, "OFF", r->id, "RULE_HYSTERESIS_RELEASE");
                 }
             }
             // In deadband (threshold < val < threshold + hyst): preserve current state
@@ -723,7 +790,7 @@ static void on_schedule_automation(const gateway_event_t *evt)
         ESP_LOGI(TAG, "[RULE_ENGINE] Automation schedule triggered: Target='%s' CMD='%s'",
                  rule->target_device_id, rule->action_command);
 
-        post_rule_action(rule->target_device_id, rule->action_command, rule->id);
+        post_rule_action(rule->target_device_id, rule->action_command, rule->id, "SCHEDULE_AUTOMATION");
     }
 }
 
@@ -731,18 +798,24 @@ static void on_rule_action_request(const gateway_event_t *evt)
 {
     if (evt != NULL && evt->data != NULL && evt->len >= sizeof(rule_action_request_t)) {
         const rule_action_request_t *act = (const rule_action_request_t *)evt->data;
-        ESP_LOGI(TAG, "[ACTION_EXECUTOR] >>> Triggered Action on Target='%s': Command='%s' (Rule #%d)",
-                 act->target_device_id, act->action_command, act->source_rule_id);
+        const char *reason = (act->reason[0] != '\0') ? act->reason :
+                             ((act->source_rule_id > 0) ?
+                                 ((strcasecmp(act->action_command, "OFF") == 0) ? "RULE_HYSTERESIS_RELEASE" : "RULE_THRESHOLD_TRIGGER")
+                                 : "MANUAL_CMD");
+        const char *status_str = (strcmp(reason, "RULE_HYSTERESIS_RELEASE") == 0) ? "RELEASED" : "TRIGGERED";
+
+        ESP_LOGI(TAG, "[ACTION_EXECUTOR] >>> Action on Target='%s': Command='%s' (Rule #%d, Reason=%s)",
+                 act->target_device_id, act->action_command, act->source_rule_id, reason);
 
         // Notify cloud via MQTT if available
         if (mqtt_adapter_is_connected()) {
             char topic[96];
-            char payload[160];
+            char payload[224];
             const char *cmd_id = (strncmp(act->command_id, "cmd-", 4) == 0) ? act->command_id : "cmd-webui";
             snprintf(topic, sizeof(topic), "device/%s/action", act->target_device_id);
             snprintf(payload, sizeof(payload),
-                     "{\"command\":\"%s\",\"source_rule\":%d,\"status\":\"TRIGGERED\",\"command_id\":\"%s\"}",
-                     act->action_command, act->source_rule_id, cmd_id);
+                     "{\"command\":\"%s\",\"source_rule\":%d,\"status\":\"%s\",\"reason\":\"%s\",\"command_id\":\"%s\"}",
+                     act->action_command, act->source_rule_id, status_str, reason, cmd_id);
             mqtt_adapter_publish(topic, payload);
         }
     }
@@ -763,22 +836,68 @@ static void on_relay_state_changed(const gateway_event_t *evt)
     const relay_state_changed_t *rst = (const relay_state_changed_t *)evt->data;
     uint32_t now = get_current_epoch();
     int64_t now_mono = esp_timer_get_time();
+    int idx = (rst->relay_id >= 1 && rst->relay_id <= 4)
+              ? (rst->relay_id - 1)
+              : target_to_relay_index(rst->device_id);
 
     lock_rules();
-    for (int i = 0; i < s_rule_count; i++) {
-        automation_rule_t *r = &s_rules[i];
-        if (strcmp(r->target_device_id, rst->device_id) == 0) {
-            // Two-way synchronization: reflect actual hardware state
-            r->current_state = rst->state;
+    if (strcmp(rst->reason, "MANUAL_CMD") == 0) {
+        if (rst->state) {
+            if (idx >= 0 && idx < 4) {
+                s_manual_override_until_us[idx] = now_mono + RULE_MANUAL_OVERRIDE_US;
+            }
+            for (int i = 0; i < s_rule_count; i++) {
+                automation_rule_t *r = &s_rules[i];
+                if (strcmp(r->target_device_id, rst->device_id) == 0 ||
+                    (idx >= 0 && target_to_relay_index(r->target_device_id) == idx)) {
+                    r->current_state = false;
+                }
+            }
+        } else {
+            bool any_rule_was_active = false;
+            for (int i = 0; i < s_rule_count; i++) {
+                automation_rule_t *r = &s_rules[i];
+                if (strcmp(r->target_device_id, rst->device_id) == 0 ||
+                    (idx >= 0 && target_to_relay_index(r->target_device_id) == idx)) {
+                    if (r->current_state) {
+                        any_rule_was_active = true;
+                        r->current_state = false;
+                    }
+                }
+            }
+            if (idx >= 0 && idx < 4) {
+                if (any_rule_was_active) {
+                    s_manual_override_until_us[idx] = now_mono + RULE_MANUAL_OVERRIDE_US;
+                } else {
+                    s_manual_override_until_us[idx] = 0;
+                }
+            }
+        }
+    } else {
+        if (idx >= 0 && idx < 4 &&
+            (strcmp(rst->reason, "SAFETY_CUTOFF") == 0 ||
+             strcmp(rst->reason, "INTERLOCK_CUTOFF") == 0 ||
+             strcmp(rst->reason, "SENSOR_OFFLINE") == 0 ||
+             strcmp(rst->reason, "EMERGENCY_SHUTDOWN") == 0 ||
+             strcmp(rst->reason, "COOLING_OVERRIDE") == 0)) {
+            s_manual_override_until_us[idx] = 0;
+        }
+        for (int i = 0; i < s_rule_count; i++) {
+            automation_rule_t *r = &s_rules[i];
+            if (strcmp(r->target_device_id, rst->device_id) == 0 ||
+                (idx >= 0 && target_to_relay_index(r->target_device_id) == idx)) {
+                // Two-way synchronization: reflect actual hardware state
+                r->current_state = rst->state;
 
-            // FSD §4.7.5: Engage 5-minute safety lockout if shut down by safety or interlock
-            if (!rst->state && (strcmp(rst->reason, "SAFETY_CUTOFF") == 0 ||
-                               strcmp(rst->reason, "INTERLOCK_CUTOFF") == 0 ||
-                               strcmp(rst->reason, "SENSOR_OFFLINE") == 0)) {
-                r->lockout_until_mono_us = now_mono + 300000000ULL; // 5-minute lockout (300s)
-                r->lockout_until_ts = now + 300;
-                ESP_LOGW(TAG, "[SAFETY LOCKOUT] Rule #%d (target '%s') locked out for 300s due to %s",
-                         r->id, rst->device_id, rst->reason);
+                // FSD §4.7.5: Engage 5-minute safety lockout if shut down by safety or interlock
+                if (!rst->state && (strcmp(rst->reason, "SAFETY_CUTOFF") == 0 ||
+                                   strcmp(rst->reason, "INTERLOCK_CUTOFF") == 0 ||
+                                   strcmp(rst->reason, "SENSOR_OFFLINE") == 0)) {
+                    r->lockout_until_mono_us = now_mono + 300000000ULL; // 5-minute lockout (300s)
+                    r->lockout_until_ts = now + 300;
+                    ESP_LOGW(TAG, "[SAFETY LOCKOUT] Rule #%d (target '%s') locked out for 300s due to %s",
+                             r->id, rst->device_id, rst->reason);
+                }
             }
         }
     }
@@ -825,7 +944,7 @@ static void on_device_offline_alert(const gateway_event_t *evt)
                 ESP_LOGW(TAG, "[FAIL-SAFE] Sensor '%s' offline/corrupted alert received. Rule #%d locked out for 300s",
                          alert->device_id, r->id);
                 // Post immediate shutoff for target device
-                post_rule_action(r->target_device_id, "OFF", r->id);
+                post_rule_action(r->target_device_id, "OFF", r->id, "SENSOR_OFFLINE");
             }
         }
         unlock_rules();
@@ -862,6 +981,7 @@ void rule_engine_init(void)
 void rule_engine_reset_lockouts(void)
 {
     lock_rules();
+    memset(s_manual_override_until_us, 0, sizeof(s_manual_override_until_us));
     for (int i = 0; i < s_rule_count; i++) {
         s_rules[i].lockout_until_ts = 0;
         s_rules[i].lockout_until_mono_us = 0;

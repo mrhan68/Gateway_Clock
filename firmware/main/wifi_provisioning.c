@@ -479,7 +479,7 @@ static void start_softap_internal(bool force_reconfig)
     esp_wifi_set_ps(WIFI_PS_NONE); // Disable modem sleep so SoftAP never drops beacons
 
     stop_dns_only();
-    if (!s_is_connected) {
+    if (!s_is_connected && (!wifi_provisioning_is_configured() || s_sta_retry_count >= 3)) {
         xTaskCreate(dns_server_task, "dns_task", 4096, NULL, 5, &s_dns_task_handle);
         // WP-09: Tạm dừng BLE scanner để nhường 100% tài nguyên RF cho SoftAP bắt tay điện thoại
         ble_adapter_pause_scan();
@@ -520,9 +520,9 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
         event_bus_post(EVT_WIFI_LOST, NULL, 0, false);
 
         s_sta_retry_count++;
-        if (s_sta_retry_count >= 3 && !s_in_softap_mode) {
-            ESP_LOGW(TAG, "STA connection failed (%d retries). Starting SoftAP fallback...", s_sta_retry_count);
-            start_softap_internal(false);
+        if (s_sta_retry_count == 3) {
+            ESP_LOGW(TAG, "STA connection failed (%d retries). Starting SoftAP captive portal fallback...", s_sta_retry_count);
+            start_softap_internal(true);
         }
 
         if (wifi_provisioning_is_configured()) {

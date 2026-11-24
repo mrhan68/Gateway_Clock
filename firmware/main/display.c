@@ -309,8 +309,17 @@ void display_set_screen(uint8_t screen_index)
 // Screen Render Logic (Physical OLED + Serial Virtual Console)
 // =========================================================================
 
+static int get_upcoming_schedules(const struct tm *ti, schedule_entry_t *out_entries, int max_out)
+{
+    return scheduler_get_upcoming_entries(ti, out_entries, max_out);
+}
+
+static schedule_entry_t s_render_upcoming[3];
+
 void display_render(void)
 {
+    if (s_display_mutex != NULL) xSemaphoreTake(s_display_mutex, portMAX_DELAY);
+
     char time_str[32] = {0};
     app_rtc_get_formatted_time(time_str, sizeof(time_str));
 
@@ -324,6 +333,11 @@ void display_render(void)
     bool wifi_ok = wifi_provisioning_is_connected();
     bool wifi_ap = wifi_provisioning_is_softap();
     bool mqtt_ok = mqtt_adapter_is_connected();
+
+    int up_count = 0;
+    if (!s_alarm_active && s_current_screen == DISPLAY_SCREEN_UPCOMING_EVENT) {
+        up_count = get_upcoming_schedules(&ti, s_render_upcoming, 3);
+    }
 
     // 1. Kết xuất đồ họa lên màn hình OLED vật lý SSD1327 (128x128)
     if (s_oled_detected) {
@@ -385,9 +399,25 @@ void display_render(void)
                 case DISPLAY_SCREEN_UPCOMING_EVENT: {
                     ssd1327_draw_string(4, 4, "UPCOMING EVENTS", 0xF, 1);
                     ssd1327_draw_hline(0, 16, 128, 0x6);
-                    ssd1327_draw_string(6, 26, "06:30 Wakeup", 0xE, 1);
-                    ssd1327_draw_string(6, 46, "17:30 Fan Auto", 0xC, 1);
-                    ssd1327_draw_string(6, 66, "21:00 Aux Off", 0xA, 1);
+                    if (up_count == 0) {
+                        ssd1327_draw_string(6, 46, "No active schedules", 0xA, 1);
+                    } else {
+                        static const uint8_t row_y[3] = {26, 46, 66};
+                        static const uint8_t row_gray[3] = {0xE, 0xC, 0xA};
+                        for (int i = 0; i < up_count; i++) {
+                            char label[68];
+                            if (s_render_upcoming[i].title[0] != '\0') {
+                                snprintf(label, sizeof(label), "%s", s_render_upcoming[i].title);
+                            } else {
+                                snprintf(label, sizeof(label), "%s:%s",
+                                         s_render_upcoming[i].target_device_id, s_render_upcoming[i].action_command);
+                            }
+                            char line_buf[32];
+                            snprintf(line_buf, sizeof(line_buf), "%02d:%02d %.13s",
+                                     s_render_upcoming[i].hour, s_render_upcoming[i].minute, label);
+                            ssd1327_draw_string(6, row_y[i], line_buf, row_gray[i], 1);
+                        }
+                    }
                     ssd1327_draw_hline(0, 98, 128, 0x4);
                     ssd1327_draw_string(6, 108, "[SCREEN 1/3]", 0x8, 1);
                     break;
@@ -442,6 +472,7 @@ void display_render(void)
         printf("   [Bấm Nút 1 (GPIO 0): SNOOZE 9 PHÚT]\n");
         printf("==================================================\n\n");
         fflush(stdout);
+        if (s_display_mutex != NULL) xSemaphoreGive(s_display_mutex);
         return;
     }
 
@@ -471,9 +502,21 @@ void display_render(void)
             printf("│ [MÀN HÌNH 1: LỊCH BIỂU SẮP TỚI]              │\n");
             printf("│ Hiện tại   : %s                 │\n", time_str);
             printf("│ Sắp tới:                                     │\n");
-            printf("│   ⏰ 06:30 : Báo thức thức dậy                │\n");
-            printf("│   🔔 17:30 : Bật đèn ban công (Tự động)       │\n");
-            printf("│   📅 21:00 : Đọc sách                         │\n");
+            if (up_count == 0) {
+                printf("│   No active schedules                        │\n");
+            } else {
+                for (int i = 0; i < up_count; i++) {
+                    char label[68];
+                    if (s_render_upcoming[i].title[0] != '\0') {
+                        snprintf(label, sizeof(label), "%s", s_render_upcoming[i].title);
+                    } else {
+                        snprintf(label, sizeof(label), "%s:%s",
+                                 s_render_upcoming[i].target_device_id, s_render_upcoming[i].action_command);
+                    }
+                    printf("│   %02d:%02d %-36.36s │\n",
+                           s_render_upcoming[i].hour, s_render_upcoming[i].minute, label);
+                }
+            }
             printf("└──────────────────────────────────────────────┘\n");
             break;
         }
@@ -510,6 +553,7 @@ void display_render(void)
             break;
     }
     fflush(stdout);
+    if (s_display_mutex != NULL) xSemaphoreGive(s_display_mutex);
 }
 
 static void display_task(void *pvParameters)
@@ -768,6 +812,7 @@ void display_init(void)
     event_bus_register_handler(EVT_BUTTON_ALARM_STOP, on_alarm_stop);
     event_bus_register_handler(EVT_BUTTON_SCREEN_NEXT, on_screen_next);
     event_bus_register_handler(EVT_DISPLAY_UPDATE_REQUEST, on_display_update_request);
+    event_bus_register_handler(EVT_CONFIG_UPDATED_FROM_CLOUD, on_display_update_request);
     event_bus_register_handler(EVT_BLE_DEVICE_DATA, on_ble_device_data);
     event_bus_register_handler(EVT_RELAY_STATE_CHANGED, on_relay_state_changed);
     event_bus_register_handler(EVT_WIFI_CONNECTED, on_wifi_connected_display);
@@ -785,11 +830,11 @@ void display_init(void)
     // 5. Đạt chuẩn KPI-BOOT-01: Vẽ màn hình ngay lập tức (<1.5s độc lập mạng)
     display_render();
 
-    // 6. Tạo Task Display trên Core 0, Priority 3, Stack 4096 (FSD §4.9.4 & §4.14)
+    // 6. Tạo Task Display trên Core 0, Priority 3, Stack 5120 (FSD §4.9.4 & §4.14)
     xTaskCreatePinnedToCore(
         display_task,
         "display_task",
-        4096,
+        5120,
         NULL,
         DISPLAY_TASK_PRIO,
         &s_display_task_handle,

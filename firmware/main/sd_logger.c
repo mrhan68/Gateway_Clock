@@ -23,7 +23,7 @@
 
 static const char *TAG = "SD_LOGGER";
 
-#define SD_QUEUE_DEPTH          30
+#define SD_QUEUE_DEPTH          16
 #define SD_TASK_PRIO            4
 #define SD_TASK_CORE            1
 #define SD_BACKFILL_BATCH_SIZE  20
@@ -32,8 +32,10 @@ typedef struct {
     uint8_t  record_type;
     uint8_t  flags;
     uint32_t timestamp;
-    char     device_id[16];
+    char     device_id[32];
     float    value;
+    float    humidity;
+    bool     has_humidity;
     bool     valid;
 } sd_log_item_t;
 
@@ -43,6 +45,9 @@ static sdmmc_card_t *s_sd_card = NULL;
 static QueueHandle_t s_sd_log_queue = NULL;
 static SemaphoreHandle_t s_sd_mutex = NULL;
 static TaskHandle_t s_sd_task_handle = NULL;
+static bool s_sync_stats_valid = false;
+static uint32_t s_cached_total_records = 0;
+static uint32_t s_cached_unacked_count = 0;
 
 #define SD_RAM_FALLBACK_CAPACITY 50
 
@@ -108,14 +113,19 @@ bool sd_logger_is_mounted(void)
     return s_sd_mounted;
 }
 
-static void ensure_sync_queue_header(FILE *f, sync_queue_header_t *out_hdr)
+static bool ensure_sync_queue_header(FILE *f, sync_queue_header_t *out_hdr)
 {
-    fseek(f, 0, SEEK_END);
+    memset(out_hdr, 0, sizeof(sync_queue_header_t));
+    if (fseek(f, 0, SEEK_END) != 0) {
+        return false;
+    }
     long size = ftell(f);
+    if (size < 0) {
+        return false;
+    }
 
     if (size < (long)sizeof(sync_queue_header_t)) {
         // Khởi tạo file mới với 24-byte header chuẩn (FSD §4.11.3)
-        memset(out_hdr, 0, sizeof(sync_queue_header_t));
         out_hdr->magic = SYNC_QUEUE_MAGIC;
         out_hdr->write_offset = sizeof(sync_queue_header_t); // Bắt đầu ghi tại byte 24
         out_hdr->read_offset = sizeof(sync_queue_header_t);  // Bắt đầu đọc tại byte 24
@@ -124,11 +134,18 @@ static void ensure_sync_queue_header(FILE *f, sync_queue_header_t *out_hdr)
         out_hdr->crc32 = calculate_crc32((const uint8_t *)out_hdr, 20);
 
         fseek(f, 0, SEEK_SET);
-        fwrite(out_hdr, 1, sizeof(sync_queue_header_t), f);
+        if (fwrite(out_hdr, 1, sizeof(sync_queue_header_t), f) != sizeof(sync_queue_header_t)) {
+            return false;
+        }
         fflush(f);
     } else {
         fseek(f, 0, SEEK_SET);
-        fread(out_hdr, 1, sizeof(sync_queue_header_t), f);
+        size_t rd = fread(out_hdr, 1, sizeof(sync_queue_header_t), f);
+        if (rd != sizeof(sync_queue_header_t)) {
+            // Lỗi đọc SPI tạm thời (0x107): KHÔNG được ghi đè xóa header cũ
+            ESP_LOGW(TAG, "Transient read error on sync_queue.bin header (rd=%zu), preserving file", rd);
+            return false;
+        }
         uint32_t expected_crc = calculate_crc32((const uint8_t *)out_hdr, 20);
         if (out_hdr->magic != SYNC_QUEUE_MAGIC || out_hdr->crc32 != expected_crc) {
             ESP_LOGW(TAG, "Sync queue header corrupt or invalid magic! Reinitializing...");
@@ -139,10 +156,17 @@ static void ensure_sync_queue_header(FILE *f, sync_queue_header_t *out_hdr)
             out_hdr->unacked_count = 0;
             out_hdr->crc32 = calculate_crc32((const uint8_t *)out_hdr, 20);
             fseek(f, 0, SEEK_SET);
-            fwrite(out_hdr, 1, sizeof(sync_queue_header_t), f);
+            if (fwrite(out_hdr, 1, sizeof(sync_queue_header_t), f) != sizeof(sync_queue_header_t)) {
+                return false;
+            }
             fflush(f);
         }
     }
+
+    s_cached_total_records = out_hdr->total_records;
+    s_cached_unacked_count = out_hdr->unacked_count;
+    s_sync_stats_valid = true;
+    return true;
 }
 
 static void append_sync_queue_record(const sd_log_item_t *item)
@@ -163,7 +187,11 @@ static void append_sync_queue_record(const sd_log_item_t *item)
     }
 
     sync_queue_header_t hdr;
-    ensure_sync_queue_header(f, &hdr);
+    if (!ensure_sync_queue_header(f, &hdr)) {
+        fclose(f);
+        if (s_sd_mutex) xSemaphoreGive(s_sd_mutex);
+        return;
+    }
 
     // Đóng gói 172-byte binary record chuẩn FSD §4.11.3 / test_sync_queue.py
     sync_queue_record_t rec;
@@ -173,8 +201,10 @@ static void append_sync_queue_record(const sd_log_item_t *item)
     rec.flags = item->flags;
     strncpy(rec.device_id, item->device_id, sizeof(rec.device_id) - 1);
     rec.device_id[sizeof(rec.device_id) - 1] = '\0';
-    snprintf(rec.payload, sizeof(rec.payload), "{\"device_id\":\"%s\",\"val\":%.2f,\"ts\":%lu}",
-             item->device_id, item->value, (unsigned long)item->timestamp);
+    snprintf(rec.payload, sizeof(rec.payload),
+             "{\"device_id\":\"%s\",\"temperature\":%.2f,\"humidity\":%.2f,"
+             "\"ts\":%lu}",
+             item->device_id, item->value, item->humidity, (unsigned long)item->timestamp);
     rec.payload_len = (uint16_t)strlen(rec.payload);
     rec.crc32 = calculate_crc32((const uint8_t *)&rec, 168);
 
@@ -191,6 +221,10 @@ static void append_sync_queue_record(const sd_log_item_t *item)
     fseek(f, 0, SEEK_SET);
     fwrite(&hdr, 1, sizeof(sync_queue_header_t), f);
     fflush(f);
+
+    s_cached_total_records = hdr.total_records;
+    s_cached_unacked_count = hdr.unacked_count;
+    s_sync_stats_valid = true;
 
     fclose(f);
     if (s_sd_mutex) xSemaphoreGive(s_sd_mutex);
@@ -245,8 +279,9 @@ static void append_telemetry_csv(const sd_log_item_t *item)
 
     FILE *f = fopen(filepath, "a");
     if (f) {
-        fprintf(f, "%lu,%s,%.2f,%s\n",
-                (unsigned long)item->timestamp, item->device_id, item->value, item->valid ? "OK" : "ERR");
+        fprintf(f, "%lu,%s,%.2f,%.2f,%s\n",
+                (unsigned long)item->timestamp, item->device_id,
+                item->value, item->humidity, item->valid ? "OK" : "ERR");
         fclose(f);
     }
 
@@ -274,17 +309,20 @@ void sd_logger_append_crash_log(const char *crash_text)
     if (s_sd_mutex) xSemaphoreGive(s_sd_mutex);
 }
 
-esp_err_t sd_logger_enqueue_telemetry(const char *device_id, float value, uint32_t timestamp)
+esp_err_t sd_logger_enqueue_env_telemetry(const char *device_id, float temp, float hum, bool has_hum, uint32_t timestamp)
 {
     if (!s_sd_log_queue) return ESP_ERR_INVALID_STATE;
 
     sd_log_item_t item;
+    memset(&item, 0, sizeof(item));
     item.record_type = SYNC_REC_TYPE_TELEMETRY;
     item.flags = 0;
     item.timestamp = timestamp ? timestamp : (uint32_t)(esp_timer_get_time() / 1000000ULL);
     strncpy(item.device_id, device_id ? device_id : "unknown", sizeof(item.device_id) - 1);
     item.device_id[sizeof(item.device_id) - 1] = '\0';
-    item.value = value;
+    item.value = temp;
+    item.humidity = hum;
+    item.has_humidity = has_hum;
     item.valid = true;
 
     if (xQueueSend(s_sd_log_queue, &item, pdMS_TO_TICKS(50)) != pdTRUE) {
@@ -294,17 +332,25 @@ esp_err_t sd_logger_enqueue_telemetry(const char *device_id, float value, uint32
     return ESP_OK;
 }
 
+esp_err_t sd_logger_enqueue_telemetry(const char *device_id, float value, uint32_t timestamp)
+{
+    return sd_logger_enqueue_env_telemetry(device_id, value, 0.0f, false, timestamp);
+}
+
 esp_err_t sd_logger_enqueue_event(uint8_t record_type, const char *device_id, float value, uint32_t timestamp)
 {
     if (!s_sd_log_queue) return ESP_ERR_INVALID_STATE;
 
     sd_log_item_t item;
+    memset(&item, 0, sizeof(item));
     item.record_type = record_type;
     item.flags = 0;
     item.timestamp = timestamp ? timestamp : (uint32_t)(esp_timer_get_time() / 1000000ULL);
     strncpy(item.device_id, device_id ? device_id : "sys_event", sizeof(item.device_id) - 1);
     item.device_id[sizeof(item.device_id) - 1] = '\0';
     item.value = value;
+    item.humidity = 0.0f;
+    item.has_humidity = false;
     item.valid = true;
 
     if (xQueueSend(s_sd_log_queue, &item, pdMS_TO_TICKS(50)) != pdTRUE) {
@@ -319,17 +365,27 @@ void sd_logger_trigger_backfill(void)
     if (!s_sd_mounted || !mqtt_adapter_is_connected()) {
         return;
     }
+    if (s_sync_stats_valid && s_cached_unacked_count == 0) {
+        return;
+    }
 
     if (s_sd_mutex) xSemaphoreTake(s_sd_mutex, portMAX_DELAY);
 
     FILE *f = fopen(SD_SYNC_QUEUE_PATH, "r+b");
     if (!f) {
+        s_cached_total_records = 0;
+        s_cached_unacked_count = 0;
+        s_sync_stats_valid = true;
         if (s_sd_mutex) xSemaphoreGive(s_sd_mutex);
         return;
     }
 
     sync_queue_header_t hdr;
-    ensure_sync_queue_header(f, &hdr);
+    if (!ensure_sync_queue_header(f, &hdr)) {
+        fclose(f);
+        if (s_sd_mutex) xSemaphoreGive(s_sd_mutex);
+        return;
+    }
 
     if (hdr.unacked_count > 0 && hdr.read_offset < hdr.write_offset) {
         ESP_LOGI(TAG, "[BACKFILL] Starting sync backlog (%lu unacked records)...",
@@ -346,7 +402,11 @@ void sd_logger_trigger_backfill(void)
             uint32_t expected_crc = calculate_crc32((const uint8_t *)&rec, 168);
             if (rec.crc32 == expected_crc) {
                 // Publish bản tin telemetry bù lên MQTT broker
-                mqtt_adapter_publish("telemetry/batch", rec.payload);
+                if (!mqtt_adapter_publish("telemetry/batch", rec.payload)) {
+                    ESP_LOGW(TAG, "[BACKFILL] Publish failed at offset %lu, stopping batch without advancing offset",
+                             (unsigned long)hdr.read_offset);
+                    break;
+                }
             } else {
                 ESP_LOGW(TAG, "[BACKFILL] Record at offset %lu corrupt, skipping", (unsigned long)hdr.read_offset);
             }
@@ -356,14 +416,24 @@ void sd_logger_trigger_backfill(void)
             processed++;
         }
 
+        if (hdr.read_offset >= hdr.write_offset) {
+            hdr.unacked_count = 0;
+        }
+
         // Cập nhật lại header sau batch
         hdr.crc32 = calculate_crc32((const uint8_t *)&hdr, 20);
         fseek(f, 0, SEEK_SET);
         fwrite(&hdr, 1, sizeof(sync_queue_header_t), f);
         fflush(f);
 
+        s_cached_total_records = hdr.total_records;
+        s_cached_unacked_count = hdr.unacked_count;
+        s_sync_stats_valid = true;
+
         ESP_LOGI(TAG, "[BACKFILL] Backfilled %lu records (Remaining unacked: %lu)",
                  (unsigned long)processed, (unsigned long)hdr.unacked_count);
+    } else {
+        s_cached_unacked_count = 0;
     }
 
     fclose(f);
@@ -379,10 +449,19 @@ bool sd_logger_get_sync_queue_stats(uint32_t *total_records, uint32_t *unacked_c
         return false;
     }
 
+    if (s_sync_stats_valid) {
+        if (total_records != NULL) *total_records = s_cached_total_records;
+        if (unacked_count != NULL) *unacked_count = s_cached_unacked_count;
+        return true;
+    }
+
     if (s_sd_mutex) xSemaphoreTake(s_sd_mutex, portMAX_DELAY);
 
     FILE *f = fopen(SD_SYNC_QUEUE_PATH, "rb");
     if (!f) {
+        s_cached_total_records = 0;
+        s_cached_unacked_count = 0;
+        s_sync_stats_valid = true;
         if (s_sd_mutex) xSemaphoreGive(s_sd_mutex);
         return true;
     }
@@ -397,6 +476,10 @@ bool sd_logger_get_sync_queue_stats(uint32_t *total_records, uint32_t *unacked_c
         hdr.crc32 != calculate_crc32((const uint8_t *)&hdr, 20)) {
         return false;
     }
+
+    s_cached_total_records = hdr.total_records;
+    s_cached_unacked_count = hdr.unacked_count;
+    s_sync_stats_valid = true;
 
     if (total_records != NULL) *total_records = hdr.total_records;
     if (unacked_count != NULL) *unacked_count = hdr.unacked_count;
@@ -446,7 +529,7 @@ static void on_ble_device_data(const gateway_event_t *evt)
 {
     if (evt != NULL && evt->data != NULL && evt->len >= sizeof(ble_telemetry_t)) {
         const ble_telemetry_t *t = (const ble_telemetry_t *)evt->data;
-        sd_logger_enqueue_telemetry(t->device_id, t->value, t->timestamp);
+        sd_logger_enqueue_env_telemetry(t->device_id, t->temperature, t->humidity, (t->humidity > 0.0f), t->timestamp);
     }
 }
 
@@ -471,6 +554,7 @@ void sd_logger_unmount(void)
         esp_vfs_fat_unregister_path(SDCARD_MOUNT_POINT);
     }
     s_sd_mounted = false;
+    s_sync_stats_valid = false;
     s_last_remount_attempt_ms = esp_timer_get_time() / 1000ULL;
     if (s_sd_mutex) xSemaphoreGive(s_sd_mutex);
 }
@@ -478,6 +562,7 @@ void sd_logger_unmount(void)
 esp_err_t sd_logger_remount(void)
 {
     if (s_sd_mutex) xSemaphoreTake(s_sd_mutex, portMAX_DELAY);
+    s_sync_stats_valid = false;
     esp_log_level_set("vfs_fat_sdmmc", ESP_LOG_DEBUG);
     esp_log_level_set("vfs_fat", ESP_LOG_DEBUG);
     if (s_sd_card != NULL) {
@@ -548,8 +633,15 @@ esp_err_t sd_logger_remount(void)
     sd_status_t *status = (sd_status_t *)malloc(sizeof(sd_status_t));
     if (status) {
         status->mounted = s_sd_mounted;
-        status->free_kb = s_sd_mounted ? 1000000 : 0;
-        status->total_kb = s_sd_mounted ? 2000000 : 0;
+        status->free_kb = 0;
+        status->total_kb = 0;
+        if (s_sd_mounted) {
+            uint64_t total_bytes = 0, free_bytes = 0;
+            if (esp_vfs_fat_info(SDCARD_MOUNT_POINT, &total_bytes, &free_bytes) == ESP_OK) {
+                status->free_kb = (uint32_t)(free_bytes / 1024ULL);
+                status->total_kb = (uint32_t)(total_bytes / 1024ULL);
+            }
+        }
         event_bus_post(EVT_SD_STATUS_CHANGED, status, sizeof(sd_status_t), false);
     }
 
@@ -593,11 +685,11 @@ void sd_logger_init(void)
     event_bus_register_handler(EVT_BLE_DEVICE_DATA, on_ble_device_data);
     event_bus_register_handler(EVT_MQTT_CONNECTED, on_mqtt_connected);
 
-    // 2. Tạo Task SD Logger trên Core 1, Priority 4, Stack 4096 (FSD §4.11.1)
+    // 2. Tạo Task SD Logger trên Core 1, Priority 4, Stack 5120 (FSD §4.11.1)
     xTaskCreatePinnedToCore(
         sd_log_task,
         "sd_log_task",
-        4096,
+        5120,
         NULL,
         SD_TASK_PRIO,
         &s_sd_task_handle,

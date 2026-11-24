@@ -5,6 +5,7 @@
 #include <stdbool.h>
 #include "esp_err.h"
 #include "event_bus.h"
+#include "cJSON.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -63,6 +64,12 @@ void ble_adapter_print_status(void);
  * @param hum Humidity value (%RH)
  */
 void ble_adapter_inject_test_packet(const char *device_id, float temp, float hum);
+
+/**
+ * @brief Synchronize registered BLE sensor list from Cloud JSON array
+ * @param devices_arr cJSON array of objects containing device_id and mac_address
+ */
+void ble_adapter_sync_devices_from_json(const cJSON *devices_arr);
 
 #ifdef __cplusplus
 }

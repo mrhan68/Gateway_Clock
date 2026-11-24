@@ -593,6 +593,45 @@ int scheduler_get_entries(schedule_entry_t *dest, int max_entries)
     return count;
 }
 
+int scheduler_get_upcoming_entries(const struct tm *ti, schedule_entry_t *out_entries, int max_out)
+{
+    if (!ti || !out_entries || max_out <= 0) return 0;
+
+    int indices[MAX_SCHEDULE_ENTRIES];
+    int deltas[MAX_SCHEDULE_ENTRIES];
+    int count = 0;
+    int now_mins = ti->tm_hour * 60 + ti->tm_min;
+
+    lock_sched();
+    for (int i = 0; i < s_entry_count && count < MAX_SCHEDULE_ENTRIES; i++) {
+        if (!s_entries[i].enabled) continue;
+        int entry_mins = s_entries[i].hour * 60 + s_entries[i].minute;
+        indices[count] = i;
+        deltas[count] = (entry_mins - now_mins + 1440) % 1440;
+        count++;
+    }
+
+    for (int i = 0; i < count - 1; i++) {
+        for (int j = i + 1; j < count; j++) {
+            if (deltas[j] < deltas[i]) {
+                int tmp_d = deltas[i];
+                deltas[i] = deltas[j];
+                deltas[j] = tmp_d;
+                int tmp_idx = indices[i];
+                indices[i] = indices[j];
+                indices[j] = tmp_idx;
+            }
+        }
+    }
+
+    int out_count = (count < max_out) ? count : max_out;
+    for (int i = 0; i < out_count; i++) {
+        out_entries[i] = s_entries[indices[i]];
+    }
+    unlock_sched();
+    return out_count;
+}
+
 void scheduler_trigger_alarm(const char *title, bool buzzer)
 {
     alarm_event_t *alarm = (alarm_event_t *)malloc(sizeof(alarm_event_t));

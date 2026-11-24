@@ -1,4 +1,5 @@
 #pragma once
+#include <stdlib.h>
 typedef struct cJSON {
     struct cJSON *next, *prev, *child;
     int type; char *valuestring; int valueint; double valuedouble; char *string;
@@ -6,15 +7,18 @@ typedef struct cJSON {
 static inline cJSON *cJSON_Parse(const char *val) { return 0; }
 static inline cJSON *cJSON_GetObjectItem(const cJSON *obj, const char *key) { return 0; }
 static inline void cJSON_Delete(cJSON *obj) {}
+static inline void cJSON_free(void *ptr) { free(ptr); }
 #define cJSON_IsString(x) (0)
 #define cJSON_IsNumber(x) (0)
 #define cJSON_IsBool(x) (0)
 static inline cJSON *cJSON_CreateArray(void) { return 0; }
 static inline cJSON *cJSON_CreateObject(void) { return 0; }
+static inline cJSON *cJSON_CreateIntArray(const int *numbers, int count) { (void)numbers; (void)count; return 0; }
 static inline void cJSON_AddNumberToObject(cJSON* a, const char* b, double c) {}
 static inline void cJSON_AddStringToObject(cJSON* a, const char* b, const char* c) {}
 static inline void cJSON_AddBoolToObject(cJSON* a, const char* b, int c) {}
 static inline void cJSON_AddItemToArray(cJSON* a, cJSON* b) {}
+static inline int cJSON_AddItemToObject(cJSON* a, const char* b, cJSON* c) { (void)a; (void)b; (void)c; return 1; }
 static inline char *cJSON_PrintUnformatted(cJSON* a) { return 0; }
 static inline int cJSON_IsArray(const cJSON* a) { return 0; }
 static inline int cJSON_GetArraySize(const cJSON* a) { return 0; }

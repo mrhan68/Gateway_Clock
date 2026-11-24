@@ -89,6 +89,8 @@ model AutomationRule {
   sensorDeviceId String        @db.VarChar(32)
   conditionType  ConditionType
   threshold      Float
+  hysteresis     Float         @default(1.5)
+  cooldownS      Int           @default(60) @map("cooldown_s")
   targetDeviceId String        @db.VarChar(32)
   actionCommand  String        @db.VarChar(32)
   enabled        Boolean       @default(true)

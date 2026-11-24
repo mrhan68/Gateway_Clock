@@ -158,12 +158,12 @@ function Dashboard() {
   const offlineCount = devices.filter((d) => d.status === 'offline').length
   const activeSchedulesCount = schedules.filter((s) => s.enabled).length
 
-  const tempTelemetry = telemetryData.filter(
-    (d) => d.unit === 'C' || d.unit === '°C' || (!d.unit && d.value < 60)
-  )
-  const humTelemetry = telemetryData.filter(
-    (d) => d.unit === '%' || (!d.unit && d.value >= 60)
-  )
+  const tempTelemetry = telemetryData
+    .filter((d) => d.unit === 'C' || d.unit === '°C' || (!d.unit && d.value < 60))
+    .sort((a, b) => new Date(a.recorded_at) - new Date(b.recorded_at))
+  const humTelemetry = telemetryData
+    .filter((d) => d.unit === '%' || (!d.unit && d.value >= 60))
+    .sort((a, b) => new Date(a.recorded_at) - new Date(b.recorded_at))
 
   const latestTemp = tempTelemetry.length > 0 ? tempTelemetry[tempTelemetry.length - 1].value : null
   const latestHum = humTelemetry.length > 0 ? humTelemetry[humTelemetry.length - 1].value : null
@@ -213,7 +213,7 @@ function Dashboard() {
             <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-zinc-400 font-mono">
               <span>ID: {gatewayId}</span>
               <span className="text-zinc-600">•</span>
-              <span>Firmware: v{gateway?.firmware_version || '1.6.0'}</span>
+              <span>Firmware: v{gateway?.firmware_version || gateway?.firmwareVersion || '1.6.0'}</span>
               <span className="text-zinc-600">•</span>
               <span>Timezone: {gateway?.timezone || 'ICT-7'}</span>
               <span className="text-zinc-600">•</span>

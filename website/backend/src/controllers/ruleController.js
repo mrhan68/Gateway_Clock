@@ -64,6 +64,28 @@ async function ensureKnownDevice(gatewayId, deviceId, role) {
   }
 }
 
+function defaultHysteresisForSensor(sensorDeviceId) {
+  return String(sensorDeviceId || '').toLowerCase().includes('hum') ? 2.0 : 1.5;
+}
+
+function parseNonNegativeFloat(val, fallback) {
+  if (val === undefined || val === null || val === '') return fallback;
+  const num = parseFloat(val);
+  if (!Number.isFinite(num) || num < 0) {
+    throw createError('VALIDATION_ERROR', 'hysteresis must be a non-negative number');
+  }
+  return num;
+}
+
+function parseNonNegativeInt(val, fallback) {
+  if (val === undefined || val === null || val === '') return fallback;
+  const num = Number(val);
+  if (!Number.isInteger(num) || num < 0) {
+    throw createError('VALIDATION_ERROR', 'cooldown_s must be a non-negative integer');
+  }
+  return num;
+}
+
 /**
  * GET /gateways/{gateway_id}/rules
  */
@@ -105,6 +127,8 @@ async function listRules(req, res, next) {
       sensor_device_id: r.sensorDeviceId,
       condition_type: r.conditionType,
       threshold: r.threshold,
+      hysteresis: r.hysteresis ?? defaultHysteresisForSensor(r.sensorDeviceId),
+      cooldown_s: r.cooldownS ?? 60,
       target_device_id: r.targetDeviceId,
       action_command: r.actionCommand,
       enabled: r.enabled,
@@ -125,6 +149,7 @@ async function createRule(req, res, next) {
     const { gateway_id } = req.params;
     const {
       sensor_device_id, condition_type, threshold,
+      hysteresis, cooldown_s,
       target_device_id, action_command, enabled = true
     } = req.body;
 
@@ -138,6 +163,12 @@ async function createRule(req, res, next) {
         `Gateway '${gateway_id}' not found`);
     }
 
+    const resolvedHysteresis = parseNonNegativeFloat(
+      hysteresis,
+      defaultHysteresisForSensor(sensor_device_id)
+    );
+    const resolvedCooldown = parseNonNegativeInt(cooldown_s, 60);
+
     // Verify or auto-create standard sensor & target devices
     await ensureKnownDevice(gateway_id, sensor_device_id, 'sensor');
     await ensureKnownDevice(gateway_id, target_device_id, 'target');
@@ -148,6 +179,8 @@ async function createRule(req, res, next) {
         sensorDeviceId: sensor_device_id,
         conditionType: condition_type,
         threshold: parseFloat(threshold),
+        hysteresis: resolvedHysteresis,
+        cooldownS: resolvedCooldown,
         targetDeviceId: target_device_id,
         actionCommand: action_command,
         enabled
@@ -161,6 +194,8 @@ async function createRule(req, res, next) {
 
     res.status(201).json({
       id: rule.id,
+      hysteresis: rule.hysteresis ?? resolvedHysteresis,
+      cooldown_s: rule.cooldownS ?? resolvedCooldown,
       message: 'Automation rule created successfully'
     });
   } catch (err) {
@@ -176,8 +211,15 @@ async function updateRule(req, res, next) {
     const { gateway_id, id } = req.params;
     const {
       sensor_device_id, condition_type, threshold,
+      hysteresis, cooldown_s,
       target_device_id, action_command, enabled
     } = req.body;
+
+    const parsedThreshold = (threshold !== undefined && threshold !== null && threshold !== '')
+      ? parseFloat(threshold)
+      : undefined;
+    const parsedHysteresis = parseNonNegativeFloat(hysteresis, undefined);
+    const parsedCooldown = parseNonNegativeInt(cooldown_s, undefined);
 
     const rule = await prisma.automationRule.update({
       where: {
@@ -187,7 +229,9 @@ async function updateRule(req, res, next) {
       data: {
         sensorDeviceId: sensor_device_id ?? undefined,
         conditionType: condition_type ?? undefined,
-        threshold: threshold ? parseFloat(threshold) : undefined,
+        threshold: parsedThreshold,
+        hysteresis: parsedHysteresis,
+        cooldownS: parsedCooldown,
         targetDeviceId: target_device_id ?? undefined,
         actionCommand: action_command ?? undefined,
         enabled: enabled ?? undefined
@@ -199,7 +243,12 @@ async function updateRule(req, res, next) {
       console.error('[RULE] Failed to publish config to gateway:', err.message);
     });
 
-    res.json({ id: rule.id, message: 'Rule updated successfully' });
+    res.json({
+      id: rule.id,
+      hysteresis: rule.hysteresis ?? parsedHysteresis,
+      cooldown_s: rule.cooldownS ?? parsedCooldown,
+      message: 'Rule updated successfully'
+    });
   } catch (err) {
     if (err.code === 'P2025') {
       throw createError('RULE_NOT_FOUND',

@@ -31,7 +31,8 @@ static inline uint32_t xTaskGetTickCount(void) { return 0; }
 static inline void vTaskDelay(TickType_t ticks) {}
 
 // ESP Timer Mock
-static inline int64_t esp_timer_get_time(void) { return 1000000; }
+extern int64_t g_mock_esp_timer_us;
+static inline int64_t esp_timer_get_time(void) { return g_mock_esp_timer_us; }
 
 // NVS Mock
 typedef uint32_t nvs_handle_t;

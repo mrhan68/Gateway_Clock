@@ -20,6 +20,31 @@ const CONDITION_SYMBOLS = {
   eq: { symbol: '=', label: 'Bằng (Equal to)' },
 }
 
+const getDefaultHysteresis = (sensorId) =>
+  String(sensorId || '').toLowerCase().includes('hum') ? 2.0 : 1.5
+
+const getSensorUnit = (sensorId) => {
+  const id = String(sensorId || '').toLowerCase()
+  if (id.includes('hum')) return '%'
+  if (id.includes('temp')) return '°C'
+  return ''
+}
+
+const formatProtectionSummary = (conditionType, threshold, hysteresis, unit) => {
+  const t = Number(threshold)
+  const h = Number(hysteresis)
+  if (!Number.isFinite(t) || !Number.isFinite(h)) return ''
+  if (conditionType === 'gt') {
+    const offAt = (t - h).toFixed(1)
+    return `Bảo vệ chống bật/tắt: Bật ≥ ${t.toFixed(1)}${unit} • Tự tắt ≤ ${offAt}${unit} (Trễ ±${h}${unit})`
+  }
+  if (conditionType === 'lt') {
+    const offAt = (t + h).toFixed(1)
+    return `Bảo vệ chống bật/tắt: Bật ≤ ${t.toFixed(1)}${unit} • Tự tắt ≥ ${offAt}${unit} (Trễ ±${h}${unit})`
+  }
+  return `Bảo vệ chống bật/tắt: Kích hoạt = ${t.toFixed(1)}${unit} (Trễ ±${h}${unit})`
+}
+
 function Rules() {
   const gatewayId = getActiveGateway()
   const [rules, setRules] = useState([])
@@ -29,6 +54,16 @@ function Rules() {
   const [editRule, setEditRule] = useState(null)
   const [deleteRule, setDeleteRule] = useState(null)
   const [notification, setNotification] = useState(null)
+  const [formState, setFormState] = useState({
+    sensor_device_id: '',
+    condition_type: 'gt',
+    threshold: '',
+    hysteresis: '1.5',
+    cooldown_s: '60',
+    target_device_id: '',
+    action_command: 'ON',
+    enabled: true,
+  })
 
   useEffect(() => {
     if (gatewayId) {
@@ -63,13 +98,22 @@ function Rules() {
 
   const handleSubmit = async (e) => {
     e.preventDefault()
+    const sensorId = formState.sensor_device_id.trim()
+    const parsedHysteresis = parseFloat(formState.hysteresis)
+    const parsedCooldown = parseInt(formState.cooldown_s, 10)
     const payload = {
-      sensor_device_id: e.target.sensor_device_id.value.trim(),
-      condition_type: e.target.condition_type.value,
-      threshold: parseFloat(e.target.threshold.value),
-      target_device_id: e.target.target_device_id.value.trim(),
-      action_command: e.target.action_command.value.trim(),
-      enabled: e.target.enabled.checked,
+      sensor_device_id: sensorId,
+      condition_type: formState.condition_type,
+      threshold: parseFloat(formState.threshold),
+      hysteresis: Number.isFinite(parsedHysteresis) && parsedHysteresis >= 0
+        ? parsedHysteresis
+        : getDefaultHysteresis(sensorId),
+      cooldown_s: Number.isInteger(parsedCooldown) && parsedCooldown >= 0
+        ? parsedCooldown
+        : 60,
+      target_device_id: formState.target_device_id.trim(),
+      action_command: formState.action_command.trim(),
+      enabled: Boolean(formState.enabled),
     }
 
     try {
@@ -90,7 +134,12 @@ function Rules() {
 
   const handleToggleRule = async (rule, enabled) => {
     try {
-      await rulesAPI.update(gatewayId, rule.id, { ...rule, enabled })
+      await rulesAPI.update(gatewayId, rule.id, {
+        ...rule,
+        hysteresis: rule.hysteresis ?? getDefaultHysteresis(rule.sensor_device_id),
+        cooldown_s: rule.cooldown_s ?? 60,
+        enabled,
+      })
       setRules((prev) =>
         prev.map((r) => (r.id === rule.id ? { ...r, enabled } : r))
       )
@@ -117,10 +166,31 @@ function Rules() {
 
   const openEdit = (rule) => {
     setEditRule(rule)
+    setFormState({
+      sensor_device_id: rule.sensor_device_id || '',
+      condition_type: rule.condition_type || 'gt',
+      threshold: rule.threshold !== undefined && rule.threshold !== null ? String(rule.threshold) : '',
+      hysteresis: String(rule.hysteresis ?? getDefaultHysteresis(rule.sensor_device_id)),
+      cooldown_s: String(rule.cooldown_s ?? 60),
+      target_device_id: rule.target_device_id || '',
+      action_command: rule.action_command || 'ON',
+      enabled: rule.enabled !== false,
+    })
     setShowModal(true)
   }
   const openAdd = () => {
     setEditRule(null)
+    const defaultSensor = sensorDevices[0]?.device_id || 'sensor_temp_01'
+    setFormState({
+      sensor_device_id: defaultSensor,
+      condition_type: 'gt',
+      threshold: '',
+      hysteresis: String(getDefaultHysteresis(defaultSensor)),
+      cooldown_s: '60',
+      target_device_id: actuatorDevices[0]?.device_id || '',
+      action_command: 'ON',
+      enabled: true,
+    })
     setShowModal(true)
   }
 
@@ -265,6 +335,24 @@ function Rules() {
                     </div>
                   </div>
 
+                  {/* Equipment Protection / Hysteresis Badge */}
+                  {(() => {
+                    const hyst = rule.hysteresis ?? getDefaultHysteresis(rule.sensor_device_id)
+                    const cooldown = rule.cooldown_s ?? 60
+                    const unit = getSensorUnit(rule.sensor_device_id)
+                    const summary = formatProtectionSummary(rule.condition_type, rule.threshold, hyst, unit)
+                    return (
+                      <div className="mt-2.5 flex flex-wrap items-center gap-2">
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-indigo-950/50 border border-indigo-700/40 text-indigo-300 text-[11px] font-medium">
+                          <span>{summary}</span>
+                        </span>
+                        <span className="inline-flex items-center px-2 py-1 rounded-lg bg-zinc-900 border border-zinc-800 text-zinc-400 text-[11px] font-mono">
+                          Cooldown: {cooldown}s
+                        </span>
+                      </div>
+                    )
+                  })()}
+
                   {/* Subtext info */}
                   <div className="mt-2 flex items-center gap-3 text-xs text-zinc-500">
                     <span>
@@ -358,7 +446,15 @@ function Rules() {
                   </label>
                   <select
                     name="sensor_device_id"
-                    defaultValue={editRule?.sensor_device_id || ''}
+                    value={formState.sensor_device_id}
+                    onChange={(e) => {
+                      const nextSensor = e.target.value
+                      setFormState((prev) => ({
+                        ...prev,
+                        sensor_device_id: nextSensor,
+                        hysteresis: editRule ? prev.hysteresis : String(getDefaultHysteresis(nextSensor)),
+                      }))
+                    }}
                     className="w-full px-3 py-2 text-xs bg-zinc-900 border border-zinc-750 rounded-lg text-zinc-100 focus:outline-none focus:border-emerald-500"
                     required
                   >
@@ -370,7 +466,10 @@ function Rules() {
                     ))}
                     {/* Fallback if sensors not loaded */}
                     {sensorDevices.length === 0 && (
-                      <option value="temp_sensor_01">temp_sensor_01</option>
+                      <>
+                        <option value="sensor_temp_01">sensor_temp_01 (Nhiệt độ)</option>
+                        <option value="sensor_hum_01">sensor_hum_01 (Độ ẩm)</option>
+                      </>
                     )}
                   </select>
                 </div>
@@ -382,7 +481,8 @@ function Rules() {
                     </label>
                     <select
                       name="condition_type"
-                      defaultValue={editRule?.condition_type || 'gt'}
+                      value={formState.condition_type}
+                      onChange={(e) => setFormState((prev) => ({ ...prev, condition_type: e.target.value }))}
                       className="w-full px-3 py-2 text-xs bg-zinc-900 border border-zinc-750 rounded-lg text-zinc-100 focus:outline-none focus:border-emerald-500"
                     >
                       <option value="gt">Lớn hơn (&gt;)</option>
@@ -398,13 +498,60 @@ function Rules() {
                       name="threshold"
                       type="number"
                       step="0.1"
-                      placeholder="vd: 35.5"
-                      defaultValue={editRule?.threshold ?? ''}
+                      placeholder="vd: 30.0"
+                      value={formState.threshold}
+                      onChange={(e) => setFormState((prev) => ({ ...prev, threshold: e.target.value }))}
                       className="w-full px-3 py-2 text-xs bg-zinc-900 border border-zinc-750 rounded-lg text-zinc-100 font-mono tabular-nums focus:outline-none focus:border-emerald-500"
                       required
                     />
                   </div>
                 </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-medium text-zinc-300 mb-1">
+                      Độ trễ bảo vệ (Hysteresis)
+                    </label>
+                    <input
+                      name="hysteresis"
+                      type="number"
+                      min="0"
+                      step="0.1"
+                      placeholder="vd: 1.5"
+                      value={formState.hysteresis}
+                      onChange={(e) => setFormState((prev) => ({ ...prev, hysteresis: e.target.value }))}
+                      className="w-full px-3 py-2 text-xs bg-zinc-900 border border-zinc-750 rounded-lg text-zinc-100 font-mono tabular-nums focus:outline-none focus:border-emerald-500"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-zinc-300 mb-1">
+                      Thời gian nghỉ (Cooldown, s)
+                    </label>
+                    <input
+                      name="cooldown_s"
+                      type="number"
+                      min="0"
+                      step="1"
+                      placeholder="60"
+                      value={formState.cooldown_s}
+                      onChange={(e) => setFormState((prev) => ({ ...prev, cooldown_s: e.target.value }))}
+                      className="w-full px-3 py-2 text-xs bg-zinc-900 border border-zinc-750 rounded-lg text-zinc-100 font-mono tabular-nums focus:outline-none focus:border-emerald-500"
+                      required
+                    />
+                  </div>
+                </div>
+
+                {formState.threshold !== '' && (
+                  <p className="text-[11px] text-indigo-300 bg-indigo-950/40 border border-indigo-800/40 rounded-lg px-2.5 py-1.5">
+                    {formatProtectionSummary(
+                      formState.condition_type,
+                      formState.threshold,
+                      formState.hysteresis || getDefaultHysteresis(formState.sensor_device_id),
+                      getSensorUnit(formState.sensor_device_id)
+                    )}
+                  </p>
+                )}
               </div>
 
               {/* Action Section */}
@@ -418,7 +565,8 @@ function Rules() {
                   </label>
                   <select
                     name="target_device_id"
-                    defaultValue={editRule?.target_device_id || ''}
+                    value={formState.target_device_id}
+                    onChange={(e) => setFormState((prev) => ({ ...prev, target_device_id: e.target.value }))}
                     className="w-full px-3 py-2 text-xs bg-zinc-900 border border-zinc-750 rounded-lg text-zinc-100 focus:outline-none focus:border-emerald-500"
                     required
                   >
@@ -429,7 +577,12 @@ function Rules() {
                       </option>
                     ))}
                     {actuatorDevices.length === 0 && (
-                      <option value="relay_1">relay_1 (GPIO 15)</option>
+                      <>
+                        <option value="fan_01">fan_01 (relay_1)</option>
+                        <option value="heater_01">heater_01 (relay_2)</option>
+                        <option value="dehumidifier_01">dehumidifier_01 (relay_3)</option>
+                        <option value="aux_01">aux_01 (relay_4)</option>
+                      </>
                     )}
                   </select>
                 </div>
@@ -442,7 +595,8 @@ function Rules() {
                     name="action_command"
                     type="text"
                     placeholder="ON, OFF hoặc SET:50"
-                    defaultValue={editRule?.action_command || 'ON'}
+                    value={formState.action_command}
+                    onChange={(e) => setFormState((prev) => ({ ...prev, action_command: e.target.value }))}
                     className="w-full px-3 py-2 text-xs bg-zinc-900 border border-zinc-750 rounded-lg text-zinc-100 font-mono focus:outline-none focus:border-emerald-500"
                     required
                   />
@@ -455,7 +609,8 @@ function Rules() {
                   <input
                     type="checkbox"
                     name="enabled"
-                    defaultChecked={editRule?.enabled !== false}
+                    checked={formState.enabled}
+                    onChange={(e) => setFormState((prev) => ({ ...prev, enabled: e.target.checked }))}
                     className="w-4 h-4 rounded border-zinc-700 bg-zinc-950 text-emerald-500 focus:ring-emerald-500"
                   />
                   <span className="text-xs text-zinc-300 font-medium">

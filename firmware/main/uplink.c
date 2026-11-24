@@ -11,6 +11,7 @@
 #include "wifi_provisioning.h"
 #include "event_bus.h"
 #include "display.h"
+#include "rtc.h"
 #if __has_include("secrets.h")
 #include "secrets.h"
 #else
@@ -57,17 +58,19 @@ static void uplink_task(void *pvParameters)
                 uint64_t uptime_s = esp_timer_get_time() / 1000000ULL;
                 uint32_t free_heap = esp_get_free_heap_size();
                 const char *ip = wifi_provisioning_get_ip();
-                char payload[160];
+                char rtc_time[32] = {0};
+                app_rtc_get_formatted_time(rtc_time, sizeof(rtc_time));
+                char payload[224];
                 if (display_get_latest_valid()) {
                     float cur_temp = display_get_latest_temp();
                     float cur_hum = display_get_latest_hum();
                     snprintf(payload, sizeof(payload),
-                             "{\"uptime_s\":%llu,\"free_heap\":%lu,\"ip\":\"%s\",\"temperature\":%.1f,\"humidity\":%.1f}",
-                             uptime_s, (unsigned long)free_heap, ip, cur_temp, cur_hum);
+                             "{\"uptime_s\":%llu,\"free_heap\":%lu,\"ip\":\"%s\",\"rtc_time\":\"%s\",\"temperature\":%.1f,\"humidity\":%.1f}",
+                             uptime_s, (unsigned long)free_heap, ip, rtc_time, cur_temp, cur_hum);
                 } else {
                     snprintf(payload, sizeof(payload),
-                             "{\"uptime_s\":%llu,\"free_heap\":%lu,\"ip\":\"%s\"}",
-                             uptime_s, (unsigned long)free_heap, ip);
+                             "{\"uptime_s\":%llu,\"free_heap\":%lu,\"ip\":\"%s\",\"rtc_time\":\"%s\"}",
+                             uptime_s, (unsigned long)free_heap, ip, rtc_time);
                 }
 
                 mqtt_adapter_publish("telemetry", payload);

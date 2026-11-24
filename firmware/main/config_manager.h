@@ -18,7 +18,7 @@ typedef struct {
 
 typedef struct {
     char gateway_id[32];
-    char timezone[16];
+    char timezone[32];
     char wifi_ssid[32];
     char wifi_password[64];
     char softap_password[64];

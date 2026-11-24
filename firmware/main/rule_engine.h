@@ -21,6 +21,7 @@ extern "C" {
 #endif
 
 #define MAX_RULES 16
+#define RULE_MANUAL_OVERRIDE_US   (30ULL * 60ULL * 1000000ULL)
 #define SD_RULES_STORAGE_PATH     "/sdcard/rules.json"
 #define SPIFFS_RULES_STORAGE_PATH "/spiffs/rules.json"
 

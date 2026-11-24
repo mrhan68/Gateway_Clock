@@ -31,12 +31,9 @@ static const char *TAG __attribute__((unused)) = "CLI";
 
 #define CLI_UART_NUM        UART_NUM_0
 #define CLI_BUFFER_SIZE     256
-#define CLI_TASK_STACK_SIZE 4096
+#define CLI_TASK_STACK_SIZE 6144
 #define CLI_TASK_PRIO       2
 #define CLI_TASK_CORE       1
-
-static automation_rule_t s_cli_rules[MAX_RULES];
-static schedule_entry_t s_cli_entries[MAX_SCHEDULE_ENTRIES];
 
 static void print_banner(void)
 {
@@ -310,13 +307,17 @@ static void handle_command(char *cmd_line)
     } else if (strcmp(cmd_line, "rule list") == 0) {
         int cnt = rule_engine_get_rule_count();
         printf("\n=== ACTIVE AUTOMATION RULES (%d) ===\n", cnt);
-        int n = rule_engine_get_rules(s_cli_rules, MAX_RULES);
-        for (int i = 0; i < n; i++) {
-            printf("  [#%d] Sensor: '%s' %s %.1f -> Target: '%s' CMD: '%s' (Status: %s)\n",
-                   s_cli_rules[i].id, s_cli_rules[i].device_id,
-                   (s_cli_rules[i].condition_type == RULE_CONDITION_SENSOR_GT) ? ">" : "<",
-                   s_cli_rules[i].threshold, s_cli_rules[i].target_device_id, s_cli_rules[i].action_command,
-                   s_cli_rules[i].enabled ? "ENABLED" : "DISABLED");
+        automation_rule_t *rules = (automation_rule_t *)calloc(MAX_RULES, sizeof(automation_rule_t));
+        if (rules != NULL) {
+            int n = rule_engine_get_rules(rules, MAX_RULES);
+            for (int i = 0; i < n; i++) {
+                printf("  [#%d] Sensor: '%s' %s %.1f -> Target: '%s' CMD: '%s' (Status: %s)\n",
+                       rules[i].id, rules[i].device_id,
+                       (rules[i].condition_type == RULE_CONDITION_SENSOR_GT) ? ">" : "<",
+                       rules[i].threshold, rules[i].target_device_id, rules[i].action_command,
+                       rules[i].enabled ? "ENABLED" : "DISABLED");
+            }
+            free(rules);
         }
         printf("===================================\n\n");
     } else if (strncmp(cmd_line, "rule add", 8) == 0) {
@@ -379,16 +380,20 @@ static void handle_command(char *cmd_line)
     } else if (strcmp(cmd_line, "schedule list") == 0) {
         int cnt = scheduler_get_entry_count();
         printf("\n=== ACTIVE SCHEDULES (%d) ===\n", cnt);
-        int n = scheduler_get_entries(s_cli_entries, MAX_SCHEDULE_ENTRIES);
-        for (int i = 0; i < n; i++) {
-            printf("  [#%d] [%s] %02d:%02d Title: '%s' (Buzzer: %s, Enabled: %s)\n",
-                   s_cli_entries[i].id, s_cli_entries[i].type, s_cli_entries[i].hour, s_cli_entries[i].minute,
-                   s_cli_entries[i].title, s_cli_entries[i].buzzer ? "YES" : "NO",
-                   s_cli_entries[i].enabled ? "YES" : "NO");
-            if (strcmp(s_cli_entries[i].type, "automation") == 0) {
-                printf("       -> Target: '%s' Command: '%s'\n",
-                       s_cli_entries[i].target_device_id, s_cli_entries[i].action_command);
+        schedule_entry_t *entries = (schedule_entry_t *)calloc(MAX_SCHEDULE_ENTRIES, sizeof(schedule_entry_t));
+        if (entries != NULL) {
+            int n = scheduler_get_entries(entries, MAX_SCHEDULE_ENTRIES);
+            for (int i = 0; i < n; i++) {
+                printf("  [#%d] [%s] %02d:%02d Title: '%s' (Buzzer: %s, Enabled: %s)\n",
+                       entries[i].id, entries[i].type, entries[i].hour, entries[i].minute,
+                       entries[i].title, entries[i].buzzer ? "YES" : "NO",
+                       entries[i].enabled ? "YES" : "NO");
+                if (strcmp(entries[i].type, "automation") == 0) {
+                    printf("       -> Target: '%s' Command: '%s'\n",
+                           entries[i].target_device_id, entries[i].action_command);
+                }
             }
+            free(entries);
         }
         printf("==============================\n\n");
     } else if (strncmp(cmd_line, "schedule add", 12) == 0) {
@@ -752,8 +757,8 @@ static void handle_command(char *cmd_line)
                 struct dirent *entry;
                 int count = 0;
                 while ((entry = readdir(dir)) != NULL) {
-                    char full_item[512];
-                    snprintf(full_item, sizeof(full_item), "%s/%s", path, entry->d_name);
+                    char full_item[192];
+                    snprintf(full_item, sizeof(full_item), "%.63s/%.120s", path, entry->d_name);
                     struct stat st;
                     long fsize = 0;
                     if (stat(full_item, &st) == 0) {

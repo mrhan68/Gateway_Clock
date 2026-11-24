@@ -17,17 +17,22 @@ jest.mock('mqtt', () => ({
 }));
 
 const mockPrisma = {
+  $transaction: jest.fn(async (cb) => cb(mockPrisma)),
   gateway: {
-    findUnique: jest.fn().mockResolvedValue({ id: 'gw_01', status: 'online' }),
+    findUnique: jest.fn().mockResolvedValue({ id: 'gw_01', status: 'online', timezone: 'ICT-7' }),
+    update: jest.fn().mockResolvedValue({ id: 'gw_01', name: 'Gateway', timezone: 'Asia/Tokyo' }),
     updateMany: jest.fn().mockResolvedValue({ count: 1 })
   },
   device: {
     findFirst: jest.fn(),
+    findMany: jest.fn().mockResolvedValue([]),
     create: jest.fn().mockResolvedValue({ id: 10 }),
     update: jest.fn().mockResolvedValue({ id: 10 }),
-    updateMany: jest.fn().mockResolvedValue({ count: 1 })
+    updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+    delete: jest.fn().mockResolvedValue({ id: 10, protocol: 'ble' })
   },
   telemetryLog: {
+    findFirst: jest.fn().mockResolvedValue(null),
     create: jest.fn().mockResolvedValue({ id: 1 }),
     createMany: jest.fn().mockResolvedValue({ count: 2 })
   },
@@ -42,7 +47,9 @@ const mockPrisma = {
   automationRule: {
     findMany: jest.fn().mockResolvedValue([]),
     create: jest.fn().mockResolvedValue({ id: 1 }),
-    deleteMany: jest.fn().mockResolvedValue({ count: 0 })
+    update: jest.fn().mockResolvedValue({ id: 1, hysteresis: 2.5, cooldownS: 90 }),
+    deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
+    count: jest.fn().mockResolvedValue(0)
   }
 };
 
@@ -83,12 +90,18 @@ describe('Plan 1 Backend: Relay Aliases, MQTT Handlers & Telemetry Batching', ()
       broker.resetSeededGateways();
     }
     mockMqttClient.connected = true;
-    mockPrisma.gateway.findUnique.mockResolvedValue({ id: 'gw_01', status: 'online' });
+    mockPrisma.$transaction.mockImplementation(async (cb) => cb(mockPrisma));
+    mockPrisma.gateway.findUnique.mockResolvedValue({ id: 'gw_01', status: 'online', timezone: 'ICT-7' });
+    mockPrisma.gateway.update.mockResolvedValue({ id: 'gw_01', name: 'Gateway', timezone: 'Asia/Tokyo' });
     mockPrisma.gateway.updateMany.mockResolvedValue({ count: 1 });
     mockPrisma.device.findFirst.mockResolvedValue(null);
+    mockPrisma.device.findMany.mockResolvedValue([]);
     mockPrisma.device.create.mockResolvedValue({ id: 10 });
     mockPrisma.device.update.mockResolvedValue({ id: 10 });
     mockPrisma.device.updateMany.mockResolvedValue({ count: 1 });
+    mockPrisma.device.delete.mockResolvedValue({ id: 10, protocol: 'ble' });
+    mockPrisma.telemetryLog.findFirst.mockResolvedValue(null);
+    mockPrisma.telemetryLog.create.mockResolvedValue({ id: 1 });
     mockPrisma.telemetryLog.createMany.mockResolvedValue({ count: 2 });
     mockPrisma.eventLog.create.mockResolvedValue({ id: 1 });
     mockPrisma.schedule.findMany.mockResolvedValue([]);
@@ -96,7 +109,9 @@ describe('Plan 1 Backend: Relay Aliases, MQTT Handlers & Telemetry Batching', ()
     mockPrisma.schedule.deleteMany.mockResolvedValue({ count: 0 });
     mockPrisma.automationRule.findMany.mockResolvedValue([]);
     mockPrisma.automationRule.create.mockResolvedValue({ id: 1 });
+    mockPrisma.automationRule.update.mockResolvedValue({ id: 1, hysteresis: 2.5, cooldownS: 90 });
     mockPrisma.automationRule.deleteMany.mockResolvedValue({ count: 0 });
+    mockPrisma.automationRule.count.mockResolvedValue(0);
   });
 
   test('startBroker subscribes to gateway/+/device/+/action and routes action & command_ack', async () => {
@@ -377,16 +392,25 @@ describe('Schedule & Rule 2-Way Sync (PLAN_SCHEDULE_SYNC)', () => {
     clearPendingCommands();
     broker.resetSeededGateways();
     mockMqttClient.connected = true;
-    mockPrisma.gateway.findUnique.mockResolvedValue({ id: 'gw_01', status: 'online' });
+    mockPrisma.$transaction.mockImplementation(async (cb) => cb(mockPrisma));
+    mockPrisma.gateway.findUnique.mockResolvedValue({ id: 'gw_01', status: 'online', timezone: 'ICT-7' });
+    mockPrisma.gateway.update.mockResolvedValue({ id: 'gw_01', name: 'Gateway', timezone: 'Asia/Tokyo' });
     mockPrisma.device.findFirst.mockResolvedValue(null);
+    mockPrisma.device.findMany.mockResolvedValue([]);
     mockPrisma.device.create.mockResolvedValue({ id: 10 });
+    mockPrisma.device.update.mockResolvedValue({ id: 10 });
+    mockPrisma.device.delete.mockResolvedValue({ id: 10, protocol: 'ble' });
+    mockPrisma.telemetryLog.findFirst.mockResolvedValue(null);
+    mockPrisma.telemetryLog.create.mockResolvedValue({ id: 1 });
     mockPrisma.eventLog.create.mockResolvedValue({ id: 1 });
     mockPrisma.schedule.findMany.mockResolvedValue([]);
     mockPrisma.schedule.create.mockResolvedValue({ id: 1 });
     mockPrisma.schedule.deleteMany.mockResolvedValue({ count: 0 });
     mockPrisma.automationRule.findMany.mockResolvedValue([]);
     mockPrisma.automationRule.create.mockResolvedValue({ id: 1 });
+    mockPrisma.automationRule.update.mockResolvedValue({ id: 1, hysteresis: 2.5, cooldownS: 90 });
     mockPrisma.automationRule.deleteMany.mockResolvedValue({ count: 0 });
+    mockPrisma.automationRule.count.mockResolvedValue(0);
   });
 
   test('startBroker subscribes to alarm, schedule/sync, and rules/sync topics', async () => {
@@ -628,6 +652,7 @@ describe('Schedule & Rule 2-Way Sync (PLAN_SCHEDULE_SYNC)', () => {
     );
     await new Promise((r) => setImmediate(r));
 
+    expect(mockPrisma.$transaction).toHaveBeenCalledTimes(1);
     expect(mockPrisma.automationRule.deleteMany).toHaveBeenCalledWith({ where: { gatewayId: 'gw_01' } });
     expect(mockPrisma.automationRule.create).toHaveBeenNthCalledWith(1, {
       data: {
@@ -635,6 +660,8 @@ describe('Schedule & Rule 2-Way Sync (PLAN_SCHEDULE_SYNC)', () => {
         sensorDeviceId: 'sensor_temp_01',
         conditionType: 'gt',
         threshold: 31.5,
+        hysteresis: 1.5,
+        cooldownS: 60,
         targetDeviceId: 'fan_01',
         actionCommand: 'ON',
         enabled: true
@@ -646,6 +673,8 @@ describe('Schedule & Rule 2-Way Sync (PLAN_SCHEDULE_SYNC)', () => {
         sensorDeviceId: 'sensor_temp_01',
         conditionType: 'lt',
         threshold: 20.0,
+        hysteresis: 1.5,
+        cooldownS: 60,
         targetDeviceId: 'heater_01',
         actionCommand: 'ON',
         enabled: false
@@ -762,5 +791,318 @@ describe('Schedule & Rule 2-Way Sync (PLAN_SCHEDULE_SYNC)', () => {
     expect(schedRes.body).toHaveLength(1);
     expect(mockPrisma.schedule.create).toHaveBeenCalledTimes(2);
     expect(mockPrisma.automationRule.create).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe('Master Plan: Telemetry Batch Backfill, Hysteresis, Timezone & BLE Sync', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    clearPendingCommands();
+    broker.resetSeededGateways();
+    mockMqttClient.connected = true;
+    mockPrisma.$transaction.mockImplementation(async (cb) => cb(mockPrisma));
+    mockPrisma.gateway.findUnique.mockResolvedValue({ id: 'gw_01', status: 'online', timezone: 'Asia/Ho_Chi_Minh' });
+    mockPrisma.gateway.update.mockResolvedValue({ id: 'gw_01', name: 'Gateway', timezone: 'Asia/Tokyo' });
+    mockPrisma.device.findFirst.mockResolvedValue(null);
+    mockPrisma.device.findMany.mockResolvedValue([]);
+    mockPrisma.device.create.mockResolvedValue({ id: 10 });
+    mockPrisma.device.update.mockResolvedValue({ id: 10 });
+    mockPrisma.device.delete.mockResolvedValue({ id: 10, deviceId: 'ble_extra_01', protocol: 'ble' });
+    mockPrisma.telemetryLog.findFirst.mockResolvedValue(null);
+    mockPrisma.telemetryLog.create.mockResolvedValue({ id: 1 });
+    mockPrisma.eventLog.create.mockResolvedValue({ id: 1 });
+    mockPrisma.schedule.findMany.mockResolvedValue([]);
+    mockPrisma.automationRule.findMany.mockResolvedValue([]);
+    mockPrisma.automationRule.create.mockResolvedValue({ id: 1, hysteresis: 2.5, cooldownS: 90 });
+    mockPrisma.automationRule.update.mockResolvedValue({ id: 1, hysteresis: 3.0, cooldownS: 120 });
+  });
+
+  test('handleTelemetryBatch inserts real TelemetryLog rows (°C and %) with original ts and deduplicates repeats', async () => {
+    const ts = 1731500000;
+    const expectedDate = new Date(ts * 1000);
+    mockPrisma.device.findFirst.mockResolvedValue({
+      id: 42,
+      deviceId: 'sensor_temp_01',
+      lastSeen: new Date((ts - 100) * 1000)
+    });
+    // First two checks (°C and %) return null (new), third and fourth (duplicate batch) return existing rows
+    mockPrisma.telemetryLog.findFirst
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ id: 101 })
+      .mockResolvedValueOnce({ id: 102 });
+
+    const payload = JSON.stringify({
+      device_id: 'sensor_temp_01',
+      temperature: 27.5,
+      humidity: 64.0,
+      ts
+    });
+
+    await broker.handleTelemetryBatch('gw_01', payload);
+
+    expect(mockPrisma.telemetryLog.create).toHaveBeenCalledTimes(2);
+    expect(mockPrisma.telemetryLog.create).toHaveBeenNthCalledWith(1, {
+      data: {
+        gatewayId: 'gw_01',
+        deviceId: 'sensor_temp_01',
+        value: 27.5,
+        unit: '°C',
+        recordedAt: expectedDate
+      }
+    });
+    expect(mockPrisma.telemetryLog.create).toHaveBeenNthCalledWith(2, {
+      data: {
+        gatewayId: 'gw_01',
+        deviceId: 'sensor_temp_01',
+        value: 64.0,
+        unit: '%',
+        recordedAt: expectedDate
+      }
+    });
+    expect(mockPrisma.device.update).toHaveBeenCalledWith({
+      where: { id: 42 },
+      data: {
+        status: 'online',
+        lastSeen: expectedDate,
+        lastValue: 27.5
+      }
+    });
+    expect(mockPrisma.eventLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          gatewayId: 'gw_01',
+          eventType: 'telemetry_batch_backfill',
+          deviceId: 'sensor_temp_01',
+          occurredAt: expectedDate
+        })
+      })
+    );
+
+    // Repeat identical batch -> deduplicated, 0 new TelemetryLog rows created
+    mockPrisma.telemetryLog.create.mockClear();
+    await broker.handleTelemetryBatch('gw_01', payload);
+    expect(mockPrisma.telemetryLog.create).not.toHaveBeenCalled();
+  });
+
+  test('handleTelemetryBatch supports legacy val and records array without overwriting newer device state', async () => {
+    const olderTs = 1731500000;
+    const newerTs = 1731500500;
+    mockPrisma.device.findFirst.mockResolvedValue({
+      id: 43,
+      deviceId: 'sensor_hum_01',
+      lastSeen: new Date(newerTs * 1000)
+    });
+
+    await broker.handleTelemetryBatch('gw_01', JSON.stringify({
+      records: [
+        { device_id: 'sensor_hum_01', val: 78.5, ts: olderTs }
+      ]
+    }));
+
+    expect(mockPrisma.telemetryLog.create).toHaveBeenCalledTimes(1);
+    expect(mockPrisma.telemetryLog.create).toHaveBeenCalledWith({
+      data: {
+        gatewayId: 'gw_01',
+        deviceId: 'sensor_hum_01',
+        value: 78.5,
+        unit: '%',
+        recordedAt: new Date(olderTs * 1000)
+      }
+    });
+    expect(mockPrisma.device.update).not.toHaveBeenCalled();
+  });
+
+  test('publishScheduleConfig includes hysteresis, cooldown_s, timezone, and ble_sensors', async () => {
+    mockPrisma.gateway.findUnique.mockResolvedValue({ id: 'gw_01', timezone: 'Asia/Tokyo' });
+    mockPrisma.device.findMany.mockResolvedValue([
+      { deviceId: 'sensor_temp_01', macAddress: 'FA:BB:CC:11:22:33', protocol: 'ble' },
+      { deviceId: 'sensor_hum_01', macAddress: 'FA:BB:CC:44:55:66', protocol: 'ble' }
+    ]);
+    mockPrisma.automationRule.findMany.mockResolvedValue([
+      {
+        id: 1,
+        gatewayId: 'gw_01',
+        sensorDeviceId: 'sensor_temp_01',
+        conditionType: 'gt',
+        threshold: 30.0,
+        hysteresis: 1.5,
+        cooldownS: 60,
+        targetDeviceId: 'fan_01',
+        actionCommand: 'ON',
+        enabled: true
+      },
+      {
+        id: 2,
+        gatewayId: 'gw_01',
+        sensorDeviceId: 'sensor_hum_01',
+        conditionType: 'gt',
+        threshold: 75.0,
+        hysteresis: 2.0,
+        cooldownS: 90,
+        targetDeviceId: 'dehumidifier_01',
+        actionCommand: 'ON',
+        enabled: true
+      }
+    ]);
+
+    const ok = await broker.publishScheduleConfig('gw_01', { skipSeed: true });
+    expect(ok).toBe(true);
+    expect(mockMqttClient.publish).toHaveBeenCalledTimes(1);
+
+    const payload = JSON.parse(mockMqttClient.publish.mock.calls[0][1]);
+    expect(payload.timezone).toBe('Asia/Tokyo');
+    expect(payload.ble_sensors).toEqual([
+      { device_id: 'sensor_temp_01', mac_address: 'FA:BB:CC:11:22:33' },
+      { device_id: 'sensor_hum_01', mac_address: 'FA:BB:CC:44:55:66' }
+    ]);
+    expect(payload.rules[0]).toMatchObject({
+      hysteresis: 1.5,
+      cooldown_s: 60,
+      target_device_id: 'relay_1'
+    });
+    expect(payload.rules[1]).toMatchObject({
+      hysteresis: 2.0,
+      cooldown_s: 90,
+      target_device_id: 'relay_3'
+    });
+  });
+
+  test('handleRulesSyncFromGateway preserves custom hysteresis & cooldown_s inside $transaction', async () => {
+    await broker.handleRulesSyncFromGateway('gw_01', JSON.stringify({
+      rules: [
+        {
+          sensor_device_id: 'sensor_hum_01',
+          condition_type: 'gt',
+          threshold: 76.0,
+          hysteresis: 2.5,
+          cooldown_s: 120,
+          target_device_id: 'relay_3',
+          action_command: 'ON',
+          enabled: true
+        }
+      ]
+    }));
+
+    expect(mockPrisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(mockPrisma.automationRule.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        gatewayId: 'gw_01',
+        sensorDeviceId: 'sensor_hum_01',
+        threshold: 76.0,
+        hysteresis: 2.5,
+        cooldownS: 120,
+        targetDeviceId: 'dehumidifier_01'
+      })
+    });
+  });
+
+  test('ruleController persists and returns hysteresis and cooldown_s on create, update, and list', async () => {
+    mockPrisma.device.findFirst.mockResolvedValue({ id: 1, deviceId: 'sensor_hum_01' });
+
+    const createRes = await request(app)
+      .post('/api/v1/gateways/gw_01/rules')
+      .send({
+        sensor_device_id: 'sensor_hum_01',
+        condition_type: 'gt',
+        threshold: 75.0,
+        hysteresis: 2.5,
+        cooldown_s: 90,
+        target_device_id: 'dehumidifier_01',
+        action_command: 'ON'
+      });
+
+    expect(createRes.statusCode).toBe(201);
+    expect(mockPrisma.automationRule.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        sensorDeviceId: 'sensor_hum_01',
+        hysteresis: 2.5,
+        cooldownS: 90
+      })
+    });
+
+    const updateRes = await request(app)
+      .put('/api/v1/gateways/gw_01/rules/1')
+      .send({
+        sensor_device_id: 'sensor_hum_01',
+        condition_type: 'gt',
+        threshold: 78.0,
+        hysteresis: 3.0,
+        cooldown_s: 120,
+        target_device_id: 'dehumidifier_01',
+        action_command: 'ON',
+        enabled: true
+      });
+
+    expect(updateRes.statusCode).toBe(200);
+    expect(mockPrisma.automationRule.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          threshold: 78.0,
+          hysteresis: 3.0,
+          cooldownS: 120
+        })
+      })
+    );
+
+    mockPrisma.automationRule.findMany.mockResolvedValueOnce([
+      {
+        id: 1,
+        gatewayId: 'gw_01',
+        sensorDeviceId: 'sensor_hum_01',
+        conditionType: 'gt',
+        threshold: 78.0,
+        hysteresis: 3.0,
+        cooldownS: 120,
+        targetDeviceId: 'dehumidifier_01',
+        actionCommand: 'ON',
+        enabled: true,
+        createdAt: new Date()
+      }
+    ]);
+
+    const listRes = await request(app).get('/api/v1/gateways/gw_01/rules');
+    expect(listRes.statusCode).toBe(200);
+    expect(listRes.body[0]).toMatchObject({
+      hysteresis: 3.0,
+      cooldown_s: 120
+    });
+  });
+
+  test('updateGateway and BLE createDevice trigger publishScheduleConfig', async () => {
+    const gwRes = await request(app)
+      .put('/api/v1/gateways/gw_01')
+      .send({ name: 'Living Room Clock', timezone: 'Asia/Tokyo' });
+    await new Promise((r) => setImmediate(r));
+
+    expect(gwRes.statusCode).toBe(200);
+    expect(mockMqttClient.publish).toHaveBeenCalledWith(
+      'gateway/gw_01/config/schedule',
+      expect.any(String),
+      { qos: 1, retain: true },
+      expect.any(Function)
+    );
+
+    mockMqttClient.publish.mockClear();
+    mockPrisma.device.findFirst.mockResolvedValueOnce(null);
+
+    const devRes = await request(app)
+      .post('/api/v1/gateways/gw_01/devices')
+      .send({
+        device_id: 'sensor_ble_02',
+        name: 'Outdoor BLE Sensor',
+        device_type: 'sensor',
+        protocol: 'ble',
+        mac_address: 'FA:BB:CC:77:88:99'
+      });
+    await new Promise((r) => setImmediate(r));
+
+    expect(devRes.statusCode).toBe(201);
+    expect(mockMqttClient.publish).toHaveBeenCalledWith(
+      'gateway/gw_01/config/schedule',
+      expect.any(String),
+      { qos: 1, retain: true },
+      expect.any(Function)
+    );
   });
 });

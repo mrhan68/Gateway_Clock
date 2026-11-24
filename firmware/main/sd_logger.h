@@ -89,6 +89,11 @@ esp_err_t sd_logger_remount(void);
 esp_err_t sd_logger_enqueue_telemetry(const char *device_id, float value, uint32_t timestamp);
 
 /**
+ * @brief Đưa một điểm đo telemetry đầy đủ (cả nhiệt độ và độ ẩm) vào hàng đợi ghi bất đồng bộ
+ */
+esp_err_t sd_logger_enqueue_env_telemetry(const char *device_id, float temp, float hum, bool has_hum, uint32_t timestamp);
+
+/**
  * @brief Đưa một sự kiện vào hàng đợi ghi nhị phân Store-and-Forward
  */
 esp_err_t sd_logger_enqueue_event(uint8_t record_type, const char *device_id, float value, uint32_t timestamp);

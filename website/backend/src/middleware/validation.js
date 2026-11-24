@@ -112,6 +112,14 @@ const ruleRules = [
   body('threshold')
     .isFloat()
     .withMessage('threshold must be a number'),
+  body('hysteresis')
+    .optional({ nullable: true })
+    .isFloat({ min: 0 })
+    .withMessage('hysteresis must be a non-negative number'),
+  body('cooldown_s')
+    .optional({ nullable: true })
+    .isInt({ min: 0 })
+    .withMessage('cooldown_s must be a non-negative integer'),
   body('target_device_id')
     .trim()
     .isLength({ min: 1, max: 32 })

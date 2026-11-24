@@ -45,5 +45,6 @@ void run_relay_interlock_tests(void);
 void run_monotonic_timing_tests(void);
 void run_ble_parser_tests(void);
 void run_scheduler_snooze_tests(void);
+void run_rule_engine_tests(void);
 
 #endif // TEST_HARNESS_H

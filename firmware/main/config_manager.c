@@ -130,20 +130,7 @@ esp_err_t config_manager_load_from_file(const char *filepath)
     // ble_sensors dynamic registration
     cJSON *sensors = cJSON_GetObjectItem(root, "ble_sensors");
     if (sensors && cJSON_IsArray(sensors)) {
-        int sensor_count = cJSON_GetArraySize(sensors);
-        for (int i = 0; i < sensor_count; i++) {
-            cJSON *item = cJSON_GetArrayItem(sensors, i);
-            if (item && cJSON_IsObject(item)) {
-                cJSON *dev_id = cJSON_GetObjectItem(item, "device_id");
-                cJSON *mac = cJSON_GetObjectItem(item, "mac_address");
-                if (dev_id && cJSON_IsString(dev_id) && dev_id->valuestring[0] != '\0') {
-                    const char *mac_str = (mac && cJSON_IsString(mac)) ? mac->valuestring : NULL;
-                    ble_adapter_register_device(dev_id->valuestring, mac_str);
-                    ESP_LOGI(TAG, "Registered BLE device from config: %s (MAC: %s)",
-                             dev_id->valuestring, mac_str ? mac_str : "any");
-                }
-            }
-        }
+        ble_adapter_sync_devices_from_json(sensors);
     }
 
     cJSON_Delete(root);

@@ -4,6 +4,7 @@
 const prisma = require('../config/prisma');
 const { createError } = require('../middleware/errorHandler');
 const relay = require('../mqtt/relay');
+const broker = require('../mqtt/broker');
 const { getAliasCandidates, recordPendingCommand } = require('../mqtt/relayAliases');
 const crypto = require('crypto');
 
@@ -148,6 +149,12 @@ async function createDevice(req, res, next) {
       }
     });
 
+    if (protocol === 'ble' && typeof broker.publishScheduleConfig === 'function') {
+      broker.publishScheduleConfig(gateway_id).catch((err) => {
+        console.error('[DEVICE] Failed to publish BLE config to gateway:', err.message);
+      });
+    }
+
     res.status(201).json({
       id: device.id,
       device_id: device.deviceId,
@@ -188,6 +195,12 @@ async function updateDevice(req, res, next) {
         `Device '${device_id}' not found in gateway '${gateway_id}'`);
     }
 
+    if ((device.protocol === 'ble' || protocol === 'ble') && typeof broker.publishScheduleConfig === 'function') {
+      broker.publishScheduleConfig(gateway_id).catch((err) => {
+        console.error('[DEVICE] Failed to publish BLE config to gateway:', err.message);
+      });
+    }
+
     res.json({ id: device.id, device_id: device.deviceId });
   } catch (err) {
     next(err);
@@ -224,7 +237,7 @@ async function deleteDevice(req, res, next) {
       });
     }
 
-    await prisma.device.delete({
+    const deleted = await prisma.device.delete({
       where: {
         gatewayId_deviceId: {
           gatewayId: gateway_id,
@@ -232,6 +245,12 @@ async function deleteDevice(req, res, next) {
         }
       }
     });
+
+    if (deleted?.protocol === 'ble' && typeof broker.publishScheduleConfig === 'function') {
+      broker.publishScheduleConfig(gateway_id).catch((err) => {
+        console.error('[DEVICE] Failed to publish BLE config to gateway:', err.message);
+      });
+    }
 
     res.status(204).send();
   } catch (err) {

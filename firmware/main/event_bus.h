@@ -109,6 +109,7 @@ typedef struct {
         char command[32];          // VD: "ON", "OFF", "SET:75"
         char action_command[32];   // Tương thích ngược với rule_engine cũ
     };
+    char     reason[32];           // "RULE_THRESHOLD_TRIGGER", "RULE_HYSTERESIS_RELEASE", "SCHEDULE_AUTOMATION", "MANUAL_CMD"
     uint32_t timestamp;            // Epoch kích hoạt
     int      source_rule_id;       // Source rule ID
 } rule_action_request_t;

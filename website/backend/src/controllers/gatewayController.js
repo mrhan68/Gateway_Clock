@@ -3,6 +3,7 @@
  */
 const prisma = require('../config/prisma');
 const { createError } = require('../middleware/errorHandler');
+const broker = require('../mqtt/broker');
 
 /**
  * GET /gateways/{gateway_id}
@@ -60,6 +61,12 @@ async function updateGateway(req, res, next) {
         firmwareVersion: firmware_version ?? undefined
       }
     });
+
+    if (typeof broker.publishScheduleConfig === 'function') {
+      broker.publishScheduleConfig(gateway_id).catch((err) => {
+        console.error('[GATEWAY] Failed to publish config to gateway:', err.message);
+      });
+    }
 
     res.json(updated);
   } catch (err) {

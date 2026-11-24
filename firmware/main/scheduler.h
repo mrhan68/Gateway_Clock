@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <time.h>
 #include "event_bus.h"
 #include "cJSON.h"
 
@@ -75,6 +76,12 @@ int scheduler_get_entry_count(void);
  * @brief Copy schedule entries into user-provided array.
  */
 int scheduler_get_entries(schedule_entry_t *dest, int max_entries);
+
+/**
+ * @brief Compute and copy up to max_out upcoming enabled schedule entries sorted by time delta from ti.
+ *        Uses minimal stack (no full schedule_entry_t arrays on stack).
+ */
+int scheduler_get_upcoming_entries(const struct tm *ti, schedule_entry_t *out_entries, int max_out);
 
 /**
  * @brief Manually trigger an alarm event (for test / CLI verification).

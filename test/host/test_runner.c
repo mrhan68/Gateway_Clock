@@ -59,6 +59,9 @@ int main(int argc, char **argv) {
     printf("\n--- [Suite 4: Scheduler Snooze +9m & Anti-Retroactive] ---\n");
     run_scheduler_snooze_tests();
 
+    printf("\n--- [Suite 5: Real Rule Engine Hysteresis, Cooldown & Multi-Metric] ---\n");
+    run_rule_engine_tests();
+
     printf("\n=====================================================\n");
     if (g_tests_failed == 0) {
         printf(" ALL TESTS PASSED (%d/%d tests successful)\n", g_tests_run, g_tests_run);

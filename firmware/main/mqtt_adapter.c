@@ -12,6 +12,8 @@
 #include "relay_controller.h"
 #include "scheduler.h"
 #include "rule_engine.h"
+#include "rtc.h"
+#include "ble_adapter.h"
 #if __has_include("secrets.h")
 #include "secrets.h"
 #else
@@ -23,6 +25,7 @@ static const char *TAG = "MQTT_ADAPTER";
 static esp_mqtt_client_handle_t s_client = NULL;
 static bool s_is_connected = false;
 static bool s_manual_disconnect = false;
+static bool s_clear_retained_sched_on_connect = false;
 static char s_rx_topic[128] = {0};
 static char *s_rx_buf = NULL;
 static int s_rx_total_len = 0;
@@ -104,9 +107,9 @@ static void process_mqtt_message(const char *topic, const char *data)
             }
 
             if (req->action[0] != '\0') {
-                event_bus_post(EVT_DEVICE_COMMAND_REQUEST, req, sizeof(device_command_req_t), false);
                 ESP_LOGI(TAG, "Dispatched device command: target='%s', action='%s', cmd_id='%s'",
                          req->target_device_id, req->action, req->command_id);
+                event_bus_post(EVT_DEVICE_COMMAND_REQUEST, req, sizeof(device_command_req_t), false);
             } else {
                 free(req);
             }
@@ -124,6 +127,16 @@ static void process_mqtt_message(const char *topic, const char *data)
                 cJSON *rules = cJSON_GetObjectItem(json, "rules");
                 if (rules != NULL && cJSON_IsArray(rules)) {
                     rule_engine_apply_cloud_json(rules);
+                }
+                cJSON *tz = cJSON_GetObjectItem(json, "timezone");
+                if (tz != NULL && cJSON_IsString(tz) && tz->valuestring[0] != '\0') {
+                    app_rtc_set_timezone(tz->valuestring);
+                    config_manager_set_timezone(tz->valuestring);
+                    event_bus_post(EVT_DISPLAY_UPDATE_REQUEST, NULL, 0, false);
+                }
+                cJSON *ble_sensors = cJSON_GetObjectItem(json, "ble_sensors");
+                if (ble_sensors != NULL && cJSON_IsArray(ble_sensors)) {
+                    ble_adapter_sync_devices_from_json(ble_sensors);
                 }
             }
             cJSON_Delete(json);
@@ -150,6 +163,11 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
 
         // Publish LWT clear (status: online, retain: 1)
         esp_mqtt_client_publish(s_client, s_status_topic, "online", 6, 1, 1);
+
+        if (s_clear_retained_sched_on_connect && s_sched_sub_topic[0] != '\0') {
+            esp_mqtt_client_publish(s_client, s_sched_sub_topic, "", 0, 1, 1);
+            s_clear_retained_sched_on_connect = false;
+        }
 
         // Subscribe topic lenh va schedule (FSD §4.6.4)
         esp_mqtt_client_subscribe(s_client, s_cmd_sub_topic, 1);
@@ -358,8 +376,20 @@ void mqtt_adapter_init(const char *broker_uri, const char *gateway_id, const cha
 
 bool mqtt_adapter_publish(const char *topic_suffix, const char *payload_json)
 {
+    bool is_local_cfg_sync = (topic_suffix != NULL &&
+                              (strcmp(topic_suffix, "schedule/sync") == 0 ||
+                               strcmp(topic_suffix, "rules/sync") == 0));
+
     if (s_client == NULL || !s_is_connected) {
+        if (is_local_cfg_sync) {
+            s_clear_retained_sched_on_connect = true;
+        }
         return false;
+    }
+
+    if (is_local_cfg_sync && s_sched_sub_topic[0] != '\0') {
+        // Clear any stale retained config/schedule message on the broker so local edits persist across reboots/reconnects
+        esp_mqtt_client_publish(s_client, s_sched_sub_topic, "", 0, 1, 1);
     }
 
     char full_topic[128];

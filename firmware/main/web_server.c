@@ -245,6 +245,7 @@ static const char DASHBOARD_HTML[] =
 "<button class='tab-btn active' onclick='switchTab(\"tab-wifi\", this)'>📶 Quản Lý Wi-Fi</button>"
 "<button class='tab-btn' onclick='switchTab(\"tab-dash\", this)'>📊 Giám Sát &amp; Rơ-le</button>"
 "<button class='tab-btn' onclick='switchTab(\"tab-rules\", this)'>⚡ Quy Tắc Tự Động</button>"
+"<button class='tab-btn' onclick='switchTab(\"tab-schedules\", this)'>⏰ Lịch &amp; Báo Thức</button>"
 "<button class='tab-btn' onclick='switchTab(\"tab-system\", this)'>⚙️ Hệ Thống</button>"
 "</div>"
 "<div id='tab-wifi' class='tab-content active'>"
@@ -313,8 +314,8 @@ static const char DASHBOARD_HTML[] =
 "<div class='card' style='margin-bottom:16px;'>"
 "<div class='card-title'><span>Danh Sách Quy Tắc Tự Động Hóa (Rule Engine)</span><button class='btn btn-danger' style='padding:4px 10px;' onclick='clearAllRules()'>Xóa Hết</button></div>"
 "<div style='overflow-x:auto;'>"
-"<table><thead><tr><th>ID</th><th>Cảm Biến</th><th>Điều Kiện</th><th>Ngưỡng</th><th>Thiết Bị Đích</th><th>Lệnh</th><th>Trạng Thái</th><th>Thao Tác</th></tr></thead>"
-"<tbody id='rules-table-body'><tr><td colspan='8' style='text-align:center;'>Đang tải quy tắc...</td></tr></tbody></table>"
+"<table><thead><tr><th>ID</th><th>Cảm Biến</th><th>Điều Kiện</th><th>Ngưỡng</th><th>Độ Trễ (Hyst)</th><th>Thiết Bị Đích</th><th>Lệnh</th><th>Trạng Thái</th><th>Thao Tác</th></tr></thead>"
+"<tbody id='rules-table-body'><tr><td colspan='9' style='text-align:center;'>Đang tải quy tắc...</td></tr></tbody></table>"
 "</div>"
 "</div>"
 "<div class='card'>"
@@ -322,15 +323,51 @@ static const char DASHBOARD_HTML[] =
 "<form id='add-rule-form' onsubmit='submitNewRule(event)'>"
 "<div class='row-inputs'>"
 "<div><label>ID Quy Tắc</label><input type='number' id='new-rule-id' required min='1' max='100' placeholder='VD: 4'></div>"
-"<div><label>Nguồn Cảm Biến</label><select id='new-rule-sensor'><option value='sensor_temp_01'>sensor_temp_01 (Nhiệt độ)</option><option value='sensor_hum_01'>sensor_hum_01 (Độ ẩm)</option></select></div>"
+"<div><label>Nguồn Cảm Biến</label><select id='new-rule-sensor' onchange='onRuleSensorChange(this.value)'><option value='sensor_temp_01'>sensor_temp_01 (Nhiệt độ)</option><option value='sensor_hum_01'>sensor_hum_01 (Độ ẩm)</option></select></div>"
 "<div><label>Toán Tử So Sánh</label><select id='new-rule-cond'><option value='>'>Lớn hơn (&gt;)</option><option value='<'>Nhỏ hơn (&lt;)</option></select></div>"
-"<div><label>Ngưỡng Kích Hoạt</label><input type='number' step='0.1' id='new-rule-thresh' required placeholder='VD: 32.5'></div>"
+"<div><label>Ngưỡng Kích Hoạt</label><input type='number' step='0.1' id='new-rule-thresh' required placeholder='VD: 30.0'></div>"
+"<div><label>Độ Trễ Bảo Vệ (Hysteresis)</label><input type='number' step='0.1' min='0.1' id='new-rule-hyst' value='1.5' required placeholder='VD: 1.5'></div>"
 "</div>"
 "<div class='row-inputs'>"
 "<div><label>Thiết Bị Chấp Hành</label><select id='new-rule-target'><option value='fan_relay_01'>fan_relay_01 (Quạt)</option><option value='heater_relay_01'>heater_relay_01 (Sưởi)</option><option value='dehumidifier_01'>dehumidifier_01 (Hút ẩm)</option><option value='relay_ch4'>relay_ch4 (Relay 4)</option></select></div>"
 "<div><label>Lệnh Điều Khiển</label><select id='new-rule-cmd'><option value='ON'>Bật (ON)</option><option value='OFF'>Tắt (OFF)</option><option value='START'>Khởi động (START)</option><option value='TOGGLE'>Đảo trạng thái (TOGGLE)</option></select></div>"
 "</div>"
 "<button type='submit' class='btn btn-primary' style='margin-top:8px;'>+ Thêm Quy Tắc Vào Hệ Thống</button>"
+"</form>"
+"</div>"
+"</div>"
+"<div id='tab-schedules' class='tab-content'>"
+"<div class='card' style='margin-bottom:16px;'>"
+"<div class='card-title'><span>🔔 Điều Khiển Báo Thức Trực Tiếp</span><span id='alarm-state-badge' class='badge'>IDLE</span></div>"
+"<div style='display:flex;gap:10px;flex-wrap:wrap;'>"
+"<button type='button' class='btn btn-off' style='flex:1;min-width:140px;' onclick='controlAlarm(\"dismiss\")'>🔕 Tắt Chuông (Dismiss)</button>"
+"<button type='button' class='btn btn-secondary' style='flex:1;min-width:140px;' onclick='controlAlarm(\"snooze\")'>💤 Báo Lại 9 Phút (Snooze)</button>"
+"<button type='button' class='btn btn-on' style='flex:1;min-width:140px;' onclick='controlAlarm(\"trigger\")'>🔔 Thử Chuông Báo Thức</button>"
+"</div>"
+"</div>"
+"<div class='card' style='margin-bottom:16px;'>"
+"<div class='card-title'><span>Danh Sách Lịch Hẹn Giờ &amp; Báo Thức (Schedules &amp; Alarms)</span><button class='btn btn-danger' style='padding:4px 10px;' onclick='clearAllSchedules()'>Xóa Hết</button></div>"
+"<div style='overflow-x:auto;'>"
+"<table><thead><tr><th>ID</th><th>Giờ</th><th>Loại</th><th>Nội Dung / Thiết Bị</th><th>Lặp Lại</th><th>Trạng Thái</th><th>Thao Tác</th></tr></thead>"
+"<tbody id='schedules-table-body'><tr><td colspan='7' style='text-align:center;'>Đang tải lịch biểu...</td></tr></tbody></table>"
+"</div>"
+"</div>"
+"<div class='card'>"
+"<div class='card-title'><span>Thêm Lịch Hẹn Giờ / Báo Thức Mới</span></div>"
+"<form id='add-schedule-form' onsubmit='submitNewSchedule(event)'>"
+"<div class='row-inputs'>"
+"<div><label>ID Lịch</label><input type='number' id='new-sched-id' required min='1' max='64' placeholder='VD: 1'></div>"
+"<div><label>Loại Lịch</label><select id='new-sched-type' onchange='onSchedTypeChange(this.value)'><option value='alarm'>Báo thức (alarm)</option><option value='automation'>Điều khiển thiết bị (automation)</option></select></div>"
+"<div><label>Giờ (0-23)</label><input type='number' id='new-sched-hour' required min='0' max='23' value='6'></div>"
+"<div><label>Phút (0-59)</label><input type='number' id='new-sched-min' required min='0' max='59' value='30'></div>"
+"</div>"
+"<div class='row-inputs'>"
+"<div><label>Tiêu Đề Báo Thức</label><input type='text' id='new-sched-title' placeholder='VD: Thức dậy'></div>"
+"<div id='sched-target-box' style='display:none;'><label>Thiết Bị Đích</label><select id='new-sched-target'><option value='relay_1'>relay_1 (Quạt)</option><option value='relay_2'>relay_2 (Sưởi)</option><option value='relay_3'>relay_3 (Hút ẩm)</option><option value='relay_4'>relay_4 (Đèn/Phụ trợ)</option></select></div>"
+"<div id='sched-cmd-box' style='display:none;'><label>Lệnh</label><select id='new-sched-cmd'><option value='ON'>ON</option><option value='OFF'>OFF</option></select></div>"
+"<div><label>Các Ngày Lặp Lại</label><input type='text' id='new-sched-days' value='SUN,MON,TUE,WED,THU,FRI,SAT'></div>"
+"</div>"
+"<button type='submit' class='btn btn-primary' style='margin-top:8px;'>+ Lưu Lịch Biểu</button>"
 "</form>"
 "</div>"
 "</div>"
@@ -361,7 +398,17 @@ static const char DASHBOARD_HTML[] =
 "  document.getElementById(id).classList.add('active');"
 "  btn.classList.add('active');"
 "  if (id === 'tab-rules') fetchRules();"
+"  if (id === 'tab-schedules') fetchSchedules();"
 "  if (id === 'tab-wifi') loadSavedWifi();"
+"}"
+"function onRuleSensorChange(val) {"
+"  var h = document.getElementById('new-rule-hyst');"
+"  if (h) h.value = (val.indexOf('hum') !== -1) ? '2.0' : '1.5';"
+"}"
+"function onSchedTypeChange(val) {"
+"  var isAuto = (val === 'automation');"
+"  document.getElementById('sched-target-box').style.display = isAuto ? 'block' : 'none';"
+"  document.getElementById('sched-cmd-box').style.display = isAuto ? 'block' : 'none';"
 "}"
 "function fetchStatus() {"
 "  fetch('/api/status').then(r => r.json()).then(d => {"
@@ -378,6 +425,11 @@ static const char DASHBOARD_HTML[] =
 "    var mBadge = document.getElementById('mqtt-badge');"
 "    if (d.mqtt_connected) { mBadge.innerText = 'MQTT: Online'; mBadge.className = 'badge green'; }"
 "    else { mBadge.innerText = 'MQTT: Offline'; mBadge.className = 'badge orange'; }"
+"    var aBadge = document.getElementById('alarm-state-badge');"
+"    if (aBadge) {"
+"      if (d.alarm_active) { aBadge.innerText = 'ĐANG KÊU!'; aBadge.className = 'badge orange'; }"
+"      else { aBadge.innerText = 'IDLE'; aBadge.className = 'badge green'; }"
+"    }"
 "  }).catch(e => console.error(e));"
 "}"
 "function fetchTelemetry() {"
@@ -419,15 +471,19 @@ static const char DASHBOARD_HTML[] =
 "    var tbody = document.getElementById('rules-table-body');"
 "    tbody.innerHTML = '';"
 "    if (!rules || rules.length === 0) {"
-"      tbody.innerHTML = '<tr><td colspan=\"8\" style=\"text-align:center;color:#8b949e;\">Chưa có quy tắc nào</td></tr>';"
+"      tbody.innerHTML = '<tr><td colspan=\"9\" style=\"text-align:center;color:#8b949e;\">Chưa có quy tắc nào</td></tr>';"
 "      return;"
 "    }"
 "    rules.forEach(r => {"
 "      var tr = document.createElement('tr');"
+"      var hystVal = (r.hysteresis !== undefined) ? Number(r.hysteresis).toFixed(1) : '1.5';"
+"      var relVal = (r.condition === '<') ? (Number(r.threshold) + Number(hystVal)).toFixed(1) : (Number(r.threshold) - Number(hystVal)).toFixed(1);"
+"      var relOp = (r.condition === '<') ? '>=' : '<=';"
 "      tr.innerHTML = '<td><strong>#' + r.id + '</strong></td>' +"
 "        '<td>' + r.device_id + '</td>' +"
 "        '<td>' + r.condition + '</td>' +"
 "        '<td>' + r.threshold + '</td>' +"
+"        '<td><span class=\"badge blue\">' + hystVal + ' (Tắt ' + relOp + ' ' + relVal + ')</span></td>' +"
 "        '<td>' + r.target + '</td>' +"
 "        '<td><code>' + r.action + '</code></td>' +"
 "        '<td>' + (r.enabled ? '<span class=\"badge green\">Bật</span>' : '<span class=\"badge\">Tắt</span>') + '</td>' +"
@@ -443,6 +499,8 @@ static const char DASHBOARD_HTML[] =
 "    device_id: document.getElementById('new-rule-sensor').value,"
 "    condition: document.getElementById('new-rule-cond').value,"
 "    threshold: parseFloat(document.getElementById('new-rule-thresh').value),"
+"    hysteresis: parseFloat(document.getElementById('new-rule-hyst').value) || 1.5,"
+"    cooldown_s: 60,"
 "    target: document.getElementById('new-rule-target').value,"
 "    action: document.getElementById('new-rule-cmd').value,"
 "    enabled: true"
@@ -455,7 +513,79 @@ static const char DASHBOARD_HTML[] =
 "    alert('Đã lưu quy tắc thành công!');"
 "    fetchRules();"
 "    document.getElementById('add-rule-form').reset();"
+"    document.getElementById('new-rule-hyst').value = '1.5';"
 "  }).catch(e => alert('Lỗi: ' + e));"
+"}"
+"function fetchSchedules() {"
+"  fetch('/api/schedules').then(r => r.json()).then(list => {"
+"    var tbody = document.getElementById('schedules-table-body');"
+"    if (!tbody) return;"
+"    tbody.innerHTML = '';"
+"    if (!list || list.length === 0) {"
+"      tbody.innerHTML = '<tr><td colspan=\"7\" style=\"text-align:center;color:#8b949e;\">Chưa có lịch hẹn giờ / báo thức nào</td></tr>';"
+"      return;"
+"    }"
+"    list.forEach(s => {"
+"      var tr = document.createElement('tr');"
+"      var hh = String(s.hour || 0).padStart(2, '0');"
+"      var mm = String(s.minute || 0).padStart(2, '0');"
+"      var desc = (s.type === 'automation') ? ((s.target_device_id || '') + ' -> <code>' + (s.action_command || '') + '</code>') : (s.title || 'Báo thức');"
+"      tr.innerHTML = '<td><strong>#' + s.id + '</strong></td>' +"
+"        '<td><strong>' + hh + ':' + mm + '</strong></td>' +"
+"        '<td><span class=\"badge blue\">' + (s.type || 'alarm') + '</span></td>' +"
+"        '<td>' + desc + '</td>' +"
+"        '<td>' + (s.repeat_days || 'Hàng ngày') + '</td>' +"
+"        '<td>' + (s.enabled ? '<span class=\"badge green\">Bật</span>' : '<span class=\"badge\">Tắt</span>') + '</td>' +"
+"        '<td><button class=\"btn btn-danger\" style=\"padding:2px 8px;font-size:11px;\" onclick=\"deleteSchedule(' + s.id + ')\">Xóa</button></td>';"
+"      tbody.appendChild(tr);"
+"    });"
+"  }).catch(e => console.error(e));"
+"}"
+"function submitNewSchedule(e) {"
+"  e.preventDefault();"
+"  var sType = document.getElementById('new-sched-type').value;"
+"  var payload = {"
+"    id: parseInt(document.getElementById('new-sched-id').value),"
+"    type: sType,"
+"    hour: parseInt(document.getElementById('new-sched-hour').value),"
+"    minute: parseInt(document.getElementById('new-sched-min').value),"
+"    title: document.getElementById('new-sched-title').value || (sType === 'alarm' ? 'Báo thức' : ''),"
+"    target_device_id: (sType === 'automation') ? document.getElementById('new-sched-target').value : '',"
+"    action_command: (sType === 'automation') ? document.getElementById('new-sched-cmd').value : '',"
+"    repeat_days: document.getElementById('new-sched-days').value || 'SUN,MON,TUE,WED,THU,FRI,SAT',"
+"    enabled: true,"
+"    buzzer: (sType !== 'automation')"
+"  };"
+"  api('/api/schedules', {"
+"    method: 'POST',"
+"    headers: {'Content-Type': 'application/json'},"
+"    body: JSON.stringify(payload)"
+"  }).then(r => r.json()).then(() => {"
+"    alert('Đã lưu lịch biểu thành công!');"
+"    fetchSchedules();"
+"  }).catch(e => alert('Lỗi lưu lịch: ' + e));"
+"}"
+"function deleteSchedule(id) {"
+"  if (!confirm('Xóa lịch #' + id + '?')) return;"
+"  api('/api/schedules?id=' + id, { method: 'DELETE' }).then(r => r.json()).then(() => {"
+"    fetchSchedules();"
+"  }).catch(e => alert('Lỗi xóa lịch: ' + e));"
+"}"
+"function clearAllSchedules() {"
+"  if (!confirm('Xóa TẤT CẢ lịch biểu?')) return;"
+"  api('/api/schedules', { method: 'DELETE' }).then(r => r.json()).then(() => {"
+"    fetchSchedules();"
+"  }).catch(e => alert('Lỗi: ' + e));"
+"}"
+"function controlAlarm(action) {"
+"  var body = (action === 'snooze') ? { action: 'snooze', minutes: 9 } : (action === 'trigger' ? { action: 'trigger', title: 'Local Web Alarm', buzzer: true } : { action: 'dismiss' });"
+"  api('/api/alarm', {"
+"    method: 'POST',"
+"    headers: {'Content-Type': 'application/json'},"
+"    body: JSON.stringify(body)"
+"  }).then(r => r.json()).then(() => {"
+"    fetchStatus();"
+"  }).catch(e => alert('Lỗi điều khiển chuông: ' + e));"
 "}"
 "function deleteRule(id) {"
 "  if (!confirm('Bạn có chắc muốn xóa Quy tắc #' + id + '?')) return;"
@@ -608,7 +738,7 @@ static const char DASHBOARD_HTML[] =
 "function onSsidChange(val) {"
 "  document.getElementById('wifi-manual-box').style.display = (val === '__manual__') ? 'block' : 'none';"
 "}"
-"loadSavedWifi(); fetchStatus(); fetchTelemetry(); fetchWifiScan(false);"
+"loadSavedWifi(); fetchStatus(); fetchTelemetry(); fetchRules(); fetchSchedules(); fetchWifiScan(false);"
 "setInterval(fetchStatus, 5000);"
 "setInterval(fetchTelemetry, 4000);"
 "</script></body></html>";
@@ -762,14 +892,15 @@ static esp_err_t post_relay_handler(httpd_req_t *req)
     if (target && target->valuestring && command && command->valuestring) {
         rule_action_request_t *req_act = (rule_action_request_t *)malloc(sizeof(rule_action_request_t));
         if (req_act != NULL) {
+            memset(req_act, 0, sizeof(rule_action_request_t));
+            strncpy(req_act->command_id, "cmd-webui", sizeof(req_act->command_id) - 1);
             strncpy(req_act->target_device_id, target->valuestring, sizeof(req_act->target_device_id) - 1);
-            req_act->target_device_id[sizeof(req_act->target_device_id) - 1] = '\0';
             strncpy(req_act->action_command, command->valuestring, sizeof(req_act->action_command) - 1);
-            req_act->action_command[sizeof(req_act->action_command) - 1] = '\0';
+            strncpy(req_act->reason, "MANUAL_CMD", sizeof(req_act->reason) - 1);
             req_act->source_rule_id = 0; // Web UI override
 
-            event_bus_post(EVT_RULE_ACTION_REQUEST, req_act, sizeof(rule_action_request_t), false);
             ESP_LOGI(TAG, "Web UI dispatched action to '%s': '%s'", req_act->target_device_id, req_act->action_command);
+            event_bus_post(EVT_RULE_ACTION_REQUEST, req_act, sizeof(rule_action_request_t), false);
         }
     }
 
@@ -781,7 +912,11 @@ static esp_err_t post_relay_handler(httpd_req_t *req)
 
 static esp_err_t get_rules_handler(httpd_req_t *req)
 {
-    automation_rule_t rules[MAX_RULES];
+    automation_rule_t *rules = (automation_rule_t *)calloc(MAX_RULES, sizeof(automation_rule_t));
+    if (!rules) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
     int count = rule_engine_get_rules(rules, MAX_RULES);
 
     cJSON *arr = cJSON_CreateArray();
@@ -791,11 +926,14 @@ static esp_err_t get_rules_handler(httpd_req_t *req)
         cJSON_AddStringToObject(r, "device_id", rules[i].device_id);
         cJSON_AddStringToObject(r, "condition", (rules[i].condition_type == RULE_CONDITION_SENSOR_GT) ? ">" : "<");
         cJSON_AddNumberToObject(r, "threshold", rules[i].threshold);
+        cJSON_AddNumberToObject(r, "hysteresis", rules[i].hysteresis);
+        cJSON_AddNumberToObject(r, "cooldown_s", rules[i].cooldown_s);
         cJSON_AddStringToObject(r, "target", rules[i].target_device_id);
         cJSON_AddStringToObject(r, "action", rules[i].action_command);
         cJSON_AddBoolToObject(r, "enabled", rules[i].enabled);
         cJSON_AddItemToArray(arr, r);
     }
+    free(rules);
 
     char *resp_str = cJSON_PrintUnformatted(arr);
     cJSON_Delete(arr);
@@ -809,7 +947,7 @@ static esp_err_t get_rules_handler(httpd_req_t *req)
 static esp_err_t post_rules_handler(httpd_req_t *req)
 {
     if (!check_api_auth(req)) return ESP_OK;
-    char buf[256];
+    char buf[384];
     int ret = httpd_req_recv(req, buf, sizeof(buf) - 1);
     if (ret <= 0) {
         httpd_resp_send_500(req);
@@ -830,6 +968,8 @@ static esp_err_t post_rules_handler(httpd_req_t *req)
     cJSON *dev = cJSON_GetObjectItem(json, "device_id");
     cJSON *cond = cJSON_GetObjectItem(json, "condition");
     cJSON *thresh = cJSON_GetObjectItem(json, "threshold");
+    cJSON *hyst = cJSON_GetObjectItem(json, "hysteresis");
+    cJSON *cool = cJSON_GetObjectItem(json, "cooldown_s");
     cJSON *target = cJSON_GetObjectItem(json, "target");
     cJSON *act = cJSON_GetObjectItem(json, "action");
     cJSON *en = cJSON_GetObjectItem(json, "enabled");
@@ -844,6 +984,9 @@ static esp_err_t post_rules_handler(httpd_req_t *req)
     strncpy(rule.device_id, dev->valuestring, sizeof(rule.device_id) - 1);
     rule.condition_type = (strcmp(cond->valuestring, "<") == 0) ? RULE_CONDITION_SENSOR_LT : RULE_CONDITION_SENSOR_GT;
     rule.threshold = (float)thresh->valuedouble;
+    float default_hyst = (strstr(rule.device_id, "hum") != NULL) ? 2.0f : 1.5f;
+    rule.hysteresis = (hyst && cJSON_IsNumber(hyst) && hyst->valuedouble > 0) ? (float)hyst->valuedouble : default_hyst;
+    rule.cooldown_s = (cool && cJSON_IsNumber(cool) && cool->valueint > 0) ? (uint32_t)cool->valueint : 60;
     strncpy(rule.target_device_id, target->valuestring, sizeof(rule.target_device_id) - 1);
     strncpy(rule.action_command, act->valuestring, sizeof(rule.action_command) - 1);
     rule.enabled = (en != NULL) ? cJSON_IsTrue(en) : true;
@@ -1357,10 +1500,16 @@ static esp_err_t get_scan_handler(httpd_req_t *req)
             wifi_provisioning_rescan();
         }
     }
-    char json_buf[1536];
-    int len = wifi_provisioning_scan_to_json(json_buf, sizeof(json_buf));
+    char *json_buf = (char *)malloc(1536);
+    if (!json_buf) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
+    int len = wifi_provisioning_scan_to_json(json_buf, 1536);
     set_common_headers(req, "application/json");
-    return httpd_resp_send(req, json_buf, len);
+    esp_err_t ret = httpd_resp_send(req, json_buf, len);
+    free(json_buf);
+    return ret;
 }
 
 static void url_decode(char *dst, const char *src, size_t max_dst)
@@ -1856,8 +2005,8 @@ esp_err_t web_server_start(void)
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.max_uri_handlers = 30;
-    config.max_open_sockets = 7;
-    config.stack_size = 8192;
+    config.max_open_sockets = 5;
+    config.stack_size = 6144;
     config.lru_purge_enable = true;
 
     esp_err_t ret = httpd_start(&s_server, &config);
