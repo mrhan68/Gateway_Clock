@@ -70,7 +70,7 @@ void ble_adapter_register_device(const char *device_id, const char *mac_address)
 
     for (int i = 0; i < s_device_count; i++) {
         if (strcmp(s_devices[i].device_id, device_id) == 0) {
-            if (mac_address != NULL) {
+            if (mac_address != NULL && mac_address[0] != '\0') {
                 strncpy(s_devices[i].mac_address, mac_address, sizeof(s_devices[i].mac_address) - 1);
                 s_devices[i].mac_address[sizeof(s_devices[i].mac_address) - 1] = '\0';
             }
@@ -495,6 +495,54 @@ void ble_adapter_inject_test_packet(const char *device_id, float temp, float hum
     }
 }
 
+static bool is_builtin_ble_sensor(const char *device_id)
+{
+    if (device_id == NULL) return false;
+    return (strcmp(device_id, "sensor_temp_01") == 0 ||
+            strcmp(device_id, "sensor_hum_01") == 0);
+}
+
+static bool json_array_has_device_id(const cJSON *devices_arr, int count, const char *device_id)
+{
+    for (int i = 0; i < count; i++) {
+        const cJSON *item = cJSON_GetArrayItem(devices_arr, i);
+        if (!item || !cJSON_IsObject(item)) continue;
+        const cJSON *dev_id = cJSON_GetObjectItem(item, "device_id");
+        if (!dev_id) dev_id = cJSON_GetObjectItem(item, "id");
+        if (dev_id && cJSON_IsString(dev_id) && strcmp(dev_id->valuestring, device_id) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+cJSON *ble_adapter_get_devices_json(void)
+{
+    cJSON *arr = cJSON_CreateArray();
+    if (arr == NULL) {
+        return NULL;
+    }
+
+    lock_devices();
+    for (int i = 0; i < s_device_count; i++) {
+        const ble_device_entry_t *d = &s_devices[i];
+        cJSON *obj = cJSON_CreateObject();
+        if (obj == NULL) {
+            continue;
+        }
+        cJSON_AddStringToObject(obj, "device_id", d->device_id);
+        cJSON_AddStringToObject(obj, "mac_address", d->mac_address);
+        cJSON_AddNumberToObject(obj, "last_value", isfinite(d->last_value) ? (double)d->last_value : 0.0);
+        cJSON_AddNumberToObject(obj, "last_humidity", isfinite(d->last_humidity) ? (double)d->last_humidity : 0.0);
+        cJSON_AddNumberToObject(obj, "packet_count", (double)d->packet_count);
+        cJSON_AddBoolToObject(obj, "registered", d->registered);
+        cJSON_AddItemToArray(arr, obj);
+    }
+    unlock_devices();
+
+    return arr;
+}
+
 void ble_adapter_sync_devices_from_json(const cJSON *devices_arr)
 {
     if (devices_arr == NULL || !cJSON_IsArray(devices_arr)) {
@@ -502,7 +550,49 @@ void ble_adapter_sync_devices_from_json(const cJSON *devices_arr)
     }
 
     int count = cJSON_GetArraySize(devices_arr);
+    if (count <= 0) {
+        ESP_LOGI(TAG, "[CLOUD SYNC] Empty BLE sensor array received; preserving existing devices");
+        return;
+    }
+
+    int valid_incoming = 0;
+    for (int i = 0; i < count; i++) {
+        const cJSON *item = cJSON_GetArrayItem(devices_arr, i);
+        if (!item || !cJSON_IsObject(item)) continue;
+        const cJSON *dev_id = cJSON_GetObjectItem(item, "device_id");
+        if (!dev_id) dev_id = cJSON_GetObjectItem(item, "id");
+        if (dev_id && cJSON_IsString(dev_id) && dev_id->valuestring[0] != '\0') {
+            valid_incoming++;
+        }
+    }
+    if (valid_incoming == 0) {
+        return;
+    }
+
     int synced = 0;
+    int pruned = 0;
+
+    lock_devices();
+
+    // 1. Prune previously-registered entries absent from devices_arr (never prune built-in defaults)
+    int write_idx = 0;
+    for (int i = 0; i < s_device_count; i++) {
+        if (s_devices[i].registered &&
+            !is_builtin_ble_sensor(s_devices[i].device_id) &&
+            !json_array_has_device_id(devices_arr, count, s_devices[i].device_id)) {
+            ESP_LOGI(TAG, "[CLOUD SYNC] Pruned removed BLE sensor '%s' (MAC: %s)",
+                     s_devices[i].device_id, s_devices[i].mac_address);
+            pruned++;
+            continue;
+        }
+        if (write_idx != i) {
+            s_devices[write_idx] = s_devices[i];
+        }
+        write_idx++;
+    }
+    s_device_count = write_idx;
+
+    // 2. Update existing entries (preserving MAC if incoming MAC is empty + runtime stats) or add new ones
     for (int i = 0; i < count; i++) {
         const cJSON *item = cJSON_GetArrayItem(devices_arr, i);
         if (!item || !cJSON_IsObject(item)) continue;
@@ -511,12 +601,60 @@ void ble_adapter_sync_devices_from_json(const cJSON *devices_arr)
         const cJSON *mac = cJSON_GetObjectItem(item, "mac_address");
         if (!mac) mac = cJSON_GetObjectItem(item, "mac");
 
-        if (dev_id && cJSON_IsString(dev_id) && dev_id->valuestring[0] != '\0') {
-            const char *mac_str = (mac && cJSON_IsString(mac) && mac->valuestring[0] != '\0')
-                                  ? mac->valuestring : NULL;
-            ble_adapter_register_device(dev_id->valuestring, mac_str);
-            synced++;
+        if (!dev_id || !cJSON_IsString(dev_id) || dev_id->valuestring[0] == '\0') {
+            continue;
         }
+
+        const char *id_str = dev_id->valuestring;
+        const char *mac_str = (mac && cJSON_IsString(mac) && mac->valuestring[0] != '\0')
+                              ? mac->valuestring : NULL;
+
+        bool found = false;
+        for (int j = 0; j < s_device_count; j++) {
+            if (strcmp(s_devices[j].device_id, id_str) == 0) {
+                if (mac_str != NULL) {
+                    strncpy(s_devices[j].mac_address, mac_str, sizeof(s_devices[j].mac_address) - 1);
+                    s_devices[j].mac_address[sizeof(s_devices[j].mac_address) - 1] = '\0';
+                }
+                s_devices[j].registered = true;
+                found = true;
+                break;
+            }
+        }
+
+        if (!found && mac_str != NULL) {
+            for (int j = 0; j < s_device_count; j++) {
+                if (!s_devices[j].registered &&
+                    s_devices[j].mac_address[0] != '\0' &&
+                    strcasecmp(s_devices[j].mac_address, mac_str) == 0) {
+                    strncpy(s_devices[j].device_id, id_str, sizeof(s_devices[j].device_id) - 1);
+                    s_devices[j].device_id[sizeof(s_devices[j].device_id) - 1] = '\0';
+                    s_devices[j].registered = true;
+                    found = true;
+                    break;
+                }
+            }
+        }
+
+        if (!found) {
+            if (s_device_count < BLE_MAX_DEVICES) {
+                ble_device_entry_t *entry = &s_devices[s_device_count++];
+                memset(entry, 0, sizeof(ble_device_entry_t));
+                strncpy(entry->device_id, id_str, sizeof(entry->device_id) - 1);
+                entry->device_id[sizeof(entry->device_id) - 1] = '\0';
+                if (mac_str != NULL) {
+                    strncpy(entry->mac_address, mac_str, sizeof(entry->mac_address) - 1);
+                    entry->mac_address[sizeof(entry->mac_address) - 1] = '\0';
+                }
+                entry->registered = true;
+            } else {
+                ESP_LOGW(TAG, "BLE device table full (max %d), skipping '%s'", BLE_MAX_DEVICES, id_str);
+                continue;
+            }
+        }
+        synced++;
     }
-    ESP_LOGI(TAG, "[CLOUD SYNC] Synchronized %d BLE sensor(s) from JSON", synced);
+
+    unlock_devices();
+    ESP_LOGI(TAG, "[CLOUD SYNC] Synchronized %d BLE sensor(s) from JSON (pruned %d)", synced, pruned);
 }

@@ -512,6 +512,7 @@ static const char DASHBOARD_HTML[] =
 "  }).then(r => r.json()).then(d => {"
 "    alert('Đã lưu quy tắc thành công!');"
 "    fetchRules();"
+"    setTimeout(fetchRules, 1500);"
 "    document.getElementById('add-rule-form').reset();"
 "    document.getElementById('new-rule-hyst').value = '1.5';"
 "  }).catch(e => alert('Lỗi: ' + e));"
@@ -563,6 +564,7 @@ static const char DASHBOARD_HTML[] =
 "  }).then(r => r.json()).then(() => {"
 "    alert('Đã lưu lịch biểu thành công!');"
 "    fetchSchedules();"
+"    setTimeout(fetchSchedules, 1500);"
 "  }).catch(e => alert('Lỗi lưu lịch: ' + e));"
 "}"
 "function deleteSchedule(id) {"
@@ -1008,15 +1010,19 @@ static esp_err_t delete_rules_handler(httpd_req_t *req)
     char query[64] = {0};
     int query_len = httpd_req_get_url_query_len(req);
 
-    if (query_len > 0 && query_len < sizeof(query)) {
-        httpd_req_get_url_query_str(req, query, sizeof(query));
-        char param[16] = {0};
-        if (httpd_query_key_value(query, "id", param, sizeof(param)) == ESP_OK) {
-            int rule_id = atoi(param);
-            rule_engine_delete_rule(rule_id);
-            httpd_resp_set_type(req, "application/json");
-            httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
-            return httpd_resp_send(req, "{\"status\":\"ok\",\"message\":\"Rule deleted\"}", HTTPD_RESP_USE_STRLEN);
+    if (query_len > 0 && query_len < (int)sizeof(query)) {
+        if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
+            char param[16] = {0};
+            if (httpd_query_key_value(query, "id", param, sizeof(param)) == ESP_OK) {
+                int rule_id = atoi(param);
+                bool ok = rule_engine_delete_rule(rule_id);
+                if (ok) {
+                    set_common_headers(req, "application/json");
+                    return httpd_resp_send(req, "{\"status\":\"ok\",\"message\":\"Rule deleted\"}", HTTPD_RESP_USE_STRLEN);
+                }
+                httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Rule not found");
+                return ESP_FAIL;
+            }
         }
     }
 
@@ -1079,6 +1085,11 @@ static esp_err_t send_cjson_response(httpd_req_t *req, cJSON *root)
     esp_err_t ret = httpd_resp_send(req, resp_str, strlen(resp_str));
     free(resp_str);
     return ret;
+}
+
+static esp_err_t get_devices_handler(httpd_req_t *req)
+{
+    return send_cjson_response(req, ble_adapter_get_devices_json());
 }
 
 static const char *s_sched_day_names[7] = {"SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"};
@@ -2004,7 +2015,7 @@ esp_err_t web_server_start(void)
     }
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.max_uri_handlers = 30;
+    config.max_uri_handlers = 32;
     config.max_open_sockets = 5;
     config.stack_size = 6144;
     config.lru_purge_enable = true;
@@ -2044,6 +2055,9 @@ esp_err_t web_server_start(void)
 
     httpd_uri_t uri_telemetry = { .uri = "/api/telemetry", .method = HTTP_GET, .handler = get_telemetry_handler };
     httpd_register_uri_handler(s_server, &uri_telemetry);
+
+    httpd_uri_t uri_devices = { .uri = "/api/devices", .method = HTTP_GET, .handler = get_devices_handler };
+    httpd_register_uri_handler(s_server, &uri_devices);
 
     httpd_uri_t uri_relay = { .uri = "/api/relay", .method = HTTP_POST, .handler = post_relay_handler };
     httpd_register_uri_handler(s_server, &uri_relay);

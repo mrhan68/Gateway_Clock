@@ -683,7 +683,8 @@ int rule_engine_evaluate_telemetry(const sensor_telemetry_t *telem)
         }
 
         // FSD §4.7.5: Check 5-minute safety lockout (Monotonic clock)
-        if (now_mono < r->lockout_until_mono_us || (r->lockout_until_ts > 0 && now < r->lockout_until_ts)) {
+        if (now_mono < r->lockout_until_mono_us ||
+            (r->lockout_until_mono_us == 0 && r->lockout_until_ts > 0 && now < r->lockout_until_ts)) {
             ESP_LOGD(TAG, "Rule #%d is in lockout, skipping", r->id);
             continue;
         }
@@ -892,7 +893,8 @@ static void on_relay_state_changed(const gateway_event_t *evt)
                 // FSD §4.7.5: Engage 5-minute safety lockout if shut down by safety or interlock
                 if (!rst->state && (strcmp(rst->reason, "SAFETY_CUTOFF") == 0 ||
                                    strcmp(rst->reason, "INTERLOCK_CUTOFF") == 0 ||
-                                   strcmp(rst->reason, "SENSOR_OFFLINE") == 0)) {
+                                   strcmp(rst->reason, "SENSOR_OFFLINE") == 0 ||
+                                   strcmp(rst->reason, "COOLING_OVERRIDE") == 0)) {
                     r->lockout_until_mono_us = now_mono + 300000000ULL; // 5-minute lockout (300s)
                     r->lockout_until_ts = now + 300;
                     ESP_LOGW(TAG, "[SAFETY LOCKOUT] Rule #%d (target '%s') locked out for 300s due to %s",

@@ -71,6 +71,12 @@ void ble_adapter_inject_test_packet(const char *device_id, float temp, float hum
  */
 void ble_adapter_sync_devices_from_json(const cJSON *devices_arr);
 
+/**
+ * @brief Build a JSON array of known/discovered BLE devices and their runtime telemetry stats
+ * @return Newly allocated cJSON array (caller must cJSON_Delete), or NULL on allocation failure
+ */
+cJSON *ble_adapter_get_devices_json(void);
+
 #ifdef __cplusplus
 }
 #endif

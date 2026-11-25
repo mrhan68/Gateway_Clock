@@ -214,9 +214,79 @@ static void test_cooling_override_spike_no_duplicate_heater_off(void) {
     TEST_ASSERT_TRUE(strcmp(g_mock_last_rule_action.action_command, "ON") == 0);
 }
 
+static void test_cooling_override_arms_300s_heater_lockout(void) {
+    reset_rule_test_env();
+
+    // Rule 1: Fan > 30.0C (H=1.5) -> relay_1 ON
+    automation_rule_t fan_rule = {0};
+    fan_rule.id = 1;
+    strncpy(fan_rule.device_id, "sensor_temp_01", sizeof(fan_rule.device_id) - 1);
+    fan_rule.condition_type = RULE_CONDITION_SENSOR_GT;
+    fan_rule.threshold = 30.0f;
+    fan_rule.hysteresis = 1.5f;
+    fan_rule.cooldown_s = 60;
+    strncpy(fan_rule.target_device_id, "relay_1", sizeof(fan_rule.target_device_id) - 1);
+    strncpy(fan_rule.action_command, "ON", sizeof(fan_rule.action_command) - 1);
+    fan_rule.is_active = true;
+    TEST_ASSERT_TRUE(rule_engine_add_rule(&fan_rule));
+
+    // Rule 2: Heater < 22.0C (H=1.5) -> relay_2 ON
+    automation_rule_t heater_rule = {0};
+    heater_rule.id = 2;
+    strncpy(heater_rule.device_id, "sensor_temp_01", sizeof(heater_rule.device_id) - 1);
+    heater_rule.condition_type = RULE_CONDITION_SENSOR_LT;
+    heater_rule.threshold = 22.0f;
+    heater_rule.hysteresis = 1.5f;
+    heater_rule.cooldown_s = 60;
+    strncpy(heater_rule.target_device_id, "relay_2", sizeof(heater_rule.target_device_id) - 1);
+    strncpy(heater_rule.action_command, "ON", sizeof(heater_rule.action_command) - 1);
+    heater_rule.is_active = true;
+    TEST_ASSERT_TRUE(rule_engine_add_rule(&heater_rule));
+
+    sensor_telemetry_t telem = {0};
+    strncpy(telem.device_id, "sensor_temp_01", sizeof(telem.device_id) - 1);
+    telem.valid = true;
+
+    // 1. 19.5C -> Heater Rule #2 triggers ON
+    telem.temperature = 19.5f;
+    TEST_ASSERT_EQUAL_INT(1, rule_engine_evaluate_telemetry(&telem));
+    TEST_ASSERT_EQUAL_INT(1, g_mock_rule_action_count);
+    simulate_relay_state_change(2, true, "RULE_TRIGGER");
+
+    // 2. Spike to 32.5C -> Fan Rule #1 triggers ON, relay_controller emits COOLING_OVERRIDE on relay_2
+    g_mock_esp_timer_us += 2LL * 1000000LL;
+    telem.temperature = 32.5f;
+    TEST_ASSERT_EQUAL_INT(1, rule_engine_evaluate_telemetry(&telem));
+    TEST_ASSERT_EQUAL_INT(2, g_mock_rule_action_count);
+    simulate_relay_state_change(2, false, "COOLING_OVERRIDE");
+    simulate_relay_state_change(1, true, "RULE_TRIGGER");
+
+    // 3. Cool down to 25.0C at +10s -> Fan Rule #1 releases OFF
+    g_mock_esp_timer_us += 10LL * 1000000LL;
+    telem.temperature = 25.0f;
+    TEST_ASSERT_EQUAL_INT(1, rule_engine_evaluate_telemetry(&telem));
+    TEST_ASSERT_EQUAL_INT(3, g_mock_rule_action_count);
+    simulate_relay_state_change(1, false, "RULE_TRIGGER");
+
+    // 4. At +60s after COOLING_OVERRIDE (past 60s rule cooldown, inside 300s safety lockout) -> Heater blocked
+    g_mock_esp_timer_us += 50LL * 1000000LL;
+    telem.temperature = 19.0f;
+    TEST_ASSERT_EQUAL_INT(0, rule_engine_evaluate_telemetry(&telem));
+    TEST_ASSERT_EQUAL_INT(3, g_mock_rule_action_count);
+
+    // 5. At +305s after COOLING_OVERRIDE (>= 300s safety lockout) -> Heater Rule #2 allowed to trigger ON
+    g_mock_esp_timer_us += 245LL * 1000000LL;
+    telem.temperature = 19.0f;
+    TEST_ASSERT_EQUAL_INT(1, rule_engine_evaluate_telemetry(&telem));
+    TEST_ASSERT_EQUAL_INT(4, g_mock_rule_action_count);
+    TEST_ASSERT_TRUE(strcmp(g_mock_last_rule_action.target_device_id, "relay_2") == 0);
+    TEST_ASSERT_TRUE(strcmp(g_mock_last_rule_action.action_command, "ON") == 0);
+}
+
 void run_rule_engine_tests(void) {
     RUN_TEST(test_hysteresis_deadband_and_cooldown_60s);
     RUN_TEST(test_multi_metric_ble_packet_triggers_humidity_rule);
     RUN_TEST(test_manual_override_priority);
     RUN_TEST(test_cooling_override_spike_no_duplicate_heater_off);
+    RUN_TEST(test_cooling_override_arms_300s_heater_lockout);
 }

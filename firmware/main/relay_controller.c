@@ -134,7 +134,10 @@ esp_err_t relay_controller_set_state(const char *target_id, bool state, const ch
         s_relay_off_timestamp[idx] = esp_timer_get_time() / 1000000ULL;
 
         if (relay_id == 2 && source != NULL &&
-            (strcmp(source, "SAFETY_CUTOFF") == 0 || strcmp(source, "SENSOR_OFFLINE") == 0)) {
+            (strcmp(source, "SAFETY_CUTOFF") == 0 ||
+             strcmp(source, "SENSOR_OFFLINE") == 0 ||
+             strcmp(source, "COOLING_OVERRIDE") == 0 ||
+             strcmp(source, "INTERLOCK_CUTOFF") == 0)) {
             s_heater_lockout_until = s_relay_off_timestamp[idx] + 300;
             ESP_LOGW(TAG, "[LOCKOUT] Relay 2 (Heater) safety lockout activated for 300s");
         }
@@ -200,6 +203,8 @@ esp_err_t relay_controller_set_state(const char *target_id, bool state, const ch
             s_relay_states[1] = false;
             s_relay_on_timestamp[1] = 0;
             s_relay_off_timestamp[1] = now_sec;
+            s_heater_lockout_until = now_sec + 300;
+            ESP_LOGW(TAG, "[LOCKOUT] Relay 2 (Heater) safety lockout activated for 300s (COOLING_OVERRIDE)");
             post_relay_state_changed_event(2, false, "COOLING_OVERRIDE");
         }
     }
